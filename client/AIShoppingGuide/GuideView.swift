@@ -1,0 +1,398 @@
+import SwiftUI
+
+struct GuideView: View {
+    @Binding var cartItems: [Product]
+    @State private var messages: [ChatMessage] = [
+        ChatMessage(sender: .ai, text: "你可以问")
+    ]
+    @State private var inputText = ""
+    @State private var isComposerExpanded = false
+    @State private var showHistory = false
+    @State private var selectedProduct: Product?
+
+    private let examples = ["适合油皮的洗面奶", "200 元内蓝牙耳机", "轻量跑鞋", "不要含酒精的防晒"]
+    private let histories = [
+        HistoryItem(title: "无酒精防晒推荐", subtitle: "今天 21:42 · 3 个商品"),
+        HistoryItem(title: "通勤蓝牙耳机对比", subtitle: "昨天 · 预算 200 元内"),
+        HistoryItem(title: "春季轻量跑鞋", subtitle: "周一 · 跑步场景")
+    ]
+
+    var body: some View {
+        NavigationStack {
+            ZStack(alignment: .bottomLeading) {
+                VStack(spacing: 0) {
+                    header
+                    chatList
+                }
+                .padding(.bottom, 148)
+
+                composerStack
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 82)
+            }
+            .background(AppTheme.background)
+            .sheet(isPresented: $showHistory) {
+                HistorySheet(items: histories)
+                    .presentationDetents([.medium])
+                    .presentationDragIndicator(.visible)
+            }
+            .navigationDestination(item: $selectedProduct) { product in
+                ProductDetailView(product: product) {
+                    addToCart(product)
+                }
+            }
+        }
+    }
+
+    private var header: some View {
+        HStack {
+            Text("AI 电商导购助手")
+                .font(.title3.bold())
+                .foregroundStyle(AppTheme.textPrimary)
+            Spacer()
+            Button {
+                showHistory = true
+            } label: {
+                Image(systemName: "clock.arrow.circlepath")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(AppTheme.primary)
+                    .frame(width: 40, height: 40)
+                    .glassPanel(cornerRadius: 20)
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 18)
+        .padding(.bottom, 8)
+    }
+
+    private var chatList: some View {
+        ScrollViewReader { proxy in
+            ScrollView(showsIndicators: false) {
+                LazyVStack(alignment: .leading, spacing: 16) {
+                    ForEach(messages) { message in
+                        MessageRow(
+                            message: message,
+                            examples: message.id == messages.first?.id ? examples : [],
+                            onExampleTap: send,
+                            onRetry: retryLast,
+                            onProductTap: { selectedProduct = $0 }
+                        )
+                        .id(message.id)
+                    }
+                }
+                .padding(.horizontal, 18)
+                .padding(.top, 12)
+            }
+            .onChange(of: messages.count) { _, _ in
+                if let last = messages.last?.id {
+                    withAnimation(.easeOut(duration: 0.25)) {
+                        proxy.scrollTo(last, anchor: .bottom)
+                    }
+                }
+            }
+        }
+    }
+
+    private var composerStack: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if isComposerExpanded {
+                VStack(alignment: .leading, spacing: 12) {
+                    ComposerAction(icon: "camera", title: "相机")
+                    ComposerAction(icon: "photo", title: "图片上传")
+                }
+                .padding(14)
+                .frame(width: 156, alignment: .leading)
+                .glassPanel(cornerRadius: 22)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+
+            HStack(spacing: 10) {
+                Button {
+                    withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
+                        isComposerExpanded.toggle()
+                    }
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 36, height: 36)
+                        .background(AppTheme.primary, in: Circle())
+                }
+
+                TextField("Ask a shopping question", text: $inputText, axis: .vertical)
+                    .lineLimit(1...3)
+                    .submitLabel(.send)
+                    .onSubmit(sendCurrentInput)
+                    .font(.subheadline)
+
+                Button {} label: {
+                    Image(systemName: "mic")
+                        .foregroundStyle(AppTheme.textSecondary)
+                }
+                .buttonStyle(.plain)
+
+                Button(action: sendCurrentInput) {
+                    Image(systemName: "paperplane.fill")
+                        .foregroundStyle(.white)
+                        .frame(width: 34, height: 34)
+                        .background(AppTheme.primary, in: Circle())
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(10)
+            .glassPanel(cornerRadius: 28)
+        }
+    }
+
+    private func sendCurrentInput() {
+        let trimmed = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        inputText = ""
+        send(trimmed)
+    }
+
+    private func send(_ query: String) {
+        isComposerExpanded = false
+        messages.append(ChatMessage(sender: .user, text: query))
+        messages.append(ChatMessage(sender: .ai, text: "正在理解你的需求", state: .understanding))
+        simulateResponse(for: query)
+    }
+
+    private func retryLast() {
+        messages.removeAll { $0.canRetry }
+        simulateResponse(for: "重新推荐")
+    }
+
+    private func simulateResponse(for query: String) {
+        if query.contains("失败") || query.lowercased().contains("error") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) {
+                updateLastAI(text: "正在检索商品库与评价摘要", state: .retrieving)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.1) {
+                updateLastAI(
+                    text: "网络异常，暂时无法生成推荐，请稍后重试。",
+                    state: .failed,
+                    canRetry: true
+                )
+            }
+            return
+        }
+
+        let lower = query.lowercased()
+        var result = Product.samples
+        if query.contains("耳机") || lower.contains("bluetooth") {
+            result = [Product.samples[1]]
+        } else if query.contains("跑鞋") {
+            result = [Product.samples[2]]
+        } else if query.contains("防晒") || query.contains("酒精") {
+            result = [Product.samples[3]]
+        } else if query.contains("洗面奶") || query.contains("油皮") {
+            result = [Product.samples[0]]
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) {
+            updateLastAI(text: "正在检索商品库与评价摘要", state: .retrieving)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.1) {
+            updateLastAI(text: "正在生成个性化推荐", state: .generating)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.65) {
+            updateLastAI(
+                text: "我按预算、成分/参数、真实评价和场景匹配筛了一组更稳的选择。",
+                state: .ready,
+                products: result
+            )
+        }
+    }
+
+    private func updateLastAI(
+        text: String,
+        state: MessageState,
+        products: [Product] = [],
+        canRetry: Bool = false
+    ) {
+        guard let index = messages.lastIndex(where: { $0.sender == .ai }) else { return }
+        messages[index].text = text
+        messages[index].state = state
+        messages[index].products = products
+        messages[index].canRetry = canRetry
+    }
+
+    private func addToCart(_ product: Product) {
+        if !cartItems.contains(product) {
+            cartItems.append(product)
+        }
+    }
+}
+
+struct MessageRow: View {
+    let message: ChatMessage
+    let examples: [String]
+    let onExampleTap: (String) -> Void
+    let onRetry: () -> Void
+    let onProductTap: (Product) -> Void
+
+    var body: some View {
+        HStack(alignment: .top) {
+            if message.sender == .user { Spacer(minLength: 44) }
+
+            VStack(alignment: message.sender == .user ? .trailing : .leading, spacing: 10) {
+                Text(displayText)
+                    .font(.subheadline)
+                    .foregroundStyle(message.state == .failed ? AppTheme.error : AppTheme.textPrimary)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 11)
+                    .background(bubbleColor, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .stroke(AppTheme.border, lineWidth: message.sender == .ai ? 1 : 0)
+                    )
+
+                if !examples.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(examples, id: \.self) { example in
+                            Button(example) { onExampleTap(example) }
+                                .font(.subheadline.weight(.medium))
+                                .foregroundStyle(AppTheme.primary)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 10)
+                                .frame(maxWidth: 220, alignment: .leading)
+                                .background(AppTheme.softPurple, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        }
+                    }
+                }
+
+                if message.canRetry {
+                    Button("重试", action: onRetry)
+                        .buttonStyle(.borderedProminent)
+                        .tint(AppTheme.primary)
+                }
+
+                ForEach(message.products) { product in
+                    ProductCard(product: product) {
+                        onProductTap(product)
+                    }
+                }
+            }
+
+            if message.sender == .ai { Spacer(minLength: 44) }
+        }
+    }
+
+    private var displayText: String {
+        switch message.state {
+        case .ready, .failed:
+            return message.text
+        default:
+            return "\(message.state.rawValue)：\(message.text)"
+        }
+    }
+
+    private var bubbleColor: Color {
+        switch message.sender {
+        case .user:
+            return AppTheme.softBlue
+        case .ai:
+            return message.state == .failed ? AppTheme.error.opacity(0.08) : AppTheme.surface
+        }
+    }
+}
+
+struct ComposerAction: View {
+    let icon: String
+    let title: String
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .foregroundStyle(AppTheme.primary)
+                .frame(width: 26, height: 26)
+                .background(AppTheme.primary.opacity(0.10), in: Circle())
+            Text(title)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(AppTheme.textPrimary)
+        }
+    }
+}
+
+struct ProductCard: View {
+    let product: Product
+    let onDetail: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(LinearGradient(colors: [AppTheme.softPurple, AppTheme.softBlue], startPoint: .topLeading, endPoint: .bottomTrailing))
+                .frame(height: 116)
+                .overlay {
+                    Image(systemName: "shippingbox")
+                        .font(.system(size: 34))
+                        .foregroundStyle(AppTheme.primary)
+                }
+
+            Text(product.title)
+                .font(.headline)
+                .foregroundStyle(AppTheme.textPrimary)
+            Text(product.price)
+                .font(.title3.bold())
+                .foregroundStyle(AppTheme.error)
+            Text(product.reason)
+                .font(.subheadline)
+                .foregroundStyle(AppTheme.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Button(action: onDetail) {
+                Text("查看详情")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 11)
+                    .background(AppTheme.primary, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            }
+        }
+        .padding(14)
+        .background(.white, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(AppTheme.border, lineWidth: 1)
+        )
+    }
+}
+
+struct HistorySheet: View {
+    let items: [HistoryItem]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text("历史记录")
+                .font(.title3.bold())
+                .padding(.top, 10)
+
+            ForEach(items) { item in
+                HStack(spacing: 12) {
+                    Image(systemName: "message")
+                        .foregroundStyle(AppTheme.primary)
+                        .frame(width: 40, height: 40)
+                        .background(AppTheme.softPurple, in: Circle())
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(item.title).font(.headline)
+                        Text(item.subtitle).font(.caption).foregroundStyle(AppTheme.textSecondary)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(AppTheme.textSecondary)
+                }
+                .padding(12)
+                .background(.white, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .stroke(AppTheme.border, lineWidth: 1)
+                )
+            }
+            Spacer()
+        }
+        .padding(20)
+        .background(AppTheme.background)
+    }
+}

@@ -1,0 +1,57 @@
+# Python / FastAPI
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.hypothesis/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+.ipynb_checkpoints/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+pip-wheel-metadata/
+
+# FastAPI / backend config
+.env
+.env.*
+!.env.example
+instance/
+*.sqlite3
+*.db
+
+# Node / frontend if added later
+node_modules/
+dist/
+build/
+
+# Swift / Xcode
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.xcscmblueprint
+*.xccheckout
+*.moved-aside
+*.ipa
+*.dSYM/
+
+# Xcode project user data
+client/DerivedDataSim/
+client/.derivedData/
+client/*.xcworkspace/xcuserdata/
+client/*.xcodeproj/xcuserdata/
+
+# macOS
+.DS_Store
+Thumbs.db
