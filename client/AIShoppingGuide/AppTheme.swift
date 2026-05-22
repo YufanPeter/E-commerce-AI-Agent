@@ -1,17 +1,45 @@
 import SwiftUI
+import UIKit
 
 struct AppTheme {
-    static let primary = Color(hex: "6C5CE7")
-    static let secondary = Color(hex: "F2F3FF")
-    static let softBlue = Color(hex: "F4F0FF")
-    static let softPurple = Color(hex: "F2F3FF")
-    static let background = Color(hex: "F7F8FA")
-    static let surface = Color.white
-    static let textPrimary = Color(hex: "1D1E20")
-    static let textSecondary = Color(hex: "637280")
-    static let success = Color(hex: "22C55E")
-    static let error = Color(hex: "EF4444")
-    static let border = Color.black.opacity(0.08)
+    static let primary = Color.dynamic(lightHex: "6C5CE7", darkHex: "9A8CFF")
+    static let secondary = Color.dynamic(lightHex: "F2F3FF", darkHex: "232235")
+    static let softBlue = Color.dynamic(lightHex: "F4F0FF", darkHex: "202231")
+    static let softPurple = Color.dynamic(lightHex: "F2F3FF", darkHex: "26233A")
+    static let background = Color.dynamic(lightHex: "F7F8FA", darkHex: "0F1014")
+    static let surface = Color.dynamic(lightHex: "FFFFFF", darkHex: "1A1B21")
+    static let textPrimary = Color.dynamic(lightHex: "1D1E20", darkHex: "F2F3F7")
+    static let textSecondary = Color.dynamic(lightHex: "637280", darkHex: "A4ADBA")
+    static let success = Color.dynamic(lightHex: "22C55E", darkHex: "4ADE80")
+    static let error = Color.dynamic(lightHex: "EF4444", darkHex: "FF6B6B")
+    static let border = Color.dynamic(
+        light: UIColor.black.withAlphaComponent(0.08),
+        dark: UIColor.white.withAlphaComponent(0.12)
+    )
+    static let liquidOverlay = Color.dynamic(
+        light: UIColor.white.withAlphaComponent(0.22),
+        dark: UIColor.white.withAlphaComponent(0.06)
+    )
+    static let liquidStrokeStrong = Color.dynamic(
+        light: UIColor.white.withAlphaComponent(0.95),
+        dark: UIColor.white.withAlphaComponent(0.24)
+    )
+    static let liquidStrokeSoft = Color.dynamic(
+        light: UIColor.white.withAlphaComponent(0.26),
+        dark: UIColor.white.withAlphaComponent(0.08)
+    )
+    static let tabBarSurface = Color.dynamic(
+        light: UIColor.white.withAlphaComponent(0.78),
+        dark: UIColor(hex: "1B1C22").withAlphaComponent(0.86)
+    )
+    static let tabSelectionSurface = Color.dynamic(
+        light: UIColor.white.withAlphaComponent(0.88),
+        dark: UIColor(hex: "2A2B34").withAlphaComponent(0.92)
+    )
+    static let shadow = Color.dynamic(
+        light: UIColor.black.withAlphaComponent(0.10),
+        dark: UIColor.black.withAlphaComponent(0.48)
+    )
 
     static let bottomTabBarHeight: CGFloat = 64
     static let bottomTabBarBottomPadding: CGFloat = -14
@@ -23,14 +51,31 @@ struct AppTheme {
 
 extension Color {
     init(hex: String) {
-        let scanner = Scanner(string: hex)
+        self.init(UIColor(hex: hex))
+    }
+
+    static func dynamic(lightHex: String, darkHex: String) -> Color {
+        dynamic(light: UIColor(hex: lightHex), dark: UIColor(hex: darkHex))
+    }
+
+    static func dynamic(light: UIColor, dark: UIColor) -> Color {
+        Color(UIColor { traits in
+            traits.userInterfaceStyle == .dark ? dark : light
+        })
+    }
+}
+
+private extension UIColor {
+    convenience init(hex: String) {
+        let value = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+        let scanner = Scanner(string: value)
         var rgb: UInt64 = 0
         scanner.scanHexInt64(&rgb)
-        self.init(
-            red: Double((rgb >> 16) & 0xFF) / 255,
-            green: Double((rgb >> 8) & 0xFF) / 255,
-            blue: Double(rgb & 0xFF) / 255
-        )
+
+        let red = CGFloat((rgb >> 16) & 0xFF) / 255
+        let green = CGFloat((rgb >> 8) & 0xFF) / 255
+        let blue = CGFloat(rgb & 0xFF) / 255
+        self.init(red: red, green: green, blue: blue, alpha: 1)
     }
 }
 
@@ -42,7 +87,7 @@ struct GlassPanelModifier: ViewModifier {
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .stroke(.white.opacity(0.65), lineWidth: 1)
+                    .stroke(AppTheme.liquidStrokeStrong, lineWidth: 1)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
@@ -58,14 +103,14 @@ extension View {
 
     func floatingLiquidPanel(cornerRadius: CGFloat = 28) -> some View {
         background(.regularMaterial, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            .background(.white.opacity(0.22), in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .background(AppTheme.liquidOverlay, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .stroke(
                         LinearGradient(
                             colors: [
-                                .white.opacity(0.95),
-                                .white.opacity(0.26),
+                                AppTheme.liquidStrokeStrong,
+                                AppTheme.liquidStrokeSoft,
                                 AppTheme.primary.opacity(0.20)
                             ],
                             startPoint: .topLeading,
@@ -74,7 +119,7 @@ extension View {
                         lineWidth: 1
                     )
             )
-            .shadow(color: .black.opacity(0.10), radius: 22, y: 12)
+            .shadow(color: AppTheme.shadow, radius: 22, y: 12)
             .shadow(color: AppTheme.primary.opacity(0.10), radius: 18, y: 3)
     }
 }

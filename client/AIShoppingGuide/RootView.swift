@@ -258,16 +258,16 @@ struct LiquidTabBar: View {
     @ViewBuilder
     private func tabBarSurface(width: CGFloat) -> some View {
         Capsule(style: .continuous)
-            .fill(.white.opacity(0.78))
+            .fill(AppTheme.tabBarSurface)
             .overlay(
                 Capsule(style: .continuous)
-                    .stroke(.white.opacity(0.92), lineWidth: 1)
+                    .stroke(AppTheme.liquidStrokeStrong, lineWidth: 1)
             )
             .overlay(
                 Capsule(style: .continuous)
                     .stroke(AppTheme.border, lineWidth: 0.6)
             )
-            .shadow(color: .black.opacity(0.08), radius: 18, y: 10)
+            .shadow(color: AppTheme.shadow.opacity(0.8), radius: 18, y: 10)
             .frame(width: width, height: 64)
     }
 
@@ -277,12 +277,12 @@ struct LiquidTabBar: View {
         x: CGFloat
     ) -> some View {
         Capsule(style: .continuous)
-            .fill(.white.opacity(0.88))
+            .fill(AppTheme.tabSelectionSurface)
             .overlay(
                 Capsule(style: .continuous)
-                    .stroke(.white.opacity(0.95), lineWidth: 1)
+                    .stroke(AppTheme.liquidStrokeStrong, lineWidth: 1)
             )
-            .shadow(color: .black.opacity(0.06), radius: 7, y: 2)
+            .shadow(color: AppTheme.shadow.opacity(0.55), radius: 7, y: 2)
             .allowsHitTesting(false)
             .frame(width: width, height: 48)
             .offset(x: x, y: 8)
