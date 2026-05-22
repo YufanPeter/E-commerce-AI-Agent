@@ -39,11 +39,7 @@ struct PreferenceView: View {
             Spacer()
         }
         .padding(16)
-        .background(.white, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .stroke(AppTheme.border, lineWidth: 1)
-        )
+        .floatingLiquidPanel(cornerRadius: 24)
     }
 
     private var preferenceCard: some View {
@@ -69,11 +65,7 @@ struct PreferenceView: View {
                 .tint(AppTheme.primary)
         }
         .padding(16)
-        .background(.white, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .stroke(AppTheme.border, lineWidth: 1)
-        )
+        .floatingLiquidPanel(cornerRadius: 24)
     }
 
     private var quickTags: some View {
@@ -83,11 +75,7 @@ struct PreferenceView: View {
             FlowTags(tags: ["护肤", "数码", "运动", "通勤", "母婴", "家居"])
         }
         .padding(16)
-        .background(.white, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .stroke(AppTheme.border, lineWidth: 1)
-        )
+        .floatingLiquidPanel(cornerRadius: 24)
     }
 }
 

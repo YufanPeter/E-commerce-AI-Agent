@@ -43,11 +43,7 @@ struct ProductDetailView: View {
                         .foregroundStyle(AppTheme.textSecondary)
                 }
                 .padding(16)
-                .background(.white, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .stroke(AppTheme.border, lineWidth: 1)
-                )
+                .floatingLiquidPanel(cornerRadius: 20)
 
                 HStack {
                     ForEach(product.tags, id: \.self) { tag in

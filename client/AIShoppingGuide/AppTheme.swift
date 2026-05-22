@@ -12,6 +12,13 @@ struct AppTheme {
     static let success = Color(hex: "22C55E")
     static let error = Color(hex: "EF4444")
     static let border = Color.black.opacity(0.08)
+
+    static let bottomTabBarHeight: CGFloat = 64
+    static let bottomTabBarBottomPadding: CGFloat = -14
+    static let guideComposerTabGap: CGFloat = 36
+    static let guideComposerBottomPadding = bottomTabBarHeight + bottomTabBarBottomPadding + guideComposerTabGap
+    static let cartCheckoutTabGap: CGFloat = 22
+    static let cartCheckoutBottomPadding = bottomTabBarHeight + bottomTabBarBottomPadding + cartCheckoutTabGap
 }
 
 extension Color {
@@ -47,5 +54,27 @@ struct GlassPanelModifier: ViewModifier {
 extension View {
     func glassPanel(cornerRadius: CGFloat = 24) -> some View {
         modifier(GlassPanelModifier(cornerRadius: cornerRadius))
+    }
+
+    func floatingLiquidPanel(cornerRadius: CGFloat = 28) -> some View {
+        background(.regularMaterial, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .background(.white.opacity(0.22), in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(
+                        LinearGradient(
+                            colors: [
+                                .white.opacity(0.95),
+                                .white.opacity(0.26),
+                                AppTheme.primary.opacity(0.20)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        lineWidth: 1
+                    )
+            )
+            .shadow(color: .black.opacity(0.10), radius: 22, y: 12)
+            .shadow(color: AppTheme.primary.opacity(0.10), radius: 18, y: 3)
     }
 }

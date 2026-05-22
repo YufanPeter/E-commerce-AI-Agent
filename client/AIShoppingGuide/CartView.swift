@@ -23,7 +23,7 @@ struct CartView: View {
                             }
                         }
                         .padding(18)
-                        .padding(.bottom, 156)
+                        .padding(.bottom, AppTheme.cartCheckoutBottomPadding + 92)
                     }
                 }
             }
@@ -48,9 +48,10 @@ struct CartView: View {
                     }
                     .padding(.horizontal, 20)
                     .padding(.top, 12)
-                    .padding(.bottom, 82)
-                    .glassPanel(cornerRadius: 26)
+                    .padding(.bottom, 12)
+                    .floatingLiquidPanel(cornerRadius: 26)
                     .padding(.horizontal, 16)
+                    .padding(.bottom, AppTheme.cartCheckoutBottomPadding)
                 }
             }
             .background(AppTheme.background)
@@ -89,10 +90,6 @@ struct CartRow: View {
             }
         }
         .padding(12)
-        .background(.white, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .stroke(AppTheme.border, lineWidth: 1)
-        )
+        .floatingLiquidPanel(cornerRadius: 22)
     }
 }
