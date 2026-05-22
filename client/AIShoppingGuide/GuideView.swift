@@ -47,7 +47,7 @@ struct GuideView: View {
 
     private var header: some View {
         HStack {
-            Text("AI 电商导购助手")
+            Text("CartPilot AI 导购助手")
                 .font(.title3.bold())
                 .foregroundStyle(AppTheme.textPrimary)
             Spacer()
