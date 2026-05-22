@@ -9,6 +9,7 @@ struct GuideView: View {
     @State private var isComposerExpanded = false
     @State private var showHistory = false
     @State private var selectedProduct: Product?
+    @FocusState private var isInputFocused: Bool
 
     private let examples = ["适合油皮的洗面奶", "200 元内蓝牙耳机", "轻量跑鞋", "不要含酒精的防晒"]
     private let histories = [
@@ -24,11 +25,11 @@ struct GuideView: View {
                     header
                     chatList
                 }
-                .padding(.bottom, 148)
 
                 composerStack
                     .padding(.horizontal, 16)
-                    .padding(.bottom, 82)
+                    .padding(.bottom, AppTheme.guideComposerBottomPadding)
+                    .zIndex(1)
             }
             .background(AppTheme.background)
             .sheet(isPresented: $showHistory) {
@@ -57,7 +58,7 @@ struct GuideView: View {
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(AppTheme.primary)
                     .frame(width: 40, height: 40)
-                    .glassPanel(cornerRadius: 20)
+                    .floatingLiquidPanel(cornerRadius: 20)
             }
         }
         .padding(.horizontal, 20)
@@ -82,7 +83,14 @@ struct GuideView: View {
                 }
                 .padding(.horizontal, 18)
                 .padding(.top, 12)
+                .padding(.bottom, AppTheme.guideComposerBottomPadding + 112)
             }
+            .scrollDismissesKeyboard(.interactively)
+            .simultaneousGesture(
+                TapGesture().onEnded {
+                    isInputFocused = false
+                }
+            )
             .onChange(of: messages.count) { _, _ in
                 if let last = messages.last?.id {
                     withAnimation(.easeOut(duration: 0.25)) {
@@ -102,7 +110,7 @@ struct GuideView: View {
                 }
                 .padding(14)
                 .frame(width: 156, alignment: .leading)
-                .glassPanel(cornerRadius: 22)
+                .floatingLiquidPanel(cornerRadius: 22)
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
@@ -119,11 +127,12 @@ struct GuideView: View {
                         .background(AppTheme.primary, in: Circle())
                 }
 
-                TextField("Ask a shopping question", text: $inputText, axis: .vertical)
-                    .lineLimit(1...3)
+                TextField("Ask a shopping question", text: $inputText)
+                    .lineLimit(1)
                     .submitLabel(.send)
                     .onSubmit(sendCurrentInput)
                     .font(.subheadline)
+                    .focused($isInputFocused)
 
                 Button {} label: {
                     Image(systemName: "mic")
@@ -140,7 +149,7 @@ struct GuideView: View {
                 .buttonStyle(.plain)
             }
             .padding(10)
-            .glassPanel(cornerRadius: 28)
+            .floatingLiquidPanel(cornerRadius: 28)
         }
     }
 
@@ -148,6 +157,7 @@ struct GuideView: View {
         let trimmed = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         inputText = ""
+        isInputFocused = false
         send(trimmed)
     }
 
@@ -351,11 +361,7 @@ struct ProductCard: View {
             }
         }
         .padding(14)
-        .background(.white, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .stroke(AppTheme.border, lineWidth: 1)
-        )
+        .floatingLiquidPanel(cornerRadius: 22)
     }
 }
 
@@ -384,11 +390,7 @@ struct HistorySheet: View {
                         .foregroundStyle(AppTheme.textSecondary)
                 }
                 .padding(12)
-                .background(.white, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .stroke(AppTheme.border, lineWidth: 1)
-                )
+                .floatingLiquidPanel(cornerRadius: 18)
             }
             Spacer()
         }
