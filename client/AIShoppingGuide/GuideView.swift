@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct GuideView: View {
-    @Binding var cartItems: [Product]
+    @Binding var cartItems: [CartItem]
     @State private var messages: [ChatMessage] = [
         ChatMessage(sender: .ai, text: "你可以问")
     ]
@@ -38,8 +38,8 @@ struct GuideView: View {
                     .presentationDragIndicator(.visible)
             }
             .navigationDestination(item: $selectedProduct) { product in
-                ProductDetailView(product: product) {
-                    addToCart(product)
+                ProductDetailView(product: product) { product, selectedOptions, quantity in
+                    addToCart(product, selectedOptions: selectedOptions, quantity: quantity)
                 }
             }
         }
@@ -228,9 +228,16 @@ struct GuideView: View {
         messages[index].canRetry = canRetry
     }
 
-    private func addToCart(_ product: Product) {
-        if !cartItems.contains(product) {
-            cartItems.append(product)
+    private func addToCart(
+        _ product: Product,
+        selectedOptions: [String: String] = [:],
+        quantity: Int = 1
+    ) {
+        let item = CartItem(product: product, selectedOptions: selectedOptions, quantity: quantity)
+        if let index = cartItems.firstIndex(where: { $0.id == item.id }) {
+            cartItems[index].quantity += quantity
+        } else {
+            cartItems.append(item)
         }
     }
 }

@@ -17,7 +17,9 @@ enum AppTab: String, CaseIterable {
 
 struct RootView: View {
     @State private var selectedTab: AppTab = .guide
-    @State private var cartItems: [Product] = Product.samples.prefix(2).map { $0 }
+    @State private var cartItems: [CartItem] = Product.samples.prefix(2).map {
+        CartItem(product: $0, selectedOptions: $0.defaultSpecificationSelection)
+    }
     @State private var keyboardOffset: CGFloat = 0
 
     var body: some View {
