@@ -30,6 +30,7 @@ pip-wheel-metadata/
 instance/
 *.sqlite3
 *.db
+backend/storage/
 
 # Node / frontend if added later
 node_modules/
@@ -55,3 +56,6 @@ client/*.xcodeproj/xcuserdata/
 # macOS
 .DS_Store
 Thumbs.db
+
+# Local reference documents
+*.pdf
