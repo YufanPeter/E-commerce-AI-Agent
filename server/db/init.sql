@@ -13,12 +13,6 @@ CREATE TABLE IF NOT EXISTS products (
     brand        TEXT NOT NULL,
     category     TEXT NOT NULL,
     sub_category TEXT,
-    summary      TEXT NOT NULL DEFAULT '',
-    recommend_reason TEXT NOT NULL DEFAULT '',
-    tags_json    TEXT NOT NULL DEFAULT '[]',
-    base_price   REAL NOT NULL CHECK (base_price >= 0),
-    min_price    REAL NOT NULL CHECK (min_price >= 0),
-    max_price    REAL NOT NULL CHECK (max_price >= 0),
     image_path   TEXT,
     image_url    TEXT,
     source_path  TEXT,
@@ -26,9 +20,7 @@ CREATE TABLE IF NOT EXISTS products (
         CHECK (status IN ('active', 'inactive')),
     created_at   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CHECK (min_price <= max_price),
-    CHECK (image_path IS NOT NULL OR image_url IS NOT NULL),
-    CHECK (json_valid(tags_json))
+    CHECK (image_path IS NOT NULL OR image_url IS NOT NULL)
 );
 
 CREATE TABLE IF NOT EXISTS product_skus (
@@ -82,8 +74,8 @@ CREATE TABLE IF NOT EXISTS cart_items (
     UNIQUE (user_id, sku_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_products_category_price
-    ON products(category, sub_category, min_price, max_price);
+CREATE INDEX IF NOT EXISTS idx_products_category
+    ON products(category, sub_category);
 CREATE INDEX IF NOT EXISTS idx_products_brand
     ON products(brand);
 CREATE INDEX IF NOT EXISTS idx_product_skus_product

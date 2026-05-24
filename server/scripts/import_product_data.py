@@ -50,34 +50,6 @@ def json_text(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
-def short_text(text: str, limit: int = 72) -> str:
-    clean = " ".join(text.split())
-    if len(clean) <= limit:
-        return clean
-    return clean[:limit].rstrip() + "..."
-
-
-def derive_tags(product: dict[str, Any]) -> list[str]:
-    tags = [
-        product.get("category"),
-        product.get("sub_category"),
-        product.get("brand"),
-    ]
-    return [tag for tag in tags if isinstance(tag, str) and tag.strip()]
-
-
-def sku_price_range(product: dict[str, Any]) -> tuple[float, float]:
-    prices = [
-        float(sku["price"])
-        for sku in product.get("skus", [])
-        if "price" in sku
-    ]
-    if not prices:
-        base_price = float(product["base_price"])
-        return base_price, base_price
-    return min(prices), max(prices)
-
-
 def init_database(conn: sqlite3.Connection, init_sql: Path) -> None:
     with init_sql.open("r", encoding="utf-8") as file:
         conn.executescript(file.read())
@@ -92,7 +64,6 @@ def import_product(
     product_id = product["product_id"]
     rag_knowledge = product.get("rag_knowledge", {})
     marketing_description = rag_knowledge.get("marketing_description", "")
-    min_price, max_price = sku_price_range(product)
     relative_source = source_path.relative_to(data_dir.parent)
 
     conn.execute(
@@ -103,29 +74,17 @@ def import_product(
             brand,
             category,
             sub_category,
-            summary,
-            recommend_reason,
-            tags_json,
-            base_price,
-            min_price,
-            max_price,
             image_path,
             image_url,
             source_path,
             status
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active')
         ON CONFLICT(product_id) DO UPDATE SET
             title = excluded.title,
             brand = excluded.brand,
             category = excluded.category,
             sub_category = excluded.sub_category,
-            summary = excluded.summary,
-            recommend_reason = excluded.recommend_reason,
-            tags_json = excluded.tags_json,
-            base_price = excluded.base_price,
-            min_price = excluded.min_price,
-            max_price = excluded.max_price,
             image_path = excluded.image_path,
             image_url = excluded.image_url,
             source_path = excluded.source_path,
@@ -137,12 +96,6 @@ def import_product(
             product["brand"],
             product["category"],
             product.get("sub_category"),
-            short_text(marketing_description),
-            short_text(marketing_description),
-            json_text(derive_tags(product)),
-            float(product["base_price"]),
-            min_price,
-            max_price,
             product.get("image_path"),
             None,
             str(relative_source),
