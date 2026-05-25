@@ -59,3 +59,7 @@ Thumbs.db
 
 # Local reference documents
 *.pdf
+
+# IDE
+.vscode/
+.idea/
