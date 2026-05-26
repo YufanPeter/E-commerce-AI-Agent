@@ -1,6 +1,6 @@
-# Backend RAG Data Layer
+# Backend Data Layer
 
-This backend folder contains the local RAG data layer for the shopping agent.
+This backend folder contains the local product store and RAG data layer for the shopping agent.
 
 ## Setup
 
@@ -11,6 +11,47 @@ Install dependencies:
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r backend/requirements.txt
+```
+
+## SQLite Product Store
+
+Build or rebuild the local SQLite product store after product data changes:
+
+```bash
+cd backend
+source ../.venv/bin/activate
+python -m store.import_product_data --reset
+python -m store.import_image_manifest
+```
+
+Generated SQLite files are written to `backend/storage/ecommerce_agent.sqlite3` and should not be committed.
+
+SQLite stores deterministic product facts and detail-page content:
+
+- `products`: product-level facts such as title, brand, category, base price, and image paths.
+- `product_skus`: SKU properties and SKU prices, the source of truth for budget filtering and cart pricing.
+- `product_descriptions`: marketing descriptions for detail pages and RAG evidence alignment.
+- `product_faqs`: one official FAQ row per source item, aligned with Chroma FAQ chunks by `product_id + source_index`.
+- `product_reviews`: one user review row per source item, aligned with Chroma review chunks by `product_id + source_index`.
+- `users` and `cart_items`: demo user and cart data.
+- `product_price_ranges`: a SQLite view for card price display and budget filtering by minimum SKU price.
+
+Inspect the product store locally:
+
+```bash
+python -m store.product_store candidates --category 服饰运动 --max-price 500 --limit 5
+python -m store.product_store detail p_beauty_010
+python -m store.product_store reviews p_beauty_010 --polarity negative
+```
+
+Runtime code should use `ProductStore` as the SQLite fact layer:
+
+```python
+from store.product_store import ProductStore
+
+store = ProductStore()
+candidates = store.find_candidates(category="服饰运动", max_price=500)
+detail = store.get_product_detail("p_beauty_010")
 ```
 
 ## Offline Index Build
