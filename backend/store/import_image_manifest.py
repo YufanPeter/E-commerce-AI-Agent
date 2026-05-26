@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Import product CDN image URLs from a manifest into SQLite."""
+"""将商品 CDN 图片 URL manifest 导入 SQLite。"""
 
 from __future__ import annotations
 
@@ -11,30 +11,30 @@ from typing import Any
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
-DEFAULT_DB_PATH = ROOT_DIR / "server" / "db" / "ecommerce_agent.sqlite3"
-DEFAULT_IMAGE_MANIFEST = ROOT_DIR / "server" / "cdn" / "image_manifest.json"
+DEFAULT_DB_PATH = ROOT_DIR / "backend" / "storage" / "ecommerce_agent.sqlite3"
+DEFAULT_IMAGE_MANIFEST = ROOT_DIR / "backend" / "cdn" / "image_manifest.json"
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Update products.image_url from a product_id -> image URL manifest."
+        description="根据 product_id -> image URL manifest 更新 products.image_url。"
     )
     parser.add_argument(
         "--db",
         type=Path,
         default=DEFAULT_DB_PATH,
-        help=f"SQLite database path. Default: {DEFAULT_DB_PATH}",
+        help=f"SQLite 数据库路径。默认：{DEFAULT_DB_PATH}",
     )
     parser.add_argument(
         "--image-manifest",
         type=Path,
         default=DEFAULT_IMAGE_MANIFEST,
-        help=f"Product CDN URL manifest. Default: {DEFAULT_IMAGE_MANIFEST}",
+        help=f"商品 CDN URL manifest。默认：{DEFAULT_IMAGE_MANIFEST}",
     )
     parser.add_argument(
         "--strict",
         action="store_true",
-        help="Fail if the manifest contains product IDs that do not exist in the database.",
+        help="如果 manifest 中包含数据库不存在的 product_id，则直接失败。",
     )
     return parser.parse_args()
 
@@ -110,11 +110,9 @@ def main() -> None:
         args.image_manifest,
         args.strict,
     )
-    print(
-        f"Imported {updated_count}/{manifest_count} image URLs into {args.db}"
-    )
+    print(f"已导入 {updated_count}/{manifest_count} 个图片 URL 到 {args.db}")
     if missing_product_ids:
-        print(f"Skipped {len(missing_product_ids)} missing products")
+        print(f"跳过 {len(missing_product_ids)} 个数据库中不存在的商品")
 
 
 if __name__ == "__main__":
