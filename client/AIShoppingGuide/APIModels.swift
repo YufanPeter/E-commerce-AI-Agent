@@ -102,11 +102,11 @@ struct ProductPayload: Identifiable, Codable, Hashable {
     let price: Money
     let originalPrice: Money?
     let availability: ProductAvailability
-    let summary: String
+    let summary: String?
     let tags: [String]
     let specifications: [ProductSpecificationPayload]
     let skus: [SKUPayload]
-    let evidence: [EvidencePayload]
+    let evidence: [EvidencePayload]?
     let updatedAt: Date?
 }
 
@@ -120,7 +120,7 @@ struct ProductSearchRequest: Codable, Hashable {
 struct ProductSearchResponse: Codable, Hashable {
     let requestID: String
     let products: [ProductPayload]
-    let evidence: [EvidencePayload]
+    let evidence: [EvidencePayload]?
 }
 
 struct ProductComparisonRequest: Codable, Hashable {

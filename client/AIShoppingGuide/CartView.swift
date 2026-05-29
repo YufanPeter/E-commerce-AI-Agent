@@ -23,7 +23,7 @@ struct CartView: View {
 
     private var selectedTotal: Double {
         selectedItems.reduce(0) { partialResult, item in
-            partialResult + priceValue(for: item.product) * Double(item.quantity)
+            partialResult + item.product.priceValue(for: item.selectedOptions) * Double(item.quantity)
         }
     }
 
@@ -249,14 +249,6 @@ struct CartView: View {
             }
         }
     }
-
-    private func priceValue(for product: Product) -> Double {
-        let cleaned = product.price
-            .replacingOccurrences(of: "¥", with: "")
-            .replacingOccurrences(of: ",", with: "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return Double(cleaned) ?? 0
-    }
 }
 
 private struct CartSpecificationEditContext: Identifiable {
@@ -281,10 +273,8 @@ struct CartRow: View {
             )
             .padding(.top, 22)
 
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(AppTheme.softPurple)
+            ProductRemoteImage(url: item.product.imageURL, cornerRadius: 16, placeholderIcon: "shippingbox")
                 .frame(width: 78, height: 78)
-                .overlay(Image(systemName: "shippingbox").foregroundStyle(AppTheme.primary))
                 .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .onTapGesture(perform: onShowDetail)
                 .accessibilityAddTraits(.isButton)
@@ -308,14 +298,16 @@ struct CartRow: View {
                     .buttonStyle(.plain)
                 }
 
-                Text(item.product.reason)
-                    .font(.caption)
-                    .foregroundStyle(AppTheme.textSecondary)
-                    .lineLimit(2)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-                    .onTapGesture(perform: onShowDetail)
-                    .accessibilityAddTraits(.isButton)
+                if !item.product.reason.isEmpty {
+                    Text(item.product.reason)
+                        .font(.caption)
+                        .foregroundStyle(AppTheme.textSecondary)
+                        .lineLimit(2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                        .onTapGesture(perform: onShowDetail)
+                        .accessibilityAddTraits(.isButton)
+                }
 
                 if !item.specificationSummary.isEmpty {
                     Button(action: onEditSpecifications) {
@@ -334,7 +326,7 @@ struct CartRow: View {
                 }
 
                 HStack(alignment: .center, spacing: 10) {
-                    Text(item.product.price)
+                    Text(item.product.priceDisplay(for: item.selectedOptions))
                         .font(.headline)
                         .foregroundStyle(AppTheme.error)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -494,7 +486,7 @@ private struct CartSpecificationEditorSheet: View {
                 }
 
             VStack(alignment: .leading, spacing: 6) {
-                Text(product.price)
+                Text(product.priceDisplay(for: selectedOptions))
                     .font(.title3.bold())
                     .foregroundStyle(AppTheme.error)
                 Text(product.title)

@@ -88,7 +88,7 @@ final class MockProductService: ProductServicing {
         return ProductSearchResponse(
             requestID: UUID().uuidString,
             products: Array(products),
-            evidence: products.flatMap(\.evidence)
+            evidence: products.flatMap { $0.evidence ?? [] }
         )
     }
 
@@ -106,7 +106,7 @@ final class MockProductService: ProductServicing {
                     productID: product.productID,
                     text: product.price.display,
                     isHighlighted: index == 0,
-                    evidence: product.evidence
+                    evidence: product.evidence ?? []
                 )
             }
         )
@@ -117,9 +117,9 @@ final class MockProductService: ProductServicing {
             values: products.enumerated().map { index, product in
                 ProductComparisonValue(
                     productID: product.productID,
-                    text: product.summary,
+                    text: product.summary ?? "",
                     isHighlighted: index == 0,
-                    evidence: product.evidence
+                    evidence: product.evidence ?? []
                 )
             }
         )
@@ -404,7 +404,7 @@ private enum MockProductCatalog {
         let lowercased = query.lowercased()
         let filtered = all.filter { product in
             product.title.lowercased().contains(lowercased)
-            || product.summary.lowercased().contains(lowercased)
+            || (product.summary ?? "").lowercased().contains(lowercased)
             || product.tags.contains { tag in query.contains(tag) || lowercased.contains(tag.lowercased()) }
         }
         return filtered.isEmpty ? all : filtered

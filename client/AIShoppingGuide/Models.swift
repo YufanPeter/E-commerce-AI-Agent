@@ -14,20 +14,80 @@ enum MessageState: String {
 }
 
 struct Product: Identifiable, Hashable {
-    let id = UUID()
+    let id: String
     let title: String
     let price: String
     let reason: String
     let details: String
     let tags: [String]
     let specifications: [ProductSpecification]
+    let imageURL: URL?
+    let skus: [ProductSKU]
+
+    init(
+        id: String = UUID().uuidString,
+        title: String,
+        price: String,
+        reason: String,
+        details: String,
+        tags: [String],
+        specifications: [ProductSpecification],
+        imageURL: URL? = nil,
+        skus: [ProductSKU] = []
+    ) {
+        self.id = id
+        self.title = title
+        self.price = price
+        self.reason = reason
+        self.details = details
+        self.tags = tags
+        self.specifications = specifications
+        self.imageURL = imageURL
+        self.skus = skus
+    }
 
     var defaultSpecificationSelection: [String: String] {
-        specifications.reduce(into: [:]) { result, specification in
+        if let lowestSKU {
+            return lowestSKU.selectedOptions
+        }
+        return specifications.reduce(into: [:]) { result, specification in
             if let firstOption = specification.options.first {
                 result[specification.name] = firstOption
             }
         }
+    }
+
+    var lowestSKU: ProductSKU? {
+        skus.min { $0.price < $1.price }
+    }
+
+    func matchingSKU(for selectedOptions: [String: String]) -> ProductSKU? {
+        guard !skus.isEmpty else { return nil }
+        return skus.first { $0.selectedOptions == selectedOptions }
+    }
+
+    func displaySKU(for selectedOptions: [String: String]) -> ProductSKU? {
+        matchingSKU(for: selectedOptions) ?? lowestSKU
+    }
+
+    func priceValue(for selectedOptions: [String: String]) -> Double {
+        if let sku = displaySKU(for: selectedOptions) {
+            return sku.price
+        }
+        return Product.numericPrice(from: price)
+    }
+
+    func priceDisplay(for selectedOptions: [String: String]) -> String {
+        displaySKU(for: selectedOptions)?.priceDisplay ?? price
+    }
+
+    static func numericPrice(from display: String) -> Double {
+        let cleaned = display
+            .replacingOccurrences(of: "¥", with: "")
+            .replacingOccurrences(of: ",", with: "")
+            .replacingOccurrences(of: "起", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return Double(cleaned) ?? 0
     }
 
     static let samples: [Product] = [
@@ -84,6 +144,13 @@ struct ProductSpecification: Identifiable, Hashable {
     let options: [String]
 }
 
+struct ProductSKU: Identifiable, Hashable {
+    let id: String
+    let selectedOptions: [String: String]
+    let price: Double
+    let priceDisplay: String
+}
+
 struct CartItem: Identifiable, Hashable {
     let product: Product
     let selectedOptions: [String: String]
@@ -96,7 +163,7 @@ struct CartItem: Identifiable, Hashable {
     }
 
     var id: String {
-        [product.id.uuidString, specificationKey]
+        [product.id, specificationKey]
             .filter { !$0.isEmpty }
             .joined(separator: "|")
     }

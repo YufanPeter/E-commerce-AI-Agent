@@ -11,6 +11,7 @@ struct GuideView: View {
     @State private var selectedProduct: Product?
     @FocusState private var isInputFocused: Bool
 
+    private let productService = RESTProductService()
     private let examples = ["适合油皮的洗面奶", "200 元内蓝牙耳机", "轻量跑鞋", "不要含酒精的防晒"]
     private let histories = [
         HistoryItem(title: "无酒精防晒推荐", subtitle: "今天 21:42 · 3 个商品"),
@@ -174,45 +175,81 @@ struct GuideView: View {
     }
 
     private func simulateResponse(for query: String) {
-        if query.contains("失败") || query.lowercased().contains("error") {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) {
-                updateLastAI(text: "正在检索商品库与评价摘要", state: .retrieving)
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.1) {
+        Task {
+            do {
+                if query.contains("失败") || query.lowercased().contains("error") {
+                    try await Task.sleep(nanoseconds: 550_000_000)
+                    updateLastAI(text: "正在检索商品库与评价摘要", state: .retrieving)
+                    try await Task.sleep(nanoseconds: 550_000_000)
+                    updateLastAI(
+                        text: "网络异常，暂时无法生成推荐，请稍后重试。",
+                        state: .failed,
+                        canRetry: true
+                    )
+                    return
+                }
+
+                let productIDs = productIDs(for: query)
+                try await Task.sleep(nanoseconds: 550_000_000)
+                updateLastAI(text: "正在按商品 ID 查询商品库", state: .retrieving)
+
+                let payloads = try await productService.fetchProducts(productIDs: productIDs)
+                let products = payloads.map(Product.init(payload:))
+
+                try await Task.sleep(nanoseconds: 550_000_000)
+                updateLastAI(text: "正在生成个性化推荐", state: .generating)
+
+                try await Task.sleep(nanoseconds: 550_000_000)
                 updateLastAI(
-                    text: "网络异常，暂时无法生成推荐，请稍后重试。",
+                    text: "我按商品 ID 从商品库取到了确定数据，并补上了价格、规格和图片。",
+                    state: .ready,
+                    products: products
+                )
+            } catch {
+                updateLastAI(
+                    text: errorMessage(error),
                     state: .failed,
                     canRetry: true
                 )
             }
-            return
+        }
+    }
+
+    private func productIDs(for query: String) -> [String] {
+        let explicitIDs = extractProductIDs(from: query)
+        if !explicitIDs.isEmpty {
+            return explicitIDs
         }
 
         let lower = query.lowercased()
-        var result = Product.samples
         if query.contains("耳机") || lower.contains("bluetooth") {
-            result = [Product.samples[1]]
+            return ["p_digital_007", "p_digital_018"]
         } else if query.contains("跑鞋") {
-            result = [Product.samples[2]]
+            return ["p_clothes_007", "p_clothes_009", "p_clothes_010"]
         } else if query.contains("防晒") || query.contains("酒精") {
-            result = [Product.samples[3]]
-        } else if query.contains("洗面奶") || query.contains("油皮") {
-            result = [Product.samples[0]]
+            return ["p_beauty_023", "p_beauty_010", "p_beauty_006"]
+        } else if query.contains("洗面奶") || query.contains("洁面") || query.contains("油皮") {
+            return ["p_beauty_011"]
         }
+        return ["p_beauty_008", "p_digital_007", "p_clothes_007"]
+    }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) {
-            updateLastAI(text: "正在检索商品库与评价摘要", state: .retrieving)
+    private func extractProductIDs(from text: String) -> [String] {
+        let pattern = #"p_(beauty|clothes|digital|food)_\d{3}"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+            return []
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.1) {
-            updateLastAI(text: "正在生成个性化推荐", state: .generating)
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        return regex.matches(in: text, range: range).compactMap { match in
+            Range(match.range, in: text).map { String(text[$0]) }
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.65) {
-            updateLastAI(
-                text: "我按预算、成分/参数、真实评价和场景匹配筛了一组更稳的选择。",
-                state: .ready,
-                products: result
-            )
+    }
+
+    private func errorMessage(_ error: Error) -> String {
+        if let restError = error as? RESTServiceError {
+            return restError.displayMessage
         }
+        return "商品服务暂时不可用，请稍后重试。\n错误码：API_UNKNOWN_ERROR"
     }
 
     private func updateLastAI(
@@ -338,25 +375,35 @@ struct ProductCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(LinearGradient(colors: [AppTheme.softPurple, AppTheme.softBlue], startPoint: .topLeading, endPoint: .bottomTrailing))
-                .frame(height: 116)
-                .overlay {
-                    Image(systemName: "shippingbox")
-                        .font(.system(size: 34))
-                        .foregroundStyle(AppTheme.primary)
+            ProductRemoteImage(url: product.imageURL, cornerRadius: 16, placeholderIcon: "shippingbox", contentMode: .fit)
+                .frame(maxWidth: .infinity)
+                .frame(maxHeight: 300)
+
+            if !product.tags.isEmpty {
+                HStack(spacing: 8) {
+                    ForEach(product.tags, id: \.self) { tag in
+                        Text(tag)
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(AppTheme.primary)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 7)
+                            .background(AppTheme.softPurple, in: Capsule())
+                    }
                 }
+            }
 
             Text(product.title)
                 .font(.headline)
                 .foregroundStyle(AppTheme.textPrimary)
-            Text(product.price)
+            Text(product.priceDisplay(for: product.defaultSpecificationSelection))
                 .font(.title3.bold())
                 .foregroundStyle(AppTheme.error)
-            Text(product.reason)
-                .font(.subheadline)
-                .foregroundStyle(AppTheme.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
+//            if !product.reason.isEmpty {
+//                Text(product.reason)
+//                    .font(.subheadline)
+//                    .foregroundStyle(AppTheme.textSecondary)
+//                    .lineLimit(3)
+//            }
 
             Button(action: onDetail) {
                 Text("查看详情")
@@ -369,6 +416,80 @@ struct ProductCard: View {
         }
         .padding(14)
         .floatingLiquidPanel(cornerRadius: 22)
+    }
+}
+
+struct ProductRemoteImage: View {
+    let url: URL?
+    let cornerRadius: CGFloat
+    let placeholderIcon: String
+    var contentMode: ContentMode = .fill
+
+    var body: some View {
+        AsyncImage(url: url, transaction: Transaction(animation: .easeOut(duration: 0.3))) { phase in
+            switch phase {
+            case .success(let image):
+                if contentMode == .fit {
+                    image
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxWidth: .infinity)
+                        .background(Color.white)
+                        .transition(.opacity)
+                } else {
+                    image
+                        .resizable()
+                        .scaledToFill()
+                        .transition(.opacity)
+                }
+            case .empty:
+                placeholderBox { ProgressView().tint(AppTheme.primary) }
+            case .failure:
+                placeholderBox { placeholderIconView }
+            @unknown default:
+                placeholderBox { placeholderIconView }
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+    }
+
+    @ViewBuilder
+    private func placeholderBox<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        ZStack {
+            background
+            content()
+        }
+        .modifier(PlaceholderSizing(isFit: contentMode == .fit))
+    }
+
+    @ViewBuilder
+    private var background: some View {
+        if contentMode == .fit {
+            Color.white
+        } else {
+            LinearGradient(colors: [AppTheme.softPurple, AppTheme.softBlue], startPoint: .topLeading, endPoint: .bottomTrailing)
+        }
+    }
+
+    private var placeholderIconView: some View {
+        Image(systemName: placeholderIcon)
+            .font(.system(size: 34, weight: .semibold))
+            .foregroundStyle(AppTheme.primary)
+    }
+}
+
+private struct PlaceholderSizing: ViewModifier {
+    let isFit: Bool
+
+    func body(content: Content) -> some View {
+        if isFit {
+            content
+                .aspectRatio(1, contentMode: .fit)
+                .frame(maxWidth: .infinity)
+        } else {
+            content
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
     }
 }
 
