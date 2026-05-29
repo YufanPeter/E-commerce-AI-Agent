@@ -30,39 +30,24 @@ struct ProductDetailView: View {
         ZStack(alignment: .bottom) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    RoundedRectangle(cornerRadius: 26, style: .continuous)
-                        .fill(LinearGradient(colors: [AppTheme.softPurple, AppTheme.softBlue], startPoint: .topLeading, endPoint: .bottomTrailing))
+                    ProductRemoteImage(url: product.imageURL, cornerRadius: 26, placeholderIcon: "bag")
                         .frame(height: 280)
-                        .overlay {
-                            VStack(spacing: 12) {
-                                Image(systemName: "bag")
-                                    .font(.system(size: 54))
-                                    .foregroundStyle(AppTheme.primary)
-                                Text("商品图占位")
-                                    .font(.caption)
-                                    .foregroundStyle(AppTheme.textSecondary)
-                            }
-                        }
 
                     VStack(alignment: .leading, spacing: 10) {
-                        Text(product.price)
+                        Text(product.priceDisplay(for: selectedOptions))
                             .font(.title.bold())
                             .foregroundStyle(AppTheme.error)
                         Text(product.title)
                             .font(.title3.bold())
                             .foregroundStyle(AppTheme.textPrimary)
-                        Text(product.details)
-                            .font(.subheadline)
-                            .foregroundStyle(AppTheme.textSecondary)
-                            .lineSpacing(4)
                     }
 
                     VStack(alignment: .leading, spacing: 10) {
                         Text("AI 推荐理由")
                             .font(.headline)
-                        Text(product.reason)
+                        Text(product.reason.isEmpty ? "暂时空缺" : product.reason)
                             .font(.subheadline)
-                            .foregroundStyle(AppTheme.textSecondary)
+                            .foregroundStyle(product.reason.isEmpty ? AppTheme.textSecondary.opacity(0.72) : AppTheme.textSecondary)
                     }
                     .padding(16)
                     .floatingLiquidPanel(cornerRadius: 20)
@@ -192,17 +177,11 @@ private struct AddToCartSheet: View {
 
     private var header: some View {
         HStack(alignment: .top, spacing: 12) {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(LinearGradient(colors: [AppTheme.softPurple, AppTheme.softBlue], startPoint: .topLeading, endPoint: .bottomTrailing))
+            ProductRemoteImage(url: product.imageURL, cornerRadius: 16, placeholderIcon: "bag")
                 .frame(width: 76, height: 76)
-                .overlay {
-                    Image(systemName: "bag")
-                        .font(.system(size: 28, weight: .semibold))
-                        .foregroundStyle(AppTheme.primary)
-                }
 
             VStack(alignment: .leading, spacing: 6) {
-                Text(product.price)
+                Text(product.priceDisplay(for: selectedOptions))
                     .font(.title3.bold())
                     .foregroundStyle(AppTheme.error)
                 Text(product.title)
