@@ -5,7 +5,7 @@ from __future__ import annotations
 端点：
     POST /chat          非流式，一次性返回 JSON
     POST /chat/stream   SSE 流式，事件序列：meta / tool_result / token / done / error
-    GET  /healthz       健康检查
+    GET  /health        健康检查
 
 会话管理：
     极简实现——客户端传 session_id（uuid），服务端用进程内字典存。
@@ -110,8 +110,8 @@ def _get_agent() -> Agent:
 # 端点
 # ---------------------------------------------------------------------------
 
-@app.get("/healthz")
-def healthz() -> dict[str, str]:
+@app.get("/health")
+def health() -> dict[str, str]:
     return {"status": "ok"}
 
 

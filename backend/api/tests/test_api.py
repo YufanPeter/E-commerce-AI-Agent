@@ -57,7 +57,7 @@ class _FakeAgent:
 class TestHealthz:
     def test_ok(self, client):
         c, _ = client
-        r = c.get("/healthz")
+        r = c.get("/health")
         assert r.status_code == 200
         assert r.json() == {"status": "ok"}
 
