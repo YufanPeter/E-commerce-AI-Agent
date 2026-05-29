@@ -42,6 +42,7 @@ def _build_tool_schema(taxonomy: dict) -> dict:
     真实存在的取值上，避免 "vivo Pro Max" 这种幻觉品牌泄漏到下游。
     """
     sub_categories = sorted(taxonomy["sub_to_cat"].keys())
+    categories = sorted({c for c in taxonomy["sub_to_cat"].values() if c})
     brands = list(taxonomy["brands"])
 
     return {
@@ -52,6 +53,11 @@ def _build_tool_schema(taxonomy: dict) -> dict:
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "category": {
+                        "type": ["string", "null"],
+                        "enum": [*categories, None],
+                        "description": "用户想要的一级品类，必须严格选自候选列表；用户只给出大类（如\"美妆\"）时填这里，无法判断填 null。",
+                    },
                     "sub_category": {
                         "type": ["string", "null"],
                         "enum": [*sub_categories, None],
@@ -91,6 +97,7 @@ def _build_tool_schema(taxonomy: dict) -> dict:
                     },
                 },
                 "required": [
+                    "category",
                     "sub_category",
                     "brand_include",
                     "brand_exclude",
@@ -109,22 +116,29 @@ def _build_tool_schema(taxonomy: dict) -> dict:
 SYSTEM_PROMPT = """你是电商搜索的需求解析器。严格遵守以下规则：
 
 1. 你必须调用 extract_search_intent 函数，不要直接回答用户。
-2. sub_category 和 brand 必须严格从 enum 候选中选，禁止编造或写中文翻译。
+2. category / sub_category / brand 必须严格从 enum 候选中选，禁止编造或写中文翻译。
 3. 否定语义只看局部范围：
    - "我要 Nike，不要太贵" → brand_include=["Nike"]，brand_exclude=[]
    - "推荐手机，不要华为" → sub_category="智能手机"，brand_exclude=["华为"]
 4. 用户说"不要日系"/"不要韩系"时写进 negative_ingredients，由下游映射到具体品牌。
-5. 用户原 query 里提到的同义词要映射到官方 sub_category：
+5. 一级品类（category）同义词映射（用户只给大类、没给子品类时务必填 category）：
+   - "美妆"/"化妆品"/"护肤"/"护肤品" → "美妆护肤"
+   - "数码"/"电子产品"/"3C" → "数码电子"
+   - "衣服"/"服装"/"运动装"/"运动" → "服饰运动"
+   - "零食"/"吃的"/"食品"/"生活用品" → "食品生活"
+6. 子品类（sub_category）同义词要映射到官方值：
    - "运动鞋"/"跑鞋" → "跑步鞋"
    - "手机" → "智能手机"
    - "ipad"/"平板" → "平板电脑"
    - "蓝牙耳机"/"降噪耳机" → "真无线耳机"
    - "洗面奶" → "洁面"
-6. 数字提取要小心：
+7. needs_clarification 只在 query 完全没有任何商品线索时才设为 true（如\"随便看看\"、\"你好\"）；
+   只要识别到 category / sub_category / brand / 价格 / 偏好中任意一项，就设为 false。
+8. 数字提取要小心：
    - "300 以内" → max_price=300
    - "200 到 500" → min_price=200, max_price=500
    - "iPhone 15" 不是价格
-7. 不确定的字段填 null 或空数组，不要瞎猜。
+9. 不确定的字段填 null 或空数组，不要瞎猜。
 """
 
 
@@ -183,7 +197,15 @@ def _to_parsed_query(
     sub_category = arguments.get("sub_category")
     if sub_category and sub_category not in taxonomy["sub_to_cat"]:
         sub_category = None
-    category = taxonomy["sub_to_cat"].get(sub_category) if sub_category else None
+
+    # 优先用 sub_category 反查父类；没有 sub 时退回 LLM 给的 category。
+    known_categories = {c for c in taxonomy["sub_to_cat"].values() if c}
+    if sub_category:
+        category = taxonomy["sub_to_cat"].get(sub_category)
+    else:
+        category = arguments.get("category")
+        if category not in known_categories:
+            category = None
 
     known_brands = set(taxonomy["brands"])
 
@@ -215,8 +237,26 @@ def _to_parsed_query(
         ],
         soft_terms=list(arguments.get("soft_terms") or []),
         retrieval_query=query,  # LLM 路径下保留原 query；soft_terms 留给召回后重排使用
-        needs_clarification=bool(arguments.get("needs_clarification", False)),
+        # 只要识别到任意一个商品线索就强制放行检索，避免 LLM 过于保守把可召回的 query 误判为模糊。
+        # clarify 的最终决策权交给 Agent 层的 IntentRouter（信息更全、有历史上下文）。
+        needs_clarification=bool(arguments.get("needs_clarification", False)) and not _has_any_signal(
+            category=category,
+            sub_category=sub_category,
+            max_price=arguments.get("max_price"),
+            min_price=arguments.get("min_price"),
+            brand_include=arguments.get("brand_include"),
+            soft_terms=arguments.get("soft_terms"),
+        ),
     )
+
+
+def _has_any_signal(**fields: Any) -> bool:
+    """只要任意字段有内容（非 None / 非空列表 / 非空字符串），就认为 query 已经可检索。"""
+    for value in fields.values():
+        if value in (None, "", [], ()):
+            continue
+        return True
+    return False
 
 
 def _coerce_float(value: Any) -> float | None:
