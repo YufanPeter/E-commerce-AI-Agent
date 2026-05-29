@@ -1,13 +1,24 @@
 from __future__ import annotations
 
+"""商品详情 / 批量查询 REST 端点。
+
+挂载在 main.py 里的 FastAPI app 上：
+    app.include_router(products.router)
+
+端点：
+    GET /products/{id}        单品详情
+    GET /products?ids=a,b,c   批量查询
+
+数据源：SQLite ProductStore（backend/store/product_store.py）。
+"""
+
 import json
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, HTTPException, Query
 
-from backend.store.product_store import (
+from store.product_store import (
     DEFAULT_DB_PATH,
     ProductDetail,
     ProductSku,
@@ -16,33 +27,25 @@ from backend.store.product_store import (
 )
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 IMAGE_MANIFEST_PATH = PROJECT_ROOT / "backend" / "cdn" / "image_manifest.json"
 
-app = FastAPI(title="E-commerce AI Agent API")
+router = APIRouter()
 store = ProductStore(DEFAULT_DB_PATH)
-image_manifest: dict[str, str] = {}
 
 
-@app.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
+def load_image_manifest() -> dict[str, str]:
+    if not IMAGE_MANIFEST_PATH.exists():
+        return {}
+    with IMAGE_MANIFEST_PATH.open("r", encoding="utf-8") as handle:
+        parsed = json.load(handle)
+    return {str(key): str(value) for key, value in parsed.items() if key and value}
 
 
-@app.exception_handler(HTTPException)
-async def http_exception_handler(_request: Any, exc: HTTPException) -> JSONResponse:
-    if isinstance(exc.detail, dict):
-        detail = exc.detail
-    else:
-        detail = error_payload(
-            code=default_error_code(exc.status_code),
-            message=str(exc.detail),
-            retryable=exc.status_code >= 500,
-        )
-    return JSONResponse(status_code=exc.status_code, content=detail)
+image_manifest = load_image_manifest()
 
 
-@app.get("/products/{product_id}")
+@router.get("/products/{product_id}")
 def get_product(product_id: str) -> dict[str, Any]:
     detail = store.get_product_detail(product_id)
     if detail is None:
@@ -57,7 +60,7 @@ def get_product(product_id: str) -> dict[str, Any]:
     return product_payload(detail)
 
 
-@app.get("/products")
+@router.get("/products")
 def get_products(ids: str = Query(..., description="Comma-separated product ids")) -> dict[str, Any]:
     product_ids = [product_id.strip() for product_id in ids.split(",") if product_id.strip()]
     products = []
@@ -69,17 +72,6 @@ def get_products(ids: str = Query(..., description="Comma-separated product ids"
         "requestID": "products_by_id",
         "products": products,
     }
-
-
-def load_image_manifest() -> dict[str, str]:
-    if not IMAGE_MANIFEST_PATH.exists():
-        return {}
-    with IMAGE_MANIFEST_PATH.open("r", encoding="utf-8") as handle:
-        parsed = json.load(handle)
-    return {str(key): str(value) for key, value in parsed.items() if key and value}
-
-
-image_manifest = load_image_manifest()
 
 
 def error_payload(code: str, message: str, retryable: bool) -> dict[str, Any]:

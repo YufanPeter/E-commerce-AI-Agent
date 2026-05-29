@@ -24,12 +24,13 @@ os.environ.setdefault("CHROMA_TELEMETRY_IMPL", "none")
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from agent.orchestrator import Agent
 from agent.session import AgentSession
+from api import products as products_router
 
 
 logger = logging.getLogger(__name__)
@@ -57,6 +58,23 @@ class ChatResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 app = FastAPI(title="E-commerce AI Agent", version="0.2.0")
+
+# 商品详情 / 批量查询端点（队友 wsm 贡献）
+app.include_router(products_router.router)
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(_request: Request, exc: HTTPException) -> JSONResponse:
+    """统一错误响应格式：dict detail 透传；字符串 detail 包装成标准 envelope。"""
+    if isinstance(exc.detail, dict):
+        detail = exc.detail
+    else:
+        detail = products_router.error_payload(
+            code=products_router.default_error_code(exc.status_code),
+            message=str(exc.detail),
+            retryable=exc.status_code >= 500,
+        )
+    return JSONResponse(status_code=exc.status_code, content=detail)
 
 
 class _SessionStore:
