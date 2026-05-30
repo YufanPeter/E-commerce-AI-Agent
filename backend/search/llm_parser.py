@@ -186,10 +186,14 @@ def _extract_tool_arguments(response: Any) -> dict[str, Any]:
 def _loads_arguments(raw: str) -> dict[str, Any]:
     """容错解析 function arguments。
 
-    豆包 function calling 偶发返回畸形 JSON（多包一层 ```json code fence、
-    前后夹带说明文字、甚至缺冒号），直接 ``json.loads`` 会让整条检索链崩溃。
-    这里做两级解析：先按原样解析，失败再剥离 code fence 并截取首个完整 JSON
-    对象重试。仍解析不出时才抛异常，交由上层降级到纯向量召回。
+    豆包 function calling 偶发返回畸形 JSON，已知三类污染：
+    1. 多包一层 ```json code fence、前后夹带说明文字；
+    2. 把内部工具标记 ``<parameter name="x">v</parameter>`` 泄漏进 JSON 串
+       （表现为 ``"category" string="null">数码电子</parameter>``，缺冒号且夹 XML）；
+    3. 上述两者叠加。
+    直接 ``json.loads`` 会让整条检索链崩溃并降级到无过滤的纯向量召回（会召回到
+    跨品类的无关商品）。这里做多级解析：原样 → 剥 code fence + 截取首个 JSON 对象
+    → 修复 <parameter> 泄漏。全部失败才抛异常，交由上层降级。
     """
     try:
         return json.loads(raw)
@@ -205,10 +209,60 @@ def _loads_arguments(raw: str) -> dict[str, Any]:
 
     start = text.find("{")
     end = text.rfind("}")
-    if start != -1 and end != -1 and end > start:
-        return json.loads(text[start : end + 1])
+    candidate = text[start : end + 1] if start != -1 and end != -1 and end > start else text
+    try:
+        return json.loads(candidate)
+    except json.JSONDecodeError:
+        # 最后一招：修复豆包 <parameter> 标记泄漏，再截取一次 JSON 对象重试。
+        repaired = _repair_param_leak(candidate)
+        r_start = repaired.find("{")
+        r_end = repaired.rfind("}")
+        if r_start != -1 and r_end != -1 and r_end > r_start:
+            repaired = repaired[r_start : r_end + 1]
+        return json.loads(repaired)
 
-    return json.loads(text)
+
+def _repair_param_leak(text: str) -> str:
+    """修复豆包把内部 ``<parameter name="x">v</parameter>`` 标记混进 JSON 的污染。
+
+    观察到的畸形样例（单行）::
+
+        {"category" string="null">数码电子</parameter>
+        <parameter name="sub_category": "真无线耳机", "max_price": 200.0,
+         "min_price" string="null">null</parameter>
+        <parameter name="negative_ingredients": [], "needs_clarification": false}
+
+    修复策略（值本身都在，只是被 XML 包裹/缺冒号）：
+    1. 去掉 ``<parameter name=`` 前缀，使 ``name="x"`` 还原为 ``"x"``；
+    2. 把 ``"key" string="...">VALUE</parameter>`` 还原为 ``"key": VALUE``
+       （VALUE 按 null/布尔/数字/字符串规范化）；
+    3. 清掉残余 ``</parameter>``；
+    4. 补回因标记剥离而缺失的逗号（值结束后直接换行接下一个 key 的情况）。
+    """
+    if "parameter" not in text:
+        return text
+
+    import re
+
+    text = text.replace("<parameter name=", "")
+
+    def _normalize_value(val: str) -> str:
+        val = val.strip()
+        if val in ("null", "true", "false"):
+            return val
+        if re.fullmatch(r"-?\d+(\.\d+)?", val):
+            return val
+        return '"' + val.replace('"', "") + '"'
+
+    text = re.sub(
+        r'("[A-Za-z_]+")\s+string="[^"]*">([^<]*)</parameter>',
+        lambda m: f"{m.group(1)}: {_normalize_value(m.group(2))}",
+        text,
+    )
+    text = text.replace("</parameter>", "")
+    # 补逗号：值结束（引号 / 数字 / ] / null / 布尔）后紧跟换行 + 下一个 key
+    text = re.sub(r'("|\]|\d|null|true|false)\s*\n\s*(")', r"\1, \2", text)
+    return text
 
 
 def _to_parsed_query(
