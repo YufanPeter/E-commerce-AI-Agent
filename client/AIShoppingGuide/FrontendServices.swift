@@ -1,4 +1,88 @@
 import Foundation
+import SwiftUI
+
+/// 后端连接配置（集中管理，便于真机调试时切换到局域网 IP）。
+///
+/// - iOS 模拟器：保持默认 `http://127.0.0.1:8000`（与 Mac 共享 localhost）。
+/// - iOS 真机：把后端用 `HOST=0.0.0.0 ./scripts/start_backend.sh` 启动，
+///   再把下面的 `defaultBaseURL` 改成 Mac 的局域网地址，例如
+///   `http://192.168.1.23:8000`（脚本就绪后会在终端打印该地址）。
+enum BackendConfig {
+    static let defaultBaseURL = URL(string: "http://127.0.0.1:8000")!
+
+    /// 健康检查端点。
+    static var healthURL: URL { defaultBaseURL.appendingPathComponent("health") }
+}
+
+/// 后端可达性状态。
+enum BackendReachability: Equatable {
+    case unknown
+    case checking
+    case reachable
+    case unreachable
+}
+
+/// 启动时及后续轮询后端 `/health`，向 UI 暴露可达性状态，
+/// 让 App 在后端未启动时给出明确引导，而不是等用户发消息才报错。
+@MainActor
+final class BackendHealthMonitor: ObservableObject {
+    @Published private(set) var status: BackendReachability = .unknown
+
+    private let healthURL: URL
+    private let session: URLSession
+    private var pollTask: Task<Void, Never>?
+
+    init(healthURL: URL = BackendConfig.healthURL, session: URLSession = .shared) {
+        self.healthURL = healthURL
+        self.session = session
+    }
+
+    /// 主动检查一次后端是否就绪。
+    @discardableResult
+    func check() async -> BackendReachability {
+        status = .checking
+        let result = await probe()
+        status = result
+        return result
+    }
+
+    /// 开始周期性轮询；后端不可达时每 3 秒重试，可达后降到每 15 秒做保活探测。
+    func startMonitoring() {
+        guard pollTask == nil else { return }
+        pollTask = Task { [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled {
+                let result = await self.probe()
+                await MainActor.run { self.status = result }
+                let interval: UInt64 = (result == .reachable) ? 15 : 3
+                try? await Task.sleep(nanoseconds: interval * 1_000_000_000)
+            }
+        }
+    }
+
+    func stopMonitoring() {
+        pollTask?.cancel()
+        pollTask = nil
+    }
+
+    private func probe() async -> BackendReachability {
+        var request = URLRequest(url: healthURL)
+        request.timeoutInterval = 4
+        do {
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                return .unreachable
+            }
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let statusValue = json["status"] as? String, statusValue == "ok" {
+                return .reachable
+            }
+            return .reachable
+        } catch {
+            return .unreachable
+        }
+    }
+}
 
 protocol AgentServicing {
     func streamResponse(
@@ -114,7 +198,7 @@ final class RESTProductService: ProductServicing {
     private let decoder: JSONDecoder
 
     init(
-        baseURL: URL = URL(string: "http://127.0.0.1:8000")!,
+        baseURL: URL = BackendConfig.defaultBaseURL,
         session: URLSession = .shared
     ) {
         self.baseURL = baseURL
@@ -236,6 +320,271 @@ final class RESTProductService: ProductServicing {
 
 private struct APIErrorEnvelope: Decodable {
     let detail: APIErrorPayload?
+}
+
+/// 跨轮复用 session_id 的线程安全存储。
+private actor SessionIDStore {
+    private var sessionID: String?
+    func current() -> String? { sessionID }
+    func update(_ value: String) { sessionID = value }
+}
+
+/// 真实 Agent 服务：连接后端 `/chat/stream`（SSE），驱动 LLM + RAG 流水线。
+///
+/// 后端事件 → 客户端事件映射：
+///   - `session`     → 记录 session_id（多轮上下文复用，不向 UI 透出）
+///   - `status`      → 阶段提示（routing→understanding / tool→retrieving / compose→generating）
+///   - `tool_result` → 取出商品 ID，调 `/products` 补全完整数据后以 `.products` 透出
+///   - `token`       → 文本增量（拼接为最终回答）
+///   - `done`        → 结束
+///   - `error`       → 抛出 RESTServiceError
+final class RESTAgentService: AgentServicing {
+    private let baseURL: URL
+    private let productService: RESTProductService
+    private let sessionStore = SessionIDStore()
+
+    init(baseURL: URL = BackendConfig.defaultBaseURL) {
+        self.baseURL = baseURL
+        self.productService = RESTProductService(baseURL: baseURL)
+    }
+
+    /// 流式请求超时放宽：首轮会触发后端加载 embedding 模型，冷启动可能 ~60s。
+    private static func makeStreamingConfig() -> URLSessionConfiguration {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 120
+        config.timeoutIntervalForResource = 300
+        config.waitsForConnectivity = true
+        // SSE：禁用缓存，避免响应被本地缓存层攒着不实时下发。
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        config.urlCache = nil
+        return config
+    }
+
+    func streamResponse(
+        for request: AgentRequestPayload
+    ) -> AsyncThrowingStream<AgentStreamEventPayload, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    try await self.run(request: request, continuation: continuation)
+                    continuation.finish()
+                } catch is CancellationError {
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    func cancel(sessionID: String) async {}
+
+    private func run(
+        request payload: AgentRequestPayload,
+        continuation: AsyncThrowingStream<AgentStreamEventPayload, Error>.Continuation
+    ) async throws {
+        var urlRequest = URLRequest(url: baseURL.appendingPathComponent("chat/stream"))
+        urlRequest.httpMethod = "POST"
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        urlRequest.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+
+        let storedSession = await sessionStore.current()
+        let resolvedSession = payload.sessionID ?? storedSession
+        var body: [String: Any] = ["query": payload.text]
+        if let resolvedSession { body["session_id"] = resolvedSession }
+        urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        // 用 URLSessionDataDelegate 做增量 SSE 解析：URLSession.AsyncBytes 在 iOS 上
+        // 会把流式响应攒在缓冲里不实时下发，导致 UI 卡在中间状态。delegate 的
+        // didReceive(data:) 是每个网络 chunk 立即回调，最可靠。
+        let config = Self.makeStreamingConfig()
+        let (rawStream, rawCont) = AsyncThrowingStream<SSERawEvent, Error>.makeStream()
+        let delegate = SSEDelegate(continuation: rawCont)
+        let urlSession = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
+        let task = urlSession.dataTask(with: urlRequest)
+        rawCont.onTermination = { _ in task.cancel() }
+        task.resume()
+
+        do {
+            for try await raw in rawStream {
+                try Task.checkCancellation()
+                try await dispatch(event: raw.event, data: raw.data, continuation: continuation)
+            }
+        } catch {
+            task.cancel()
+            urlSession.invalidateAndCancel()
+            throw error
+        }
+        urlSession.finishTasksAndInvalidate()
+    }
+
+    private func dispatch(
+        event: String,
+        data: String,
+        continuation: AsyncThrowingStream<AgentStreamEventPayload, Error>.Continuation
+    ) async throws {
+        let bytes = Data(data.utf8)
+
+        switch event {
+        case "session":
+            if let obj = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
+               let sid = obj["session_id"] as? String {
+                await sessionStore.update(sid)
+            }
+
+        case "status":
+            guard let obj = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any] else { return }
+            let phaseRaw = obj["phase"] as? String ?? ""
+            let message = obj["message"] as? String ?? ""
+            let phase = Self.mapPhase(phaseRaw)
+            continuation.yield(
+                AgentStreamEventPayload(
+                    type: .status,
+                    status: AgentStatusPayload(phase: phase, message: message)
+                )
+            )
+
+        case "tool_result":
+            let ids = Self.extractProductIDs(fromToolResult: bytes)
+            guard !ids.isEmpty else { return }
+            // 补全：Agent 只给精简卡片，这里用商品 ID 取完整数据用于渲染。
+            if let payloads = try? await productService.fetchProducts(productIDs: ids), !payloads.isEmpty {
+                continuation.yield(AgentStreamEventPayload(type: .products, products: payloads))
+            }
+
+        case "token":
+            // data 是 JSON 编码的字符串，例如 data: "一段文本"
+            if let piece = try? JSONDecoder().decode(String.self, from: bytes), !piece.isEmpty {
+                continuation.yield(AgentStreamEventPayload(type: .textDelta, textDelta: piece))
+            } else if !data.isEmpty {
+                continuation.yield(AgentStreamEventPayload(type: .textDelta, textDelta: data))
+            }
+
+        case "done":
+            continuation.yield(AgentStreamEventPayload(type: .done))
+
+        case "error":
+            let message = (try? JSONSerialization.jsonObject(with: bytes) as? [String: Any])?["message"] as? String
+            throw RESTServiceError.requestFailed(
+                statusCode: 500,
+                code: "AGENT_STREAM_ERROR",
+                message: message ?? "Agent 流式处理失败。"
+            )
+
+        default:
+            break  // meta 等调试事件忽略
+        }
+    }
+
+    private static func mapPhase(_ raw: String) -> AgentStatusPhase {
+        switch raw {
+        case "routing": return .understanding
+        case "tool": return .retrieving
+        case "compose": return .generating
+        case "done": return .done
+        default: return .retrieving
+        }
+    }
+
+    /// 从 tool_result 的 payload.products[] 中按顺序抽取 product_id。
+    private static func extractProductIDs(fromToolResult bytes: Data) -> [String] {
+        guard
+            let obj = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
+            let payload = obj["payload"] as? [String: Any],
+            let products = payload["products"] as? [[String: Any]]
+        else {
+            return []
+        }
+        return products.compactMap { $0["product_id"] as? String }
+    }
+}
+
+/// 一条已切分好的原始 SSE 事件（event 名 + 合并后的 data 文本）。
+private struct SSERawEvent {
+    let event: String
+    let data: String
+}
+
+/// 基于 `URLSessionDataDelegate` 的 SSE 增量解析器。
+///
+/// 每收到一个网络 chunk（`didReceive data:`）就立即按字节查找 `\n`，切出完整行后
+/// 解析 `event:` / `data:`，遇到空行即把累积的事件 yield 给上层 `AsyncThrowingStream`。
+/// 这样能保证 token/done 等后续事件实时到达，避免 `URLSession.AsyncBytes` 的缓冲问题。
+private final class SSEDelegate: NSObject, URLSessionDataDelegate {
+    private var buffer = Data()
+    private var eventName = ""
+    private var dataLines: [String] = []
+    private let continuation: AsyncThrowingStream<SSERawEvent, Error>.Continuation
+
+    init(continuation: AsyncThrowingStream<SSERawEvent, Error>.Continuation) {
+        self.continuation = continuation
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        dataTask: URLSessionDataTask,
+        didReceive response: URLResponse,
+        completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
+    ) {
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            continuation.finish(throwing: RESTServiceError.requestFailed(
+                statusCode: http.statusCode,
+                code: "API_HTTP_\(http.statusCode)",
+                message: "Agent 服务请求失败。"
+            ))
+            completionHandler(.cancel)
+            return
+        }
+        completionHandler(.allow)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        buffer.append(data)
+        // 按 \n(0x0A) 逐行切分；\n 不会出现在 UTF-8 多字节序列中间，按字节切分是安全的。
+        while let idx = buffer.firstIndex(of: 0x0A) {
+            let lineData = buffer.subdata(in: buffer.startIndex..<idx)
+            buffer.removeSubrange(buffer.startIndex...idx)
+            let line = String(decoding: lineData, as: UTF8.self)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "\r"))
+            handle(line: line)
+        }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        // flush 残留字节与最后一个事件块
+        if !buffer.isEmpty {
+            let line = String(decoding: buffer, as: UTF8.self)
+            buffer.removeAll()
+            handle(line: line)
+        }
+        flushEvent()
+
+        if let error, (error as NSError).code != NSURLErrorCancelled {
+            continuation.finish(throwing: RESTServiceError.connectionFailed)
+        } else {
+            continuation.finish()
+        }
+    }
+
+    private func handle(line: String) {
+        if line.isEmpty {
+            flushEvent()
+            return
+        }
+        if line.hasPrefix("event:") {
+            eventName = String(line.dropFirst("event:".count)).trimmingCharacters(in: .whitespaces)
+        } else if line.hasPrefix("data:") {
+            dataLines.append(String(line.dropFirst("data:".count)).trimmingCharacters(in: .whitespaces))
+        }
+    }
+
+    private func flushEvent() {
+        guard !dataLines.isEmpty || !eventName.isEmpty else { return }
+        continuation.yield(SSERawEvent(event: eventName, data: dataLines.joined(separator: "\n")))
+        eventName = ""
+        dataLines.removeAll()
+    }
 }
 
 extension Product {
