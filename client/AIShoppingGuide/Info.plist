@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<!-- 局域网真机调试：允许明文 HTTP 连接到后端（如 http://192.168.x.x:8000）。
+		     仅用于开发 Demo；正式发布请改用 HTTPS 并移除此项。 -->
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
+</dict>
+</plist>

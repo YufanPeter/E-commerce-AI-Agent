@@ -41,7 +41,7 @@ struct AppTheme {
         dark: UIColor.black.withAlphaComponent(0.48)
     )
 
-    static let bottomTabBarHeight: CGFloat = 64
+    static let bottomTabBarHeight: CGFloat = 72
     static let bottomTabBarBottomPadding: CGFloat = -14
     static let goldenRatioMinor: CGFloat = 0.382
     static let guideComposerTabGap = bottomTabBarHeight * goldenRatioMinor

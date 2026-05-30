@@ -9,9 +9,10 @@ struct GuideView: View {
     @State private var isComposerExpanded = false
     @State private var showHistory = false
     @State private var selectedProduct: Product?
+    @State private var lastQuery: String = ""
     @FocusState private var isInputFocused: Bool
 
-    private let productService = RESTProductService()
+    private let agentService = RESTAgentService()
     private let examples = ["适合油皮的洗面奶", "200 元内蓝牙耳机", "轻量跑鞋", "不要含酒精的防晒"]
     private let histories = [
         HistoryItem(title: "无酒精防晒推荐", subtitle: "今天 21:42 · 3 个商品"),
@@ -105,14 +106,24 @@ struct GuideView: View {
     private var composerStack: some View {
         VStack(alignment: .leading, spacing: 10) {
             if isComposerExpanded {
-                VStack(alignment: .leading, spacing: 12) {
-                    ComposerAction(icon: "camera", title: "相机")
-                    ComposerAction(icon: "photo", title: "图片上传")
+                if #available(iOS 26.0, *) {
+                    GlassEffectContainer(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 12) {
+                            ComposerAction(icon: "camera.fill", title: "相机") {}
+                            ComposerAction(icon: "photo.fill", title: "图片上传") {}
+                        }
+                    }
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                } else {
+                    VStack(alignment: .leading, spacing: 12) {
+                        ComposerAction(icon: "camera.fill", title: "相机") {}
+                        ComposerAction(icon: "photo.fill", title: "图片上传") {}
+                    }
+                    .padding(14)
+                    .frame(width: 156, alignment: .leading)
+                    .floatingLiquidPanel(cornerRadius: 22)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
-                .padding(14)
-                .frame(width: 156, alignment: .leading)
-                .floatingLiquidPanel(cornerRadius: 22)
-                .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
             HStack(spacing: 10) {
@@ -124,34 +135,50 @@ struct GuideView: View {
                     Image(systemName: "plus")
                         .font(.system(size: 18, weight: .bold))
                         .foregroundStyle(.white)
-                        .frame(width: 36, height: 36)
+                        .frame(width: 38, height: 38)
                         .background(AppTheme.primary, in: Circle())
+                        .rotationEffect(.degrees(isComposerExpanded ? 45 : 0))
                 }
+                .buttonStyle(.plain)
 
-                TextField("Ask a shopping question", text: $inputText)
+                TextField("想买点什么？和我聊聊…", text: $inputText)
                     .lineLimit(1)
                     .submitLabel(.send)
                     .onSubmit(sendCurrentInput)
-                    .font(.subheadline)
+                    .font(.callout)
+                    .foregroundStyle(AppTheme.textPrimary)
                     .focused($isInputFocused)
 
                 Button {} label: {
-                    Image(systemName: "mic")
+                    Image(systemName: "mic.fill")
+                        .font(.system(size: 16, weight: .medium))
                         .foregroundStyle(AppTheme.textSecondary)
+                        .frame(width: 32, height: 32)
                 }
                 .buttonStyle(.plain)
 
                 Button(action: sendCurrentInput) {
-                    Image(systemName: "paperplane.fill")
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 17, weight: .bold))
                         .foregroundStyle(.white)
-                        .frame(width: 34, height: 34)
-                        .background(AppTheme.primary, in: Circle())
+                        .frame(width: 38, height: 38)
+                        .background(
+                            (canSend ? AppTheme.primary : AppTheme.textSecondary.opacity(0.4)),
+                            in: Circle()
+                        )
                 }
                 .buttonStyle(.plain)
+                .disabled(!canSend)
+                .animation(.easeOut(duration: 0.18), value: canSend)
             }
-            .padding(10)
+            .padding(.vertical, 8)
+            .padding(.horizontal, 10)
             .floatingLiquidPanel(cornerRadius: 28)
         }
+    }
+
+    private var canSend: Bool {
+        !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private func sendCurrentInput() {
@@ -164,84 +191,79 @@ struct GuideView: View {
 
     private func send(_ query: String) {
         isComposerExpanded = false
+        lastQuery = query
         messages.append(ChatMessage(sender: .user, text: query))
         messages.append(ChatMessage(sender: .ai, text: "正在理解你的需求", state: .understanding))
-        simulateResponse(for: query)
+        runAgent(for: query)
     }
 
     private func retryLast() {
         messages.removeAll { $0.canRetry }
-        simulateResponse(for: "重新推荐")
+        let query = lastQuery.isEmpty ? "重新推荐" : lastQuery
+        messages.append(ChatMessage(sender: .ai, text: "正在重新理解你的需求", state: .understanding))
+        runAgent(for: query)
     }
 
-    private func simulateResponse(for query: String) {
-        Task {
+    private func runAgent(for query: String) {
+        Task { @MainActor in
+            var narrative = ""
+            var hydrated: [Product] = []
+            var statusText = "正在理解你的需求"
+
             do {
-                if query.contains("失败") || query.lowercased().contains("error") {
-                    try await Task.sleep(nanoseconds: 550_000_000)
-                    updateLastAI(text: "正在检索商品库与评价摘要", state: .retrieving)
-                    try await Task.sleep(nanoseconds: 550_000_000)
-                    updateLastAI(
-                        text: "网络异常，暂时无法生成推荐，请稍后重试。",
-                        state: .failed,
-                        canRetry: true
-                    )
-                    return
+                let request = AgentRequestPayload(text: query)
+                for try await event in agentService.streamResponse(for: request) {
+                    switch event.type {
+                    case .status:
+                        if let status = event.status {
+                            statusText = status.message.isEmpty ? statusText : status.message
+                            if narrative.isEmpty {
+                                updateLastAI(
+                                    text: statusText,
+                                    state: status.phase.messageState,
+                                    products: hydrated
+                                )
+                            }
+                        }
+
+                    case .products:
+                        hydrated = event.products.map(Product.init(payload:))
+                        updateLastAI(
+                            text: narrative.isEmpty ? statusText : narrative,
+                            state: .generating,
+                            products: hydrated
+                        )
+
+                    case .textDelta:
+                        if let piece = event.textDelta {
+                            narrative += piece
+                            updateLastAI(text: narrative, state: .generating, products: hydrated)
+                        }
+
+                    case .done:
+                        updateLastAI(
+                            text: narrative.isEmpty ? statusText : narrative,
+                            state: .ready,
+                            products: hydrated
+                        )
+
+                    default:
+                        break
+                    }
                 }
 
-                let productIDs = productIDs(for: query)
-                try await Task.sleep(nanoseconds: 550_000_000)
-                updateLastAI(text: "正在按商品 ID 查询商品库", state: .retrieving)
-
-                let payloads = try await productService.fetchProducts(productIDs: productIDs)
-                let products = payloads.map(Product.init(payload:))
-
-                try await Task.sleep(nanoseconds: 550_000_000)
-                updateLastAI(text: "正在生成个性化推荐", state: .generating)
-
-                try await Task.sleep(nanoseconds: 550_000_000)
-                updateLastAI(
-                    text: "我按商品 ID 从商品库取到了确定数据，并补上了价格、规格和图片。",
-                    state: .ready,
-                    products: products
-                )
+                // 流正常结束但未收到 done 时的兜底
+                if let index = messages.lastIndex(where: { $0.sender == .ai }),
+                   messages[index].state != .ready, messages[index].state != .failed {
+                    updateLastAI(
+                        text: narrative.isEmpty ? statusText : narrative,
+                        state: .ready,
+                        products: hydrated
+                    )
+                }
             } catch {
-                updateLastAI(
-                    text: errorMessage(error),
-                    state: .failed,
-                    canRetry: true
-                )
+                updateLastAI(text: errorMessage(error), state: .failed, canRetry: true)
             }
-        }
-    }
-
-    private func productIDs(for query: String) -> [String] {
-        let explicitIDs = extractProductIDs(from: query)
-        if !explicitIDs.isEmpty {
-            return explicitIDs
-        }
-
-        let lower = query.lowercased()
-        if query.contains("耳机") || lower.contains("bluetooth") {
-            return ["p_digital_007", "p_digital_018"]
-        } else if query.contains("跑鞋") {
-            return ["p_clothes_007", "p_clothes_009", "p_clothes_010"]
-        } else if query.contains("防晒") || query.contains("酒精") {
-            return ["p_beauty_023", "p_beauty_010", "p_beauty_006"]
-        } else if query.contains("洗面奶") || query.contains("洁面") || query.contains("油皮") {
-            return ["p_beauty_011"]
-        }
-        return ["p_beauty_008", "p_digital_007", "p_clothes_007"]
-    }
-
-    private func extractProductIDs(from text: String) -> [String] {
-        let pattern = #"p_(beauty|clothes|digital|food)_\d{3}"#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else {
-            return []
-        }
-        let range = NSRange(text.startIndex..<text.endIndex, in: text)
-        return regex.matches(in: text, range: range).compactMap { match in
-            Range(match.range, in: text).map { String(text[$0]) }
         }
     }
 
@@ -355,13 +377,32 @@ struct MessageRow: View {
 struct ComposerAction: View {
     let icon: String
     let title: String
+    var action: () -> Void = {}
 
     var body: some View {
+        if #available(iOS 26.0, *) {
+            Button(action: action) {
+                label
+            }
+            .buttonStyle(.plain)
+            .padding(.vertical, 10)
+            .padding(.horizontal, 16)
+            .glassEffect(.regular.interactive(), in: Capsule())
+        } else {
+            Button(action: action) {
+                label
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private var label: some View {
         HStack(spacing: 10) {
             Image(systemName: icon)
+                .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(AppTheme.primary)
                 .frame(width: 26, height: 26)
-                .background(AppTheme.primary.opacity(0.10), in: Circle())
+                .background(AppTheme.primary.opacity(0.12), in: Circle())
             Text(title)
                 .font(.subheadline.weight(.medium))
                 .foregroundStyle(AppTheme.textPrimary)
@@ -524,5 +565,16 @@ struct HistorySheet: View {
         }
         .padding(20)
         .background(AppTheme.background)
+    }
+}
+
+private extension AgentStatusPhase {
+    var messageState: MessageState {
+        switch self {
+        case .understanding: return .understanding
+        case .retrieving, .executingTool: return .retrieving
+        case .generating: return .generating
+        case .done: return .ready
+        }
     }
 }
