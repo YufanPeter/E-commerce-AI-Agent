@@ -614,6 +614,8 @@ struct ComparisonTable: View {
                                     .font(.caption.weight(.semibold))
                                     .foregroundStyle(AppTheme.primary)
                                     .frame(width: 72, alignment: .leading)
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
 
                                 Text(value.text)
                                     .font(.caption)
@@ -635,13 +637,35 @@ struct ComparisonTable: View {
     }
 
     private func productName(for index: Int, productID: String) -> String {
+        if let brand = brandName(for: productID), !brand.isEmpty, brand != "—" {
+            return brand
+        }
         if index < products.count {
-            return products[index].title
+            return compactName(for: products[index], fallbackIndex: index)
         }
         if let product = products.first(where: { $0.id == productID }) {
-            return product.title
+            return compactName(for: product, fallbackIndex: index)
         }
         return "商品\(index + 1)"
+    }
+
+    private func compactName(for product: Product, fallbackIndex: Int) -> String {
+        let title = product.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else {
+            return "商品\(fallbackIndex + 1)"
+        }
+        if title.count <= 8 {
+            return title
+        }
+        return String(title.prefix(8)) + "…"
+    }
+
+    private func brandName(for productID: String) -> String? {
+        guard let row = comparison.rows.first(where: { $0.label == "品牌" }) else {
+            return nil
+        }
+        return row.values.first(where: { $0.productID == productID })?.text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 

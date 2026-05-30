@@ -22,6 +22,17 @@ _CN_NUM = {
 _ORDINAL_RE = re.compile(r"第\s*([0-9]+|[一二两三四五六七八九十])\s*(?:个|款|件|种)?")
 # 裸数字序号 "1和3" / "2、3"
 _BARE_NUM_RE = re.compile(r"(?<!\d)([1-9])(?!\d)")
+_LATIN_RE = re.compile(r"[A-Za-z0-9]+")
+
+_LOCAL_BRAND_ALIASES: dict[str, tuple[str, ...]] = {
+    "Adidas": ("Adidas", "阿迪", "阿迪达斯"),
+    "adidas": ("adidas", "阿迪", "阿迪达斯"),
+    "耐克": ("耐克", "Nike", "nike"),
+    "Nike": ("Nike", "nike", "耐克"),
+    "HOKA": ("HOKA", "Hoka", "hoka"),
+    "Hoka": ("Hoka", "hoka", "HOKA"),
+    "特步": ("特步", "XTEP", "xtep"),
+}
 
 
 def _to_int(token: str) -> int | None:
@@ -82,14 +93,30 @@ def resolve_by_title(query: str, hits: list[dict]) -> int | None:
 
     返回第一个命中的下标；无命中返回 None。只在序数定位失败后兜底用。
     """
+    matched = resolve_named_indices(query, hits)
+    return matched[0] if matched else None
+
+
+def resolve_named_indices(query: str, hits: list[dict]) -> list[int]:
+    """按品牌/标题从 last_hits 中解析多个目标，保序返回下标。
+
+    典型场景："对比 Nike 和阿迪"、"那个珀莱雅的"。品牌词优先，标题 token
+    兜底；无命中返回空，调用方再决定是否追问或默认。
+    """
     text = query or ""
+    normalized_text = text.lower()
+    indices: list[int] = []
     for idx, hit in enumerate(hits):
-        title = str(hit.get("title", ""))
-        # 标题里任意 2 字以上的连续片段出现在 query 中即算命中（粗匹配够用）
-        for token in _meaningful_tokens(title):
-            if token in text:
-                return idx
-    return None
+        for token in _hit_match_tokens(hit):
+            if _contains_token(text, normalized_text, token):
+                indices.append(idx)
+                break
+    return indices
+
+
+def has_named_reference(query: str, hits: list[dict]) -> bool:
+    """判断用户是否尝试用品牌/标题点名某些 last_hits。"""
+    return bool(resolve_named_indices(query, hits))
 
 
 def _meaningful_tokens(title: str) -> list[str]:
@@ -99,7 +126,7 @@ def _meaningful_tokens(title: str) -> list[str]:
     run（"欧莱雅面霜"）几乎不可能原样出现在用户口语里；而 2-gram 又太短，
     "莱雅"会让"珀莱雅"和"欧莱雅"互相误命中。3-gram 在区分度和召回间最平衡。
     """
-    tokens: list[str] = re.findall(r"[A-Za-z]{2,}", title)
+    tokens: list[str] = re.findall(r"[A-Za-z0-9]{2,}", title)
     for run in re.findall(r"[一-鿿]{2,}", title):
         if len(run) <= 3:
             tokens.append(run)
@@ -107,3 +134,26 @@ def _meaningful_tokens(title: str) -> list[str]:
             tokens.extend(run[i:i + 3] for i in range(len(run) - 2))
     # 长的优先（更具区分度），去重
     return sorted(set(tokens), key=len, reverse=True)
+
+
+def _hit_match_tokens(hit: dict) -> list[str]:
+    title = str(hit.get("title", ""))
+    brand = str(hit.get("brand", "") or "")
+    tokens: list[str] = []
+    if brand:
+        tokens.append(brand)
+        tokens.extend(_LOCAL_BRAND_ALIASES.get(brand, ()))
+    for canonical, aliases in _LOCAL_BRAND_ALIASES.items():
+        if canonical and (canonical in title or canonical.lower() in title.lower()):
+            tokens.extend(aliases)
+    tokens.extend(_meaningful_tokens(title))
+    return sorted({t for t in tokens if len(t.strip()) >= 2}, key=len, reverse=True)
+
+
+def _contains_token(text: str, normalized_text: str, token: str) -> bool:
+    token = token.strip()
+    if not token:
+        return False
+    if _LATIN_RE.fullmatch(token):
+        return token.lower() in normalized_text
+    return token in text

@@ -25,7 +25,7 @@ from typing import Any
 
 from agent.session import AgentSession
 from agent.tools.base import ToolResult
-from agent.tools.reference import resolve_indices
+from agent.tools.reference import resolve_indices, resolve_named_indices
 
 
 # 一次最多对比几款：再多对比表会过宽，决策价值也下降。
@@ -62,7 +62,17 @@ class CompareTool:
                 needs_composer=False,
             )
 
-        indices = self._resolve_targets(query, len(last_hits))
+        indices, explicit_target = self._resolve_targets(query, last_hits)
+        if len(indices) < 2:
+            return ToolResult(
+                tool_name=self.name,
+                payload={"query": query, "products": [], "dimensions": []},
+                narrative_override=(
+                    "我只在上一轮结果里匹配到一款你点名的商品，没法准确对比。"
+                    "可以说「对比第一个和第二个」，或把两个品牌名都说完整。"
+                ),
+                needs_composer=False,
+            )
         product_ids = [last_hits[i]["product_id"] for i in indices]
 
         # 用 get_product_detail 而非 get_products_by_ids：对比要好评概览，
@@ -95,13 +105,22 @@ class CompareTool:
 
     # ------------------------------ 内部 ------------------------------
 
-    def _resolve_targets(self, query: str, hit_count: int) -> list[int]:
+    def _resolve_targets(self, query: str, last_hits: list[dict]) -> tuple[list[int], bool]:
         """定位要对比的下标。无明确指代时默认前两个；超过上限截断。"""
+        hit_count = len(last_hits)
         indices = resolve_indices(query, hit_count)
+        explicit_target = bool(indices)
+
         if len(indices) < 2:
+            named_indices = resolve_named_indices(query, last_hits)
+            if named_indices:
+                explicit_target = True
+                indices = named_indices
+
+        if len(indices) < 2 and not explicit_target:
             # "对比一下" 这种没点名的，默认前两个
             indices = list(range(min(2, hit_count)))
-        return indices[:_MAX_COMPARE]
+        return indices[:_MAX_COMPARE], explicit_target
 
     def _product_brief(self, detail: Any) -> dict[str, Any]:
         return {

@@ -11,7 +11,7 @@ from typing import Any
 from agent.session import AgentSession
 from agent.tools.compare import CompareTool
 from agent.tools.product_detail import ProductDetailTool
-from agent.tools.reference import resolve_by_title, resolve_indices
+from agent.tools.reference import resolve_by_title, resolve_indices, resolve_named_indices
 
 
 # --------------------------- resolve_indices ---------------------------
@@ -53,6 +53,15 @@ def test_resolve_by_title_hits():
 def test_resolve_by_title_no_match():
     hits = [{"title": "欧莱雅面霜"}]
     assert resolve_by_title("随便", hits) is None
+
+
+def test_resolve_named_indices_matches_brand_aliases():
+    hits = [
+        {"title": "Nike Pegasus 41 跑鞋", "brand": "耐克"},
+        {"title": "Adidas UltraBoost 5 跑鞋", "brand": "Adidas"},
+        {"title": "HOKA Clifton 9 跑鞋", "brand": "HOKA"},
+    ]
+    assert resolve_named_indices("对比 Nike 和阿迪", hits) == [0, 1]
 
 
 # --------------------------- fake 数据层 ---------------------------
@@ -125,6 +134,43 @@ def _session_with_hits() -> AgentSession:
     return sess
 
 
+def _make_shoe_store() -> _FakeStore:
+    return _FakeStore({
+        "nike": _FakeDetail(
+            "nike", "Nike Pegasus 41 男子公路跑鞋", "耐克", "运动户外", "跑鞋",
+            _FakePriceRange(899, 899),
+            reviews=[_FakeReview(5, "positive", "缓震轻")],
+        ),
+        "adidas": _FakeDetail(
+            "adidas", "Adidas UltraBoost 5 跑步鞋", "Adidas", "运动户外", "跑鞋",
+            _FakePriceRange(1199, 1199),
+            reviews=[_FakeReview(4, "positive", "脚感稳")],
+        ),
+        "hoka": _FakeDetail(
+            "hoka", "HOKA Clifton 9 公路跑鞋", "HOKA", "运动户外", "跑鞋",
+            _FakePriceRange(1099, 1099),
+        ),
+        "xtep": _FakeDetail(
+            "xtep", "特步 160X 马拉松跑鞋", "特步", "运动户外", "跑鞋",
+            _FakePriceRange(699, 699),
+        ),
+    })
+
+
+def _session_with_shoes() -> AgentSession:
+    sess = AgentSession()
+    sess.remember_search(
+        {"category": "运动户外", "sub_category": "跑鞋"},
+        [
+            {"product_id": "nike", "title": "Nike Pegasus 41 男子公路跑鞋", "brand": "耐克"},
+            {"product_id": "adidas", "title": "Adidas UltraBoost 5 跑步鞋", "brand": "Adidas"},
+            {"product_id": "hoka", "title": "HOKA Clifton 9 公路跑鞋", "brand": "HOKA"},
+            {"product_id": "xtep", "title": "特步 160X 马拉松跑鞋", "brand": "特步"},
+        ],
+    )
+    return sess
+
+
 # --------------------------- ProductDetailTool ---------------------------
 
 
@@ -185,3 +231,16 @@ def test_compare_needs_two_hits():
     r = CompareTool(product_store=_make_store()).run("对比", sess, {})
     assert r.needs_composer is False
     assert "推荐" in r.narrative_override
+
+
+def test_compare_resolves_named_brands_instead_of_bottom_fallback():
+    r = CompareTool(product_store=_make_shoe_store()).run("对比 Nike 和阿迪", _session_with_shoes(), {})
+    assert r.needs_composer is True
+    assert [p["product_id"] for p in r.payload["products"]] == ["nike", "adidas"]
+
+
+def test_compare_single_named_brand_does_not_fallback_to_unrelated_pair():
+    r = CompareTool(product_store=_make_shoe_store()).run("对比 Nike 和不存在牌子", _session_with_shoes(), {})
+    assert r.needs_composer is False
+    assert r.payload["products"] == []
+    assert "没法准确对比" in r.narrative_override
