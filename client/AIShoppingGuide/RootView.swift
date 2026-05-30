@@ -15,7 +15,83 @@ enum AppTab: String, CaseIterable {
     }
 }
 
+/// 底部导航栏：直接使用与 Preference 页肤质选择器相同的原生分段控件逻辑。
+struct NativeTabBar: View {
+    @Binding var selectedTab: AppTab
+
+    var body: some View {
+        SegmentedTabControl(selectedTab: $selectedTab)
+            .frame(height: AppTheme.bottomTabBarHeight)
+    }
+}
+
+/// 原生 UISegmentedControl 封装：纯图标、可放大、选中段为系统紫色。
+struct SegmentedTabControl: UIViewRepresentable {
+    @Binding var selectedTab: AppTab
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeUIView(context: Context) -> UIView {
+        let symbolConfig = UIImage.SymbolConfiguration(pointSize: 26, weight: .semibold)
+        let control = UISegmentedControl(items: AppTab.allCases.map { tab in
+            let img = UIImage(systemName: tab.icon, withConfiguration: symbolConfig)?
+                .withRenderingMode(.alwaysTemplate)
+            return img ?? UIImage()
+        })
+        control.selectedSegmentIndex = AppTab.allCases.firstIndex(of: selectedTab) ?? 0
+        // 滑块保持白色，仅图标在选中时染紫
+        control.selectedSegmentTintColor = UIColor.white
+        control.apportionsSegmentWidthsByContent = false
+        control.addTarget(context.coordinator,
+                          action: #selector(Coordinator.valueChanged(_:)),
+                          for: .valueChanged)
+
+        // 放进容器，让分段控件填满容器，高度由 SwiftUI 的 frame 决定
+        let container = UIView()
+        container.backgroundColor = .clear
+        control.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(control)
+        NSLayoutConstraint.activate([
+            control.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            control.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            control.topAnchor.constraint(equalTo: container.topAnchor),
+            control.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+        ])
+        context.coordinator.control = control
+        return container
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        guard let control = context.coordinator.control else { return }
+        let idx = AppTab.allCases.firstIndex(of: selectedTab) ?? 0
+        if control.selectedSegmentIndex != idx {
+            control.selectedSegmentIndex = idx
+        }
+        // 选中段图标染紫，其余为次要灰色
+        for (i, tab) in AppTab.allCases.enumerated() {
+            let tint: UIColor = (i == idx) ? UIColor(AppTheme.primary) : UIColor(AppTheme.textSecondary)
+            let config = UIImage.SymbolConfiguration(pointSize: 26, weight: .semibold)
+            let img = UIImage(systemName: tab.icon, withConfiguration: config)?
+                .withTintColor(tint, renderingMode: .alwaysOriginal)
+            control.setImage(img, forSegmentAt: i)
+        }
+    }
+
+    final class Coordinator: NSObject {
+        let parent: SegmentedTabControl
+        weak var control: UISegmentedControl?
+        init(_ parent: SegmentedTabControl) { self.parent = parent }
+
+        @objc func valueChanged(_ sender: UISegmentedControl) {
+            let idx = sender.selectedSegmentIndex
+            guard AppTab.allCases.indices.contains(idx) else { return }
+            parent.selectedTab = AppTab.allCases[idx]
+        }
+    }
+}
+
 struct RootView: View {
+    @StateObject private var healthMonitor = BackendHealthMonitor()
     @State private var selectedTab: AppTab = .guide
     @State private var cartItems: [CartItem] = Product.samples.prefix(2).map {
         CartItem(product: $0, selectedOptions: $0.defaultSpecificationSelection)
@@ -45,10 +121,16 @@ struct RootView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .animation(.easeOut(duration: 0.16), value: selectedTab)
 
-            LiquidTabBar(selectedTab: $selectedTab)
+            NativeTabBar(selectedTab: $selectedTab)
                 .padding(.horizontal, 18)
                 .padding(.bottom, AppTheme.bottomTabBarBottomPadding)
                 .offset(y: keyboardOffset)
+        }
+        .safeAreaInset(edge: .top) {
+            BackendStatusBanner(monitor: healthMonitor)
+        }
+        .task {
+            healthMonitor.startMonitoring()
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { notification in
             updateKeyboardOffset(from: notification)
@@ -76,12 +158,75 @@ struct RootView: View {
     }
 }
 
+/// 后端不可达时显示的顶部引导横幅；可达时自动隐藏。
+struct BackendStatusBanner: View {
+    @ObservedObject var monitor: BackendHealthMonitor
+    @State private var isRechecking = false
+
+    var body: some View {
+        Group {
+            if monitor.status == .unreachable {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "wifi.exclamationmark")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(AppTheme.error)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("后端服务未连接")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(AppTheme.textPrimary)
+                        Text("请在电脑上运行 ./scripts/start_backend.sh 启动后端。")
+                            .font(.system(size: 12))
+                            .foregroundStyle(AppTheme.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    Spacer(minLength: 8)
+
+                    Button {
+                        guard !isRechecking else { return }
+                        isRechecking = true
+                        Task {
+                            await monitor.check()
+                            isRechecking = false
+                        }
+                    } label: {
+                        Text(isRechecking ? "检测中…" : "重试连接")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 7)
+                            .background(
+                                Capsule(style: .continuous).fill(AppTheme.primary)
+                            )
+                    }
+                    .disabled(isRechecking)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .background(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(AppTheme.surface)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .stroke(AppTheme.error.opacity(0.35), lineWidth: 1)
+                        )
+                        .shadow(color: AppTheme.shadow.opacity(0.5), radius: 12, y: 4)
+                )
+                .padding(.horizontal, 16)
+                .padding(.top, 6)
+                .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .animation(.easeOut(duration: 0.22), value: monitor.status)
+    }
+}
+
 struct LiquidTabBar: View {
     @Binding var selectedTab: AppTab
     @State private var dragOffset: CGFloat = 0
     @State private var isDragging: Bool = false
     @State private var dragStartTab: AppTab?
-    @Namespace private var glassNamespace
 
     var body: some View {
         GeometryReader { geo in
@@ -116,6 +261,8 @@ struct LiquidTabBar: View {
     ) -> some View {
         ZStack(alignment: .topLeading) {
             tabBarSurface(width: metrics.width)
+
+            segmentDividers(metrics: metrics, pillX: pillX)
 
             if isDragging {
                 interactiveGlassLayer(
@@ -178,35 +325,7 @@ struct LiquidTabBar: View {
         pillX: CGFloat,
         movement: CGFloat
     ) -> some View {
-        if #available(iOS 26.0, *) {
-            GlassEffectContainer(spacing: 22) {
-                ZStack(alignment: .topLeading) {
-                    Capsule(style: .continuous)
-                        .fill(Color.white.opacity(0.001))
-                        .glassEffect(
-                            .regular
-                                .interactive(true)
-                                .tint(AppTheme.primary.opacity(0.08 + 0.12 * movement)),
-                            in: Capsule(style: .continuous)
-                        )
-                        .glassEffectID("active-pill", in: glassNamespace)
-                        .glassEffectTransition(.matchedGeometry)
-                        .frame(width: metrics.itemWidth, height: 48)
-                        .scaleEffect(1.14, anchor: .center)
-                        .shadow(color: AppTheme.primary.opacity(0.16 + 0.10 * movement), radius: 14 + 8 * movement, y: 5)
-                        .offset(x: pillX, y: 8)
-                }
-                .frame(width: metrics.width, height: 64, alignment: .topLeading)
-            }
-            .frame(width: metrics.width, height: 64, alignment: .topLeading)
-            .clipped()
-            .allowsHitTesting(false)
-        } else {
-            selectionPill(
-                width: metrics.itemWidth,
-                x: pillX
-            )
-        }
+        selectionPill(width: metrics.itemWidth, x: pillX)
     }
 
     @ViewBuilder
@@ -240,15 +359,19 @@ struct LiquidTabBar: View {
         isHighlighted: Bool
     ) -> some View {
         let response = activation * (0.62 + 0.38 * movement)
-        let iconScale = 1 + response * (0.22 + movement * 0.08)
-        let iconYOffset = -response * (1.8 + movement * 1.4)
+        let iconScale = 1 + response * (0.12 + movement * 0.05)
+        let iconYOffset = -response * (1.0 + movement * 0.8)
 
-        VStack(spacing: 0) {
+        VStack(spacing: 3) {
             Image(systemName: tab.icon)
-                .font(.system(size: 21, weight: .semibold))
+                .font(.system(size: 17, weight: .semibold))
                 .symbolEffect(.bounce.down, value: selectedTab == tab)
                 .scaleEffect(iconScale, anchor: .center)
                 .offset(y: iconYOffset)
+            Text(tab.rawValue)
+                .font(.system(size: 11, weight: isHighlighted ? .semibold : .medium))
+                .lineLimit(1)
+                .minimumScaleFactor(0.78)
         }
         .foregroundStyle(isHighlighted ? AppTheme.primary : AppTheme.textSecondary.opacity(0.78))
         .frame(width: itemWidth)
@@ -259,18 +382,37 @@ struct LiquidTabBar: View {
 
     @ViewBuilder
     private func tabBarSurface(width: CGFloat) -> some View {
-        Capsule(style: .continuous)
+        RoundedRectangle(cornerRadius: 20, style: .continuous)
             .fill(AppTheme.tabBarSurface)
             .overlay(
-                Capsule(style: .continuous)
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
                     .stroke(AppTheme.liquidStrokeStrong, lineWidth: 1)
             )
             .overlay(
-                Capsule(style: .continuous)
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
                     .stroke(AppTheme.border, lineWidth: 0.6)
             )
             .shadow(color: AppTheme.shadow.opacity(0.8), radius: 18, y: 10)
             .frame(width: width, height: 64)
+    }
+
+    /// 分段选择器风格的竖向分隔线：靠近滑块的那几条淡出。
+    @ViewBuilder
+    private func segmentDividers(metrics: TabBarMetrics, pillX: CGFloat) -> some View {
+        let dividerHeight: CGFloat = 22
+        let yOffset = (64 - dividerHeight) / 2
+        ForEach(1..<metrics.tabs.count, id: \.self) { i in
+            let x = metrics.leadingX(for: i)
+            let pillCenter = pillX + metrics.itemWidth / 2
+            // 滑块越靠近该分隔线，线越淡
+            let distance = abs(x - pillCenter)
+            let fade = max(0, min(1, distance / (metrics.itemWidth * 0.6)))
+            Rectangle()
+                .fill(AppTheme.textSecondary.opacity(0.16 * fade))
+                .frame(width: 1, height: dividerHeight)
+                .offset(x: x - 0.5, y: yOffset)
+                .allowsHitTesting(false)
+        }
     }
 
     @ViewBuilder
@@ -278,10 +420,10 @@ struct LiquidTabBar: View {
         width: CGFloat,
         x: CGFloat
     ) -> some View {
-        Capsule(style: .continuous)
+        RoundedRectangle(cornerRadius: 15, style: .continuous)
             .fill(AppTheme.tabSelectionSurface)
             .overlay(
-                Capsule(style: .continuous)
+                RoundedRectangle(cornerRadius: 15, style: .continuous)
                     .stroke(AppTheme.liquidStrokeStrong, lineWidth: 1)
             )
             .shadow(color: AppTheme.shadow.opacity(0.55), radius: 7, y: 2)
@@ -293,7 +435,7 @@ struct LiquidTabBar: View {
 
     @ViewBuilder
     private func selectionMask(width: CGFloat, x: CGFloat) -> some View {
-        Capsule(style: .continuous)
+        RoundedRectangle(cornerRadius: 15, style: .continuous)
             .frame(width: width, height: 48)
             .scaleEffect(isDragging ? 1.12 : 1, anchor: .center)
             .offset(x: x, y: 8)
@@ -315,8 +457,8 @@ struct LiquidTabBar: View {
     private struct TabBarMetrics {
         let width: CGFloat
         let tabs: [AppTab]
-        let spacing: CGFloat = 10
-        let hPad: CGFloat = 8
+        let spacing: CGFloat = 0
+        let hPad: CGFloat = 6
 
         var itemWidth: CGFloat {
             let count = CGFloat(max(tabs.count, 1))
