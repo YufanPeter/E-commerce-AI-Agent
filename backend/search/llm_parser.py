@@ -180,7 +180,35 @@ def _extract_tool_arguments(response: Any) -> dict[str, Any]:
     if not message.tool_calls:
         raise ValueError("LLM 没有调用 extract_search_intent，原始响应：" + str(message))
     raw = message.tool_calls[0].function.arguments
-    return json.loads(raw)
+    return _loads_arguments(raw)
+
+
+def _loads_arguments(raw: str) -> dict[str, Any]:
+    """容错解析 function arguments。
+
+    豆包 function calling 偶发返回畸形 JSON（多包一层 ```json code fence、
+    前后夹带说明文字、甚至缺冒号），直接 ``json.loads`` 会让整条检索链崩溃。
+    这里做两级解析：先按原样解析，失败再剥离 code fence 并截取首个完整 JSON
+    对象重试。仍解析不出时才抛异常，交由上层降级到纯向量召回。
+    """
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+
+    text = raw.strip()
+    if text.startswith("```"):
+        # 去掉 ```json ... ``` 围栏，只留中间内容
+        text = text.split("```", 2)[1] if text.count("```") >= 2 else text.strip("`")
+        if text.lstrip().lower().startswith("json"):
+            text = text.lstrip()[4:]
+
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        return json.loads(text[start : end + 1])
+
+    return json.loads(text)
 
 
 def _to_parsed_query(

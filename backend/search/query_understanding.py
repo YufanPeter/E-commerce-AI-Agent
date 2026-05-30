@@ -196,12 +196,25 @@ def understand_query(query: str) -> ParsedQuery:
 
     - 进程内 LRU 缓存，热门 query 0ms 命中（加分项 4.4 的简单实现，
       线上可升级为 Redis 跨进程缓存）。
-    - LLM 调用失败会直接抛出异常；由调用方决定降级策略。
+    - LLM 调用 / 解析失败时降级为纯向量召回（保留原始 query、跳过 hard_filter），
+      而不是让整条检索链崩成兜底文案。降级结果不写入 LRU 缓存，避免一次模型
+      抖动被永久缓存，下次同样的 query 仍会重新尝试 LLM 解析。
     """
     normalized = normalize_query(query)
     if not normalized:
         return ParsedQuery(original_query=query, needs_clarification=True)
-    return _cached_understand(normalized)
+    try:
+        return _cached_understand(normalized)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "LLM query understanding failed, degrade to vector-only recall: %r", exc
+        )
+        # 降级：不带任何 hard_filter，retrieval_query 用原文，让向量召回兜底。
+        return ParsedQuery(
+            original_query=query,
+            retrieval_query=normalized,
+            needs_clarification=False,
+        )
 
 
 def clear_cache() -> None:
