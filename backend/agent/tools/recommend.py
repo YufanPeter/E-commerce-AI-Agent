@@ -22,6 +22,20 @@ from search.search_service import SearchService
 # 默认 top-k；composer 不需要更多，前端卡片场景 5 已经够。
 DEFAULT_TOP_K = 5
 
+_ACTIVE_CLARIFY_SUB_CATEGORIES: dict[str, tuple[str, ...]] = {
+    "智能手机": ("拍照", "续航", "性价比"),
+    "笔记本电脑": ("轻薄便携", "性能", "续航"),
+    "真无线耳机": ("降噪", "音质", "佩戴舒适"),
+    "跑鞋": ("缓震", "轻量", "竞速"),
+}
+
+_ACTIVE_CLARIFY_CATEGORIES: dict[str, tuple[str, ...]] = {
+    "美妆护肤": ("肤质", "功效", "预算"),
+    "数码电子": ("使用场景", "品牌偏好", "预算"),
+    "服饰运动": ("穿着场景", "尺码/风格", "预算"),
+    "食品生活": ("使用场景", "口味/材质偏好", "预算"),
+}
+
 
 class RecommendTool:
     name: str = "recommend"
@@ -49,6 +63,29 @@ class RecommendTool:
         # 上一轮结构化意图上（见 SearchService.search / ParsedQuery.merge_base）。
         base = slots.get("base_parsed")
         result = self._get_service().search(query, top_k_products=top_k, base=base)
+
+        if base is None:
+            active_clarify = _active_clarification_text(result.parsed)
+            if active_clarify:
+                return ToolResult(
+                    tool_name=self.name,
+                    payload={
+                        "query": query,
+                        "products": [],
+                        "summary": {
+                            "hit_count": 0,
+                            "needs_clarification": True,
+                            "category": getattr(result.parsed, "category", None),
+                            "max_price": getattr(result.parsed, "max_price", None),
+                        },
+                        "debug": {
+                            "parsed": result.parsed.to_dict(),
+                            "active_clarification": True,
+                        },
+                    },
+                    narrative_override=active_clarify,
+                    needs_composer=False,
+                )
 
         # 工作记忆（WorkingMemory 契约）：refine/compare/detail 后续会读这俩字段。
         # 存的是【结构化】ParsedQuery（dict），下一轮才能做无损约束叠加。
@@ -104,3 +141,45 @@ class RecommendTool:
             payload=payload,
             composer_hint=hint,
         )
+
+
+def _active_clarification_text(parsed: Any) -> str | None:
+    """对信息不足但方向明确的购物请求主动追问，避免盲推。"""
+    if getattr(parsed, "needs_clarification", False):
+        return None
+    if _has_decision_signal(parsed):
+        return None
+
+    sub_category = getattr(parsed, "sub_category", None)
+    category = getattr(parsed, "category", None)
+
+    if sub_category in _ACTIVE_CLARIFY_SUB_CATEGORIES:
+        options = _ACTIVE_CLARIFY_SUB_CATEGORIES[sub_category]
+        return (
+            f"可以，我先帮你缩小范围：你选 {sub_category} 更看重"
+            f"{_join_options(options)}？预算大概多少？"
+        )
+    if category in _ACTIVE_CLARIFY_CATEGORIES and not sub_category:
+        options = _ACTIVE_CLARIFY_CATEGORIES[category]
+        return (
+            f"可以，我先确认下方向：这次更看重{_join_options(options)}？"
+            "补充一点后我再给你推荐更准。"
+        )
+    return None
+
+
+def _has_decision_signal(parsed: Any) -> bool:
+    return any([
+        getattr(parsed, "max_price", None) is not None,
+        getattr(parsed, "min_price", None) is not None,
+        bool(getattr(parsed, "brand_include", None)),
+        bool(getattr(parsed, "brand_exclude", None)),
+        bool(getattr(parsed, "negative_ingredients", None)),
+        bool(getattr(parsed, "soft_terms", None)),
+    ])
+
+
+def _join_options(options: tuple[str, ...]) -> str:
+    if len(options) <= 1:
+        return options[0] if options else ""
+    return "、".join(options[:-1]) + f"还是{options[-1]}"

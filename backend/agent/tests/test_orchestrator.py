@@ -65,16 +65,31 @@ def _fake_stream_chunks(pieces: list[str]):
 class _StubSearchService:
     """模拟 SearchService，可控返回 hits 和 needs_clarification。"""
 
-    def __init__(self, hits: list[dict] | None = None, needs_clarify: bool = False):
+    def __init__(
+        self,
+        hits: list[dict] | None = None,
+        needs_clarify: bool = False,
+        parsed_overrides: dict[str, Any] | None = None,
+    ):
         self._hits = hits or []
         self._needs_clarify = needs_clarify
+        self._parsed_overrides = parsed_overrides or {}
 
     def search(self, query: str, top_k_chunks: int = 50, top_k_products: int = 10, base=None):
+        parsed_data = {
+            "needs_clarification": self._needs_clarify,
+            "category": "美妆护肤",
+            "sub_category": None,
+            "max_price": 500,
+            "min_price": None,
+            "brand_include": [],
+            "brand_exclude": [],
+            "negative_ingredients": [],
+            "soft_terms": [],
+        } | self._parsed_overrides
         parsed = SimpleNamespace(
-            needs_clarification=self._needs_clarify,
-            category="美妆护肤",
-            max_price=500,
-            to_dict=lambda: {"category": "美妆护肤", "max_price": 500, "needs_clarification": self._needs_clarify},
+            **parsed_data,
+            to_dict=lambda: parsed_data,
         )
         hit_objs = []
         for h in self._hits:
@@ -192,6 +207,37 @@ class TestRecommendTool:
         tool = RecommendTool(search_service=_StubSearchService(hits=[], needs_clarify=True))
         r = tool.run("随便看看", AgentSession(), {})
         assert "模糊" in r.composer_hint
+
+    def test_active_clarification_for_broad_phone_request(self):
+        tool = RecommendTool(search_service=_StubSearchService(
+            hits=[{"product_id": "phone1", "title": "某手机", "brand": "X", "base_price": 3999}],
+            parsed_overrides={
+                "category": "数码电子",
+                "sub_category": "智能手机",
+                "max_price": None,
+            },
+        ))
+        session = AgentSession()
+        r = tool.run("推荐一款手机", session, {})
+        assert r.needs_composer is False
+        assert r.payload["products"] == []
+        assert r.payload["debug"]["active_clarification"] is True
+        assert "拍照" in r.narrative_override
+        assert "预算" in r.narrative_override
+        assert session.get("last_hits") is None
+
+    def test_active_clarification_skips_when_budget_present(self):
+        tool = RecommendTool(search_service=_StubSearchService(
+            hits=[{"product_id": "phone1", "title": "某手机", "brand": "X", "base_price": 3999}],
+            parsed_overrides={
+                "category": "数码电子",
+                "sub_category": "智能手机",
+                "max_price": 4000,
+            },
+        ))
+        r = tool.run("4000以内拍照好的手机", AgentSession(), {})
+        assert r.needs_composer is True
+        assert len(r.payload["products"]) == 1
 
 
 # ---------- AnswerComposer ----------
