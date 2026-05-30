@@ -130,15 +130,24 @@ class SearchService:
         user_query: str,
         top_k_chunks: int = 50,
         top_k_products: int = 10,
+        base: ParsedQuery | None = None,
     ) -> SearchResult:
         """端到端入口。
 
         top_k_chunks: Chroma 召回的 chunk 数量。rerank 续班时要多召（默认 50）
                       给 CrossEncoder 选择余地；不 rerank 时 30 也够。
         top_k_products: 聚合后返回的商品数量。
+        base: 上一轮结构化检索意图。非空表示这是一次"细化"——把本轮解析叠加到
+              base 上（见 ParsedQuery.merge_base），避免丢失品类/价格等上下文。
         """
         # ① 意图理解（带缓存）
         parsed = understand_query(user_query)
+
+        # ①.5 多轮细化：在上一轮意图之上叠加本轮约束。
+        # 放在 needs_clarification 判断之前——有 base 时即便本轮短到被判为
+        # "需澄清"，也已经有足够上下文，merge_base 会把 needs_clarification 置 False。
+        if base is not None:
+            parsed = parsed.merge_base(base)
 
         if parsed.needs_clarification:
             return SearchResult(parsed=parsed, hits=[], raw_chunk_count=0, filtered_chunk_count=0)

@@ -20,8 +20,43 @@ from __future__ import annotations
 """
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, TypedDict
 from uuid import uuid4
+
+
+# ---------------------------------------------------------------------------
+# 工作记忆的类型契约
+# ---------------------------------------------------------------------------
+#
+# working_memory 之前是个裸 dict[str, Any]，键名只在各 tool 的注释里口口相传，
+# 改一个键名就会静默断链（refine 读不到 recommend 写的东西）。这里用 TypedDict
+# 把"跨 turn 复用的状态"固化成一份**单一可信契约**：键名、类型、含义集中可查，
+# IDE / 类型检查器也能在写错键时报警。
+#
+# 注意：TypedDict 只是"类型视图"，运行时仍是普通 dict——保持与现有 set/get
+# 完全兼容，不引入任何新依赖（这正是选"轻量 State"而非 LangGraph 的原因）。
+
+
+class HitRef(TypedDict):
+    """上一轮返回给用户的商品引用（精简，仅够 refine/compare/detail 回指）。"""
+
+    product_id: str
+    title: str
+
+
+class WorkingMemory(TypedDict, total=False):
+    """跨 turn 复用的工作记忆。所有键都可选（total=False）。
+
+    canonical keys：
+        last_parsed_query: 上一轮**结构化**检索意图（ParsedQuery.to_dict()）。
+                           refine 在它之上做无损约束叠加——这正是"跑鞋→Adidas"
+                           不丢品类的关键。
+        last_hits:         上一轮返回的商品引用列表，供 compare/product_detail
+                           把"第一个/这款"映射回 product_id。
+    """
+
+    last_parsed_query: dict[str, Any]
+    last_hits: list[HitRef]
 
 
 # 历史滑窗大小：保留最近 N 条 user/assistant 消息。
@@ -75,3 +110,19 @@ class AgentSession:
 
     def get(self, key: str, default: Any = None) -> Any:
         return self.working_memory.get(key, default)
+
+    # ---- 工作记忆的类型化读写（围绕 WorkingMemory 契约，避免裸键名手滑）----
+
+    def remember_search(self, parsed_dict: dict[str, Any], hits: list[HitRef]) -> None:
+        """recommend 每次成功检索后调用：把本轮结构化意图 + 命中写进工作记忆，
+        供下一轮 refine/compare/product_detail 复用。"""
+        self.working_memory["last_parsed_query"] = parsed_dict
+        self.working_memory["last_hits"] = hits
+
+    def recall_parsed(self) -> dict[str, Any] | None:
+        """取上一轮结构化检索意图（ParsedQuery.to_dict()），没有则 None。"""
+        return self.working_memory.get("last_parsed_query")
+
+    def recall_hits(self) -> list[HitRef]:
+        """取上一轮命中的商品引用，没有则空列表。"""
+        return self.working_memory.get("last_hits") or []

@@ -23,7 +23,7 @@ import json
 import logging
 import os
 import sqlite3
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from functools import lru_cache
 from pathlib import Path
 
@@ -71,6 +71,64 @@ class ParsedQuery:
         data = asdict(self)
         data["hard_filters"] = self.hard_filters
         return data
+
+    @classmethod
+    def from_dict(cls, data: dict[str, object]) -> "ParsedQuery":
+        """从 to_dict() 的结果还原。
+
+        宽容地忽略未知键——尤其是 to_dict() 额外塞进去的 ``hard_filters``
+        （它是派生 property，不是构造参数），否则 ParsedQuery(**data) 会报
+        unexpected keyword argument。
+        """
+        allowed = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in data.items() if k in allowed})
+
+    def merge_base(self, base: "ParsedQuery") -> "ParsedQuery":
+        """把本轮解析（self，作为覆盖项）叠加到上一轮基线（base）上。
+
+        多轮"细化"的核心：用户只说"Adidas"时，本轮解析几乎是空的，必须继承
+        上一轮的品类/价格等，否则就退化成一次"泛搜 Adidas"。
+
+        合并规则（按字段语义区分，不是一刀切）：
+            - 标量类目/价格（category/sub_category/max_price/min_price）：
+              本轮显式给了就覆盖，否则继承 base —— "便宜点"不该清掉"跑鞋"。
+            - brand_include：本轮非空则**替换**（"换成 Nike"应只剩 Nike，
+              而不是 Adidas+Nike）。
+            - brand_exclude / negative_ingredients / soft_terms：取**并集**
+              （否定与软偏好是逐轮累积的，"不要苹果"之后"也不要三星"该都生效）。
+            - retrieval_query：合并双方分词并去重，本轮词在前，让向量检索
+              同时命中"品牌"和"上一轮的品类语义"（"Adidas" + "跑鞋"）。
+            - needs_clarification：恒为 False —— 既然有 base，就已有足够上下文。
+        """
+        def pick(cur: object, prev: object) -> object:
+            return cur if cur is not None else prev
+
+        def union(cur: list, prev: list) -> list:
+            return list(dict.fromkeys(list(prev or []) + list(cur or [])))
+
+        def replace_or_keep(cur: list, prev: list) -> list:
+            return list(cur) if cur else list(prev or [])
+
+        tokens: list[str] = []
+        for tok in (self.retrieval_query or "").split() + (base.retrieval_query or "").split():
+            if tok and tok not in tokens:
+                tokens.append(tok)
+        retrieval_query = " ".join(tokens) or self.original_query or base.original_query
+
+        return ParsedQuery(
+            original_query=self.original_query or base.original_query,
+            intent=self.intent or base.intent,
+            category=pick(self.category, base.category),
+            sub_category=pick(self.sub_category, base.sub_category),
+            max_price=pick(self.max_price, base.max_price),
+            min_price=pick(self.min_price, base.min_price),
+            brand_include=replace_or_keep(self.brand_include, base.brand_include),
+            brand_exclude=union(self.brand_exclude, base.brand_exclude),
+            negative_ingredients=union(self.negative_ingredients, base.negative_ingredients),
+            soft_terms=union(self.soft_terms, base.soft_terms),
+            retrieval_query=retrieval_query,
+            needs_clarification=False,
+        )
 
 
 # ---------------------------------------------------------------------------

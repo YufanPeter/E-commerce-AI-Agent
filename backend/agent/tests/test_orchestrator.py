@@ -68,7 +68,7 @@ class _StubSearchService:
         self._hits = hits or []
         self._needs_clarify = needs_clarify
 
-    def search(self, query: str, top_k_chunks: int = 50, top_k_products: int = 10):
+    def search(self, query: str, top_k_chunks: int = 50, top_k_products: int = 10, base=None):
         parsed = SimpleNamespace(
             needs_clarification=self._needs_clarify,
             category="美妆护肤",

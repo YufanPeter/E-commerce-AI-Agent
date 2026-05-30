@@ -45,12 +45,15 @@ class RecommendTool:
         slots: dict[str, Any],
     ) -> ToolResult:
         top_k = int(slots.get("top_k", DEFAULT_TOP_K))
-        result = self._get_service().search(query, top_k_products=top_k)
+        # base_parsed 由 RefineTool 注入：表示这是一次"细化"，需把本轮解析叠加到
+        # 上一轮结构化意图上（见 SearchService.search / ParsedQuery.merge_base）。
+        base = slots.get("base_parsed")
+        result = self._get_service().search(query, top_k_products=top_k, base=base)
 
-        # 工作记忆：refine tool 后续会读这俩字段
-        session.set("last_parsed_query", result.parsed.to_dict())
-        session.set(
-            "last_hits",
+        # 工作记忆（WorkingMemory 契约）：refine/compare/detail 后续会读这俩字段。
+        # 存的是【结构化】ParsedQuery（dict），下一轮才能做无损约束叠加。
+        session.remember_search(
+            result.parsed.to_dict(),
             [{"product_id": h.product_id, "title": h.title} for h in result.hits],
         )
 
