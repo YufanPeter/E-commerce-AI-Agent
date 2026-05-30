@@ -37,6 +37,7 @@ KNOWN_TOOLS: tuple[str, ...] = (
     "refine",
     "compare",
     "product_detail",
+    "cart",
     "clarify",
     "fallback",
 )
@@ -78,6 +79,8 @@ _TOOL_SCHEMA: dict[str, Any] = {
                         "也包括【只补充一个约束】的短输入（如单独说 'Adidas'、'红色的'、'轻一点'、'预算500'）\n"
                         "- compare: 用户希望对比两个以上商品（'这两个有什么区别'、'A 和 B 哪个好'）\n"
                         "- product_detail: 用户对某个具体商品要深度介绍（'第二个详细说说'、'这款敏感肌能用吗'）\n"
+                        "- cart: 购物车与下单相关（'加入购物车'、'把刚才那款加进来'、'删掉第二个'、"
+                        "'改成两件'、'看看购物车'、'下单吧'、'结算'）\n"
                         "- clarify: query 过于模糊无法检索（如'随便看看'、'有啥好东西'）\n"
                         "- fallback: 与购物无关的问题（天气、闲聊、超出能力范围的请求）\n"
                         "注意：refine/compare/product_detail 都需要上一轮有推荐结果，"
@@ -119,6 +122,7 @@ SYSTEM_PROMPT = """你是电商导购 Agent 的路由器，唯一职责是把用
    价格、轻重等属性，如单独的 “Adidas”、“红色”、“便宜点”），应判为 refine 而非 recommend，
    并在 rewritten_query 里补全上一轮的品类，例如上一轮“推荐跑鞋”+本轮“Adidas”→“Adidas 跑鞋”。
 4. “对比”/“哪个好”/“区别” → compare；“第 X 个详细说说”/“这款能…吗” → product_detail。
+   “加入购物车/加进来/删掉/改数量/看看购物车/下单/结算” → cart（工具内部再细分动作）。
 5. 真正模糊到无法检索的（"随便看看"、"有啥好东西"、"今天买点啥"）才走 clarify。
 6. 与购物完全无关的（天气、新闻、闲聊、技术问题）走 fallback。
 7. rewritten_query 一定要结合"最近对话"上下文，让单独看也能理解。

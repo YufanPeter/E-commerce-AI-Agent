@@ -24,6 +24,7 @@ from agent.orchestrator import Agent
 from agent.session import AgentSession, DEFAULT_HISTORY_WINDOW
 from agent.tools.base import ToolResult
 from agent.tools.clarify import ClarifyTool
+from agent.tools.cart import CartTool
 from agent.tools.compare import CompareTool
 from agent.tools.fallback import FallbackTool
 from agent.tools.product_detail import ProductDetailTool
@@ -104,6 +105,7 @@ def _make_agent(
         "refine": RefineTool(),
         "compare": CompareTool(),
         "product_detail": ProductDetailTool(),
+        "cart": CartTool(),
         "clarify": ClarifyTool(),
         "fallback": FallbackTool(),
     })
@@ -406,6 +408,7 @@ class TestOrchestratorEdgeCases:
             "refine": RefineTool(),
             "compare": CompareTool(),
             "product_detail": ProductDetailTool(),
+            "cart": CartTool(),
             "clarify": ClarifyTool(),
             "fallback": FallbackTool(),
         })
@@ -583,6 +586,7 @@ class TestOrchestratorStreaming:
             "refine": RefineTool(),
             "compare": CompareTool(),
             "product_detail": ProductDetailTool(),
+            "cart": CartTool(),
             "clarify": ClarifyTool(),
             "fallback": FallbackTool(),
         })
