@@ -79,6 +79,15 @@ class DoubaoEmbeddingFunction:
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             return list(executor.map(self._embed_one, texts))
 
+    # chromadb 1.x 检索时调用 embed_query(input=...)；
+    # 离线建库仍走 __call__（即 embed_documents）。两条路径输入输出形状一致，
+    # 这里统一委托给 __call__，从而同时兼容 0.6.x 与 1.x。
+    def embed_query(self, input: Sequence[str]) -> list[list[float]]:
+        return self.__call__(input)
+
+    def embed_documents(self, input: Sequence[str]) -> list[list[float]]:
+        return self.__call__(input)
+
     def name(self) -> str:
         """供 Chroma 持久化 collection 配置时标识 embedding 来源。"""
         return "doubao_ark"
