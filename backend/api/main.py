@@ -106,6 +106,35 @@ def _get_agent() -> Agent:
     return _agent
 
 
+@app.on_event("startup")
+def _warmup() -> None:
+    """启动预热：在后台线程把 Agent / SearchService / embedding / reranker 拉热。
+
+    否则首条真实查询会在 SSE 请求内部触发 ~30-90s 的模型懒加载，
+    导致流卡在 status(tool) 之后迟迟收不到 tool_result。
+
+    预热放在后台线程（而非直接在 startup 里同步执行），这样 uvicorn 能
+    立即绑定端口、/health 立即可用；模型在后台加热，首条查询若赶在加热
+    完成前到达，也只是退化为原来的懒加载行为，不会让整个服务起不来。
+    """
+    import threading
+
+    def _run() -> None:
+        try:
+            logger.info("Warmup: initializing agent and loading models…")
+            from search.search_service import get_search_service
+
+            _get_agent()
+            svc = get_search_service()
+            # 跑一次真实检索，强制 embedding + reranker(CrossEncoder) 完成加载
+            svc.search("预热查询", top_k_products=1)
+            logger.info("Warmup done: models are hot.")
+        except Exception:  # noqa: BLE001 - 预热失败不应阻止服务运行
+            logger.exception("Warmup failed (服务仍可用，首条查询会较慢)")
+
+    threading.Thread(target=_run, name="warmup", daemon=True).start()
+
+
 # ---------------------------------------------------------------------------
 # 端点
 # ---------------------------------------------------------------------------
