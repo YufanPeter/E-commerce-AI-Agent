@@ -1,40 +1,27 @@
 from __future__ import annotations
 
-"""CrossEncoder 精排器。
+"""API reranker.
 
-为什么需要它：
-    Chroma 用的是 bi-encoder（query 和 doc 分别编码再算余弦），快但粗。
-    它能告诉你"这两个文本主题相近"，但分不清"哪个真正回答了 query"。
-    CrossEncoder 把 query 和 doc 拼起来一次性喂给模型，能理解上下文关系，
-    精度高得多但慢得多 —— 所以只对 bi-encoder 召回的 top-N 用它精排。
-
-模型选择：BAAI/bge-reranker-base
-    - 与现有 embedding（bge-small-zh-v1.5）同家族，对中文电商语料友好
-    - ~280MB，CPU 单条 ~10ms，50 条 batch 一次 <500ms，满足实时要求
-    - 输出 logit 分数（无固定范围），但同一 query 内可比较 → 排序用足够
+精排原本用本地 ``sentence-transformers`` CrossEncoder，会在 Docker 镜像里拉
+torch / CUDA 等超大依赖。这里改为云端 rerank API：后端只保留 HTTP 客户端，
+镜像更轻，云部署也不需要本地模型缓存。
 """
 
-import logging
+import os
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Iterable
+from typing import Any, Iterable
 
 from rag.retriever import RetrievedChunk
 
 
-logger = logging.getLogger(__name__)
-
-DEFAULT_RERANKER_MODEL = "BAAI/bge-reranker-base"
+DEFAULT_RERANK_PATH = "/rerank"
 
 
 @dataclass(frozen=True)
 class RerankedChunk:
-    """带 rerank 分数的 chunk，保留原 chunk 全部信息。
+    """带 rerank 分数的 chunk，保留原 chunk 全部信息。"""
 
-    用 dataclass 包一层而不是直接给 RetrievedChunk 加字段，原因：
-    - RetrievedChunk 是 Chroma 层的契约，rerank 是上层增强，不该污染下层
-    - frozen dataclass 之间用 replace 可以无副作用地携带新字段
-    """
     chunk: RetrievedChunk
     rerank_score: float
 
@@ -47,16 +34,29 @@ class RerankedChunk:
         return self.chunk.chunk_type
 
 
-class CrossEncoderReranker:
-    """对 (query, chunk_doc) pair 用 CrossEncoder 算精排分数。"""
+class ApiReranker:
+    """调用兼容 ``model/query/documents/top_n`` 契约的 rerank API。"""
 
-    def __init__(self, model_name: str = DEFAULT_RERANKER_MODEL) -> None:
-        # 延迟导入：sentence_transformers 首次 import 会触发 torch 初始化，~1s。
-        # 放到 __init__ 里，让纯 import 这个模块的代码（如测试）不付这个成本。
-        from sentence_transformers import CrossEncoder
-
-        logger.info("Loading CrossEncoder model: %s", model_name)
-        self._model = CrossEncoder(model_name)
+    def __init__(
+        self,
+        client: Any | None = None,
+        model: str | None = None,
+        path: str | None = None,
+    ) -> None:
+        if client is None:
+            from llm.client import get_rerank_client
+            client = get_rerank_client()
+        if model is None:
+            from llm.client import get_rerank_model_id
+            model = get_rerank_model_id()
+        self._client = client
+        self._model = model
+        self._path = (
+            path
+            or os.getenv("ARK_RERANKING_PATH")
+            or os.getenv("ARK_RERANK_PATH")
+            or DEFAULT_RERANK_PATH
+        )
 
     def rerank(
         self,
@@ -64,31 +64,73 @@ class CrossEncoderReranker:
         chunks: Iterable[RetrievedChunk],
         top_k: int | None = None,
     ) -> list[RerankedChunk]:
-        """对 chunks 按 query 相关性重新排序。
-
-        top_k: 只保留前 K 个，None 表示全部返回。
-
-        返回按 rerank_score 降序排列。空输入直接返回空列表，避免模型空 batch 报错。
-        """
         chunk_list = list(chunks)
         if not chunk_list:
             return []
 
-        pairs = [(query, c.document) for c in chunk_list]
-        scores = self._model.predict(pairs)
+        documents = [chunk.document for chunk in chunk_list]
+        response = self._client.post(
+            self._path,
+            body={
+                "model": self._model,
+                "query": query,
+                "documents": documents,
+                "top_n": top_k or len(documents),
+            },
+            cast_to=object,
+        )
 
-        reranked = [
-            RerankedChunk(chunk=c, rerank_score=float(s))
-            for c, s in zip(chunk_list, scores)
-        ]
-        reranked.sort(key=lambda r: r.rerank_score, reverse=True)
-
+        scored = _parse_rerank_response(response, chunk_list)
+        scored.sort(key=lambda item: item.rerank_score, reverse=True)
         if top_k is not None:
-            reranked = reranked[:top_k]
-        return reranked
+            scored = scored[:top_k]
+        return scored
+
+
+def _parse_rerank_response(response: Any, chunks: list[RetrievedChunk]) -> list[RerankedChunk]:
+    """兼容常见 rerank API 返回格式。
+
+    支持：
+    - {"results": [{"index": 1, "relevance_score": 0.9}]}
+    - {"data": [{"document_index": 1, "score": 0.9}]}
+    - {"scores": [0.1, 0.9, ...]}
+    """
+    if not isinstance(response, dict):
+        raise ValueError(f"Unexpected rerank response type: {type(response)!r}")
+
+    if isinstance(response.get("scores"), list):
+        scores = response["scores"]
+        return [
+            RerankedChunk(chunk=chunk, rerank_score=float(scores[idx]))
+            for idx, chunk in enumerate(chunks)
+            if idx < len(scores)
+        ]
+
+    results = response.get("results") or response.get("data")
+    if not isinstance(results, list):
+        raise ValueError("Rerank response missing results/data/scores")
+
+    reranked: list[RerankedChunk] = []
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        index = item.get("index", item.get("document_index"))
+        if index is None and isinstance(item.get("document"), dict):
+            index = item["document"].get("index")
+        if index is None:
+            continue
+        idx = int(index)
+        if not 0 <= idx < len(chunks):
+            continue
+        score = item.get("relevance_score", item.get("score", item.get("rerank_score", 0)))
+        reranked.append(RerankedChunk(chunk=chunks[idx], rerank_score=float(score)))
+
+    if not reranked:
+        raise ValueError("Rerank response contains no usable scores")
+    return reranked
 
 
 @lru_cache(maxsize=1)
-def get_reranker() -> CrossEncoderReranker:
-    """进程级单例，避免重复加载模型。"""
-    return CrossEncoderReranker()
+def get_reranker() -> ApiReranker:
+    """进程级单例，复用 HTTP 连接池。"""
+    return ApiReranker()
