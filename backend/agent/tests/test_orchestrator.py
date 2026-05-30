@@ -30,6 +30,7 @@ from agent.tools.fallback import FallbackTool
 from agent.tools.product_detail import ProductDetailTool
 from agent.tools.recommend import RecommendTool
 from agent.tools.refine import RefineTool
+from agent.tools.scenario_bundle import ScenarioBundleTool
 
 
 # ---------- 工具：构造伪响应 ----------
@@ -121,6 +122,7 @@ def _make_agent(
         "compare": CompareTool(),
         "product_detail": ProductDetailTool(),
         "cart": CartTool(),
+        "scenario_bundle": ScenarioBundleTool(search_service=stub),
         "clarify": ClarifyTool(),
         "fallback": FallbackTool(),
     })
@@ -238,6 +240,53 @@ class TestRecommendTool:
         r = tool.run("4000以内拍照好的手机", AgentSession(), {})
         assert r.needs_composer is True
         assert len(r.payload["products"]) == 1
+
+
+# ---------- ScenarioBundleTool ----------
+
+class TestScenarioBundleTool:
+    def test_travel_scene_builds_sections_and_products(self):
+        class _ScenarioSearch:
+            def __init__(self):
+                self.queries: list[str] = []
+
+            def search(self, query: str, top_k_chunks: int = 50, top_k_products: int = 10, base=None):
+                self.queries.append(query)
+                idx = len(self.queries)
+                parsed = SimpleNamespace(
+                    to_dict=lambda: {"query": query, "needs_clarification": False},
+                )
+                hits = [
+                    SimpleNamespace(
+                        product_id=f"p{idx}",
+                        title=f"商品{idx}",
+                        brand="品牌",
+                        category="类目",
+                        sub_category="子类目",
+                        base_price=idx * 100,
+                    )
+                ]
+                return SimpleNamespace(
+                    parsed=parsed,
+                    hits=hits,
+                    raw_chunk_count=3,
+                    filtered_chunk_count=2,
+                )
+
+        search = _ScenarioSearch()
+        session = AgentSession()
+        r = ScenarioBundleTool(search_service=search).run("下周去三亚度假，帮我搭配一套从防晒到穿搭的方案", session, {})
+        assert r.tool_name == "scenario_bundle"
+        assert r.needs_composer is True
+        assert r.payload["scenario"] == "旅行度假"
+        assert [s["label"] for s in r.payload["sections"]] == ["防晒防护", "轻便穿搭", "出行数码"]
+        assert len(r.payload["products"]) == 3
+        assert len(search.queries) == 3
+        assert session.get("last_hits") == [
+            {"product_id": "p1", "title": "商品1"},
+            {"product_id": "p2", "title": "商品2"},
+            {"product_id": "p3", "title": "商品3"},
+        ]
 
 
 # ---------- AnswerComposer ----------
@@ -455,6 +504,7 @@ class TestOrchestratorEdgeCases:
             "compare": CompareTool(),
             "product_detail": ProductDetailTool(),
             "cart": CartTool(),
+            "scenario_bundle": ScenarioBundleTool(),
             "clarify": ClarifyTool(),
             "fallback": FallbackTool(),
         })
@@ -633,6 +683,7 @@ class TestOrchestratorStreaming:
             "compare": CompareTool(),
             "product_detail": ProductDetailTool(),
             "cart": CartTool(),
+            "scenario_bundle": ScenarioBundleTool(),
             "clarify": ClarifyTool(),
             "fallback": FallbackTool(),
         })

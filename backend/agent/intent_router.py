@@ -38,6 +38,7 @@ KNOWN_TOOLS: tuple[str, ...] = (
     "compare",
     "product_detail",
     "cart",
+    "scenario_bundle",
     "clarify",
     "fallback",
 )
@@ -81,6 +82,8 @@ _TOOL_SCHEMA: dict[str, Any] = {
                         "- product_detail: 用户对某个具体商品要深度介绍（'第二个详细说说'、'这款敏感肌能用吗'）\n"
                         "- cart: 购物车与下单相关（'加入购物车'、'把刚才那款加进来'、'删掉第二个'、"
                         "'改成两件'、'看看购物车'、'下单吧'、'结算'）\n"
+                        "- scenario_bundle: 用户要围绕一个生活/出行/送礼等场景做跨类目组合方案，"
+                        "如'下周去三亚度假，帮我搭配一套从防晒到穿搭的方案'\n"
                         "- clarify: query 过于模糊无法检索（如'随便看看'、'有啥好东西'）\n"
                         "- fallback: 与购物无关的问题（天气、闲聊、超出能力范围的请求）\n"
                         "注意：refine/compare/product_detail 都需要上一轮有推荐结果，"
@@ -123,9 +126,10 @@ SYSTEM_PROMPT = """你是电商导购 Agent 的路由器，唯一职责是把用
    并在 rewritten_query 里补全上一轮的品类，例如上一轮“推荐跑鞋”+本轮“Adidas”→“Adidas 跑鞋”。
 4. “对比”/“哪个好”/“区别” → compare；“第 X 个详细说说”/“这款能…吗” → product_detail。
    “加入购物车/加进来/删掉/改数量/看看购物车/下单/结算” → cart（工具内部再细分动作）。
-5. 真正模糊到无法检索的（"随便看看"、"有啥好东西"、"今天买点啥"）才走 clarify。
-6. 与购物完全无关的（天气、新闻、闲聊、技术问题）走 fallback。
-7. rewritten_query 一定要结合"最近对话"上下文，让单独看也能理解。
+5. “搭配一套”/“方案”/“清单”且涉及场景与多个品类（旅行、海边、送礼、露营等）→ scenario_bundle。
+6. 真正模糊到无法检索的（"随便看看"、"有啥好东西"、"今天买点啥"）才走 clarify。
+7. 与购物完全无关的（天气、新闻、闲聊、技术问题）走 fallback。
+8. rewritten_query 一定要结合"最近对话"上下文，让单独看也能理解。
 """
 
 

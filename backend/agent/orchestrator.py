@@ -48,6 +48,7 @@ from agent.tools.fallback import FallbackTool
 from agent.tools.product_detail import ProductDetailTool
 from agent.tools.recommend import RecommendTool
 from agent.tools.refine import RefineTool
+from agent.tools.scenario_bundle import ScenarioBundleTool
 
 
 logger = logging.getLogger(__name__)
@@ -94,6 +95,7 @@ _TOOL_WORKING_HINT = {
     "compare": "正在对比商品…",
     "product_detail": "正在查看商品详情…",
     "cart": "正在处理购物车…",
+    "scenario_bundle": "正在规划场景方案…",
     "clarify": "正在整理追问…",
     "fallback": "正在生成回复…",
 }
@@ -104,6 +106,7 @@ _TOOL_COMPOSE_HINT = {
     "refine": "正在生成筛选说明…",
     "compare": "正在生成对比总结…",
     "product_detail": "正在生成详细介绍…",
+    "scenario_bundle": "正在生成组合推荐…",
     "clarify": "",  # narrative_override，不会进 composer
     "fallback": "",
 }
@@ -132,6 +135,7 @@ class Agent:
             "compare": CompareTool(),
             "product_detail": ProductDetailTool(),
             "cart": CartTool(),
+            "scenario_bundle": ScenarioBundleTool(),
             "clarify": ClarifyTool(),
             "fallback": FallbackTool(),
         }
