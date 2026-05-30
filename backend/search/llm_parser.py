@@ -83,8 +83,13 @@ def _build_tool_schema(taxonomy: dict) -> dict:
                     },
                     "negative_ingredients": {
                         "type": "array",
-                        "items": {"type": "string", "enum": list(INGREDIENT_BLOCKLIST)},
-                        "description": "用户排除的成分或属性，由下游 post-filter 在商品全文中剔除。",
+                        "items": {"type": "string"},
+                        "description": (
+                            "用户明确要排除的成分 / 品类 / 属性的【字面词】，下游在商品全文里做子串剔除。"
+                            "必须填商品文本里会真实出现的词，例如 "
+                            + "、".join(INGREDIENT_BLOCKLIST)
+                            + " 等；也可以是这些之外的任意词（如 '花生'、'香菜'、'辣'）。"
+                        ),
                     },
                     "soft_terms": {
                         "type": "array",
@@ -120,14 +125,17 @@ SYSTEM_PROMPT = """你是电商搜索的需求解析器。严格遵守以下规�
 3. 否定语义只看局部范围：
    - "我要 Nike，不要太贵" → brand_include=["Nike"]，brand_exclude=[]
    - "推荐手机，不要华为" → sub_category="智能手机"，brand_exclude=["华为"]
-4. negative_ingredients 是【排除关键词】列表：用户说"不要X"/"不含X"/"无X"/"除了X"时，
-   一律把 X 放进来。下游按"商品标题与描述里是否出现该词"做字面子串过滤，所以必须填
-   【商品文本里会真实出现的字面词】，不要引申成字面不同的术语：
-   - "不要咖啡的饮料" → negative_ingredients=["咖啡"]（不能为空，也不能写成"咖啡因"）
-   - "不要酒精" → ["酒精"]
-   - "不含香精" → ["香精"]
-   - "不要日系"/"不要韩系" → 同样写进 negative_ingredients，由下游映射到具体品牌。
+4. negative_ingredients 是【开放式排除关键词】列表：用户说"不要X"/"不含X"/"无X"/"除了X"时，
+   一律把 X 放进来。不限于固定清单，任何成分 / 品类 / 口味 / 属性都可以填
+   （如 "花生"、"香菜"、"辣"、"咖啡"、"酒精"、"香精"）。下游按"商品标题与描述里是否
+   出现该词"做字面子串过滤，所以务必填【商品文本里会真实出现的字面词】，
+   不要引申成字面不同的术语：
+   - "不要咖啡的饮料" → ["咖啡"]（不能为空，也不能写成"咖啡因"）
+   - "不要花生的零食" → ["花生"]
+   - "不放香菜" → ["香菜"]
+   - "不要日系"/"不要韩系" → 直接填 ["日系"] / ["韩系"]
    特例：用户字面就是说成分（"无咖啡因"/"不含咖啡因"）时才填该成分本身 → ["咖啡因"]。
+   注意：不要把用户正在搜索的主体品类填进来（搜"饮料"时别填"饮料"），只填要排除的部分。
 5. 一级品类（category）同义词映射（用户只给大类、没给子品类时务必填 category）：
    - "美妆"/"化妆品"/"护肤"/"护肤品" → "美妆护肤"
    - "数码"/"电子产品"/"3C" → "数码电子"
@@ -281,6 +289,33 @@ def _repair_param_leak(text: str) -> str:
     return text
 
 
+# 常见口味单字：长度虽 < 2 但语义明确、误伤风险低，豁免噪声护栏。
+_SHORT_NEGATIVE_ALLOW: frozenset[str] = frozenset({"辣", "甜", "咸", "酸", "苦"})
+
+
+def _clean_negatives(values: list[str] | None) -> list[str]:
+    """归一化 LLM 给出的排除词（不再用白名单约束，支持任意"不要X"）。
+
+    后置过滤是子串匹配，天然安全：匹配不到的词不会误伤商品。这里只做：
+    - 去首尾空白、去空串、去重（保序）；
+    - 丢掉长度 < 2 的单字噪声（如 "的"、"水" 太宽泛易误伤），
+      但保留已知短词白名单（如 "糖"）和常见口味单字（辣/甜/咸/酸/苦）。
+    """
+    if not values:
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in values:
+        term = (raw or "").strip()
+        if not term or term in seen:
+            continue
+        if len(term) < 2 and term not in INGREDIENT_BLOCKLIST and term not in _SHORT_NEGATIVE_ALLOW:
+            continue
+        seen.add(term)
+        out.append(term)
+    return out
+
+
 def _to_parsed_query(
     query: str,
     arguments: dict[str, Any],
@@ -329,10 +364,7 @@ def _to_parsed_query(
         min_price=_coerce_float(arguments.get("min_price")),
         brand_include=_filter_brands(arguments.get("brand_include")),
         brand_exclude=_filter_brands(arguments.get("brand_exclude")),
-        negative_ingredients=[
-            term for term in (arguments.get("negative_ingredients") or [])
-            if term in INGREDIENT_BLOCKLIST
-        ],
+        negative_ingredients=_clean_negatives(arguments.get("negative_ingredients")),
         soft_terms=list(arguments.get("soft_terms") or []),
         retrieval_query=query,  # LLM 路径下保留原 query；soft_terms 留给召回后重排使用
         # 只要识别到任意一个商品线索就强制放行检索，避免 LLM 过于保守把可召回的 query 误判为模糊。
