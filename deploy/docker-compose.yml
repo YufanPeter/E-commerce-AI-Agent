@@ -1,9 +1,9 @@
 services:
   backend:
+    image: ${IMAGE_REF:-cartpilot-backend:local}
     build:
       context: ..
       dockerfile: deploy/Dockerfile
-    image: cartpilot-backend:local
     env_file:
       - ../.env
     environment:

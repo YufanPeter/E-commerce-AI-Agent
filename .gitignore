@@ -64,3 +64,6 @@ Thumbs.db
 .vscode/
 .idea/
 .env
+
+# Claude local files
+.claude/
