@@ -170,7 +170,7 @@ def expand_brands(canonical_brands: list[str]) -> list[str]:
 INGREDIENT_BLOCKLIST: tuple[str, ...] = (
     "酒精", "乙醇", "香精", "色素", "防腐剂",
     "糖", "蔗糖", "果葡糖浆",
-    "咖啡因",
+    "咖啡因", "咖啡",
     "日系", "韩系",
 )
 
