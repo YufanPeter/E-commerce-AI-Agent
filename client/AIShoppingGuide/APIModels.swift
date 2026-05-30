@@ -242,6 +242,7 @@ enum AgentStreamEventType: String, Codable, Hashable {
     case comparison
     case clarification
     case toolAction
+    case cartSnapshot
     case error
     case done
 }
@@ -255,6 +256,7 @@ struct AgentStreamEventPayload: Identifiable, Codable, Hashable {
     let comparison: ProductComparisonPayload?
     let clarification: ClarificationPromptPayload?
     let toolAction: AgentToolActionPayload?
+    let cartSnapshot: CartSnapshotPayload?
     let error: APIErrorPayload?
     let traceID: String?
 
@@ -267,6 +269,7 @@ struct AgentStreamEventPayload: Identifiable, Codable, Hashable {
         comparison: ProductComparisonPayload? = nil,
         clarification: ClarificationPromptPayload? = nil,
         toolAction: AgentToolActionPayload? = nil,
+        cartSnapshot: CartSnapshotPayload? = nil,
         error: APIErrorPayload? = nil,
         traceID: String? = nil
     ) {
@@ -278,6 +281,7 @@ struct AgentStreamEventPayload: Identifiable, Codable, Hashable {
         self.comparison = comparison
         self.clarification = clarification
         self.toolAction = toolAction
+        self.cartSnapshot = cartSnapshot
         self.error = error
         self.traceID = traceID
     }

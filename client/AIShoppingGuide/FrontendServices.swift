@@ -8,7 +8,7 @@ import SwiftUI
 ///   再把下面的 `defaultBaseURL` 改成 Mac 的局域网地址，例如
 ///   `http://192.168.1.23:8000`（脚本就绪后会在终端打印该地址）。
 enum BackendConfig {
-    static let defaultBaseURL = URL(string: "http://192.168.1.198:8000")!
+    static let defaultBaseURL = URL(string: "http://192.168.1.23:8000")!
 
     /// 健康检查端点。
     static var healthURL: URL { defaultBaseURL.appendingPathComponent("health") }
@@ -446,6 +446,18 @@ final class RESTAgentService: AgentServicing {
             )
 
         case "tool_result":
+            if Self.isCartToolResult(bytes) {
+                Task { [productService] in
+                    if let snapshot = try? await Self.extractCartSnapshot(
+                        fromToolResult: bytes,
+                        productService: productService
+                    ) {
+                        continuation.yield(
+                            AgentStreamEventPayload(type: .cartSnapshot, cartSnapshot: snapshot)
+                        )
+                    }
+                }
+            }
             let ids = Self.extractProductIDs(fromToolResult: bytes)
             guard !ids.isEmpty else { return }
             // 补全：Agent 只给精简卡片，这里用商品 ID 取完整数据用于渲染。
@@ -497,6 +509,135 @@ final class RESTAgentService: AgentServicing {
             return []
         }
         return products.compactMap { $0["product_id"] as? String }
+    }
+
+    private static func isCartToolResult(_ bytes: Data) -> Bool {
+        guard
+            let obj = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
+            (obj["tool_name"] as? String) == "cart"
+        else {
+            return false
+        }
+        return true
+    }
+
+    private static func extractCartSnapshot(
+        fromToolResult bytes: Data,
+        productService: RESTProductService
+    ) async throws -> CartSnapshotPayload? {
+        guard
+            let obj = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
+            (obj["tool_name"] as? String) == "cart",
+            let payload = obj["payload"] as? [String: Any]
+        else {
+            return nil
+        }
+
+        let action = payload["action"] as? String
+        if action == "checkout" {
+            return emptyCartSnapshot()
+        }
+
+        guard
+            let cart = payload["cart"] as? [String: Any],
+            let lines = cart["lines"] as? [[String: Any]]
+        else {
+            return nil
+        }
+        if lines.isEmpty {
+            return emptyCartSnapshot()
+        }
+
+        let productIDs = lines.compactMap { $0["product_id"] as? String }
+        let productPayloads = try await productService.fetchProducts(productIDs: productIDs)
+        let productsByID = productPayloads.reduce(into: [String: ProductPayload]()) { result, product in
+            result[product.productID] = product
+        }
+
+        let items = lines.compactMap { line -> CartItemPayload? in
+            guard
+                let productID = line["product_id"] as? String,
+                let product = productsByID[productID]
+            else {
+                return nil
+            }
+            let cartItemID = String(describing: line["cart_item_id"] ?? UUID().uuidString)
+            let selectedOptions = line["options"] as? [String: String] ?? [:]
+            let quantity = intValue(line["quantity"], default: 1)
+            let selected = boolValue(line["selected"], default: true)
+            let subtotal = doubleValue(line["subtotal"], default: 0)
+            return CartItemPayload(
+                id: cartItemID,
+                productID: productID,
+                skuID: line["sku_id"] as? String,
+                product: product,
+                selectedOptions: selectedOptions,
+                quantity: quantity,
+                isSelected: selected,
+                lineTotal: yuanMoney(subtotal)
+            )
+        }
+
+        let total = doubleValue(cart["total"], default: items.reduce(0) {
+            $0 + Double($1.lineTotal.amountMinor) / 100
+        })
+        return CartSnapshotPayload(
+            cartID: "agent-cart",
+            items: items,
+            selectedItemIDs: items.filter { $0.isSelected }.map { $0.id },
+            priceSummary: CartPriceSummaryPayload(
+                subtotal: yuanMoney(total),
+                discount: nil,
+                payable: yuanMoney(total)
+            ),
+            updatedAt: Date()
+        )
+    }
+
+    private static func emptyCartSnapshot() -> CartSnapshotPayload {
+        CartSnapshotPayload(
+            cartID: "agent-cart",
+            items: [],
+            selectedItemIDs: [],
+            priceSummary: CartPriceSummaryPayload(
+                subtotal: yuanMoney(0),
+                discount: nil,
+                payable: yuanMoney(0)
+            ),
+            updatedAt: Date()
+        )
+    }
+
+    private static func yuanMoney(_ value: Double) -> Money {
+        let cents = Int((value * 100).rounded())
+        let display: String
+        if value.rounded(.towardZero) == value {
+            display = "¥\(Int(value))"
+        } else {
+            display = "¥\(String(format: "%.2f", value))"
+        }
+        return Money(currency: "CNY", amountMinor: cents, display: display)
+    }
+
+    private static func intValue(_ value: Any?, default defaultValue: Int) -> Int {
+        if let int = value as? Int { return int }
+        if let double = value as? Double { return Int(double) }
+        if let string = value as? String, let int = Int(string) { return int }
+        return defaultValue
+    }
+
+    private static func doubleValue(_ value: Any?, default defaultValue: Double) -> Double {
+        if let double = value as? Double { return double }
+        if let int = value as? Int { return Double(int) }
+        if let string = value as? String, let double = Double(string) { return double }
+        return defaultValue
+    }
+
+    private static func boolValue(_ value: Any?, default defaultValue: Bool) -> Bool {
+        if let bool = value as? Bool { return bool }
+        if let int = value as? Int { return int != 0 }
+        if let string = value as? String { return string == "1" || string.lowercased() == "true" }
+        return defaultValue
     }
 }
 

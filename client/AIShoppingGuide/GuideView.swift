@@ -234,6 +234,11 @@ struct GuideView: View {
                             products: hydrated
                         )
 
+                    case .cartSnapshot:
+                        if let snapshot = event.cartSnapshot {
+                            syncCartItems(from: snapshot)
+                        }
+
                     case .textDelta:
                         if let piece = event.textDelta {
                             narrative += piece
@@ -264,6 +269,16 @@ struct GuideView: View {
             } catch {
                 updateLastAI(text: errorMessage(error), state: .failed, canRetry: true)
             }
+        }
+    }
+
+    private func syncCartItems(from snapshot: CartSnapshotPayload) {
+        cartItems = snapshot.items.map { item in
+            CartItem(
+                product: Product(payload: item.product),
+                selectedOptions: item.selectedOptions,
+                quantity: item.quantity
+            )
         }
     }
 
