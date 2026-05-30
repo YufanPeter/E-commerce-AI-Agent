@@ -7,7 +7,8 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse
 
-from backend.store.product_store import (
+from search.search_service import SearchResult, get_search_service
+from store.product_store import (
     DEFAULT_DB_PATH,
     ProductDetail,
     ProductSku,
@@ -71,6 +72,27 @@ def get_products(ids: str = Query(..., description="Comma-separated product ids"
     }
 
 
+@app.get("/search")
+def search_products(
+    q: str = Query(..., description="自然语言检索 query，例如 ‘300以上的Nike跑鞋’"),
+    limit: int = Query(10, ge=1, le=50, description="返回商品数上限"),
+) -> dict[str, Any]:
+    """RAG 端到端检索。命中走严格匹配；零命中时按品类放宽阶梯降级，
+    通过 matchType / fallbackReason 让前端区分严格结果与放宽结果。"""
+    try:
+        result = get_search_service().search(q, top_k_products=limit)
+    except Exception as exc:  # 上游 LLM / 检索异常统一收敛成可重试错误
+        raise HTTPException(
+            status_code=502,
+            detail=error_payload(
+                code="SEARCH_UPSTREAM_FAILED",
+                message="检索服务暂时不可用，请稍后重试。",
+                retryable=True,
+            ),
+        ) from exc
+    return search_payload(result)
+
+
 def load_image_manifest() -> dict[str, str]:
     if not IMAGE_MANIFEST_PATH.exists():
         return {}
@@ -93,6 +115,32 @@ def error_payload(code: str, message: str, retryable: bool) -> dict[str, Any]:
 
 def default_error_code(status_code: int) -> str:
     return f"API_HTTP_{status_code}"
+
+
+def search_payload(result: SearchResult) -> dict[str, Any]:
+    """把 SearchResult 包成检索响应：商品列表 + 严格/降级标记。
+
+    matchType=strict 时 products 是完全匹配；matchType=fallback 时是放宽后的
+    兜底结果，fallbackReason 说明放宽了什么。二者互斥，不会出现在同一次响应里。
+    """
+    products: list[dict[str, Any]] = []
+    for hit in result.hits:
+        detail = store.get_product_detail(hit.product_id)
+        if detail is None:
+            continue
+        payload = product_payload(detail)
+        payload["score"] = hit.score
+        products.append(payload)
+
+    return {
+        "requestID": "search",
+        "query": result.parsed.original_query,
+        "matchType": "fallback" if result.is_fallback else "strict",
+        "fallbackReason": result.fallback_reason,
+        "relaxedFilters": result.relaxed_filters,
+        "products": products,
+        "parsed": result.parsed.to_dict(),
+    }
 
 
 def product_payload(detail: ProductDetail) -> dict[str, Any]:

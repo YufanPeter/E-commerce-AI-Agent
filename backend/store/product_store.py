@@ -93,6 +93,7 @@ class ProductStore:
         self,
         category: str | None = None,
         sub_category: str | None = None,
+        min_price: float | None = None,
         max_price: float | None = None,
         brand_include: Sequence[str] | None = None,
         brand_exclude: Sequence[str] | None = None,
@@ -116,9 +117,20 @@ class ProductStore:
         if sub_category:
             clauses.append("p.sub_category = ?")
             params.append(sub_category)
-        if max_price is not None:
-            clauses.append("pr.min_price <= ?")
-            params.append(max_price)
+        if min_price is not None or max_price is not None:
+            sku_clauses = ["s.product_id = p.product_id", "s.status = 'active'"]
+            if min_price is not None:
+                sku_clauses.append("s.price >= ?")
+                params.append(min_price)
+            if max_price is not None:
+                sku_clauses.append("s.price <= ?")
+                params.append(max_price)
+            clauses.append(
+                "EXISTS ("
+                "SELECT 1 FROM product_skus s "
+                f"WHERE {' AND '.join(sku_clauses)}"
+                ")"
+            )
         if brand_include:
             clauses.append(f"p.brand IN ({placeholders(len(brand_include))})")
             params.extend(brand_include)
@@ -157,7 +169,11 @@ class ProductStore:
         return [
             self._candidate_from_row(
                 row,
-                matched_skus=self.get_matched_skus(row["product_id"], max_price=max_price),
+                matched_skus=self.get_matched_skus(
+                    row["product_id"],
+                    min_price=min_price,
+                    max_price=max_price,
+                ),
             )
             for row in rows
         ]
@@ -223,11 +239,15 @@ class ProductStore:
     def get_skus(
         self,
         product_id: str,
+        min_price: float | None = None,
         max_price: float | None = None,
     ) -> list[ProductSku]:
-        """查询商品 SKU；传入 max_price 时只返回预算内 SKU。"""
+        """查询商品 SKU；传入价格边界时只返回命中价格区间的 SKU。"""
         clauses = ["product_id = ?", "status = 'active'"]
         params: list[Any] = [product_id]
+        if min_price is not None:
+            clauses.append("price >= ?")
+            params.append(min_price)
         if max_price is not None:
             clauses.append("price <= ?")
             params.append(max_price)
@@ -247,13 +267,12 @@ class ProductStore:
     def get_matched_skus(
         self,
         product_id: str,
+        min_price: float | None = None,
         max_price: float | None = None,
         limit: int = 3,
     ) -> list[ProductSku]:
-        """返回满足预算的代表性 SKU，用于解释商品为何通过价格过滤。"""
-        skus = self.get_skus(product_id, max_price=max_price)
-        if max_price is None:
-            return skus[:limit]
+        """返回满足硬价格条件的代表性 SKU，用于解释商品为何通过过滤。"""
+        skus = self.get_skus(product_id, min_price=min_price, max_price=max_price)
         return skus[:limit]
 
     def get_faqs(self, product_id: str) -> list[ProductFaq]:
@@ -381,6 +400,7 @@ def parse_args() -> argparse.Namespace:
     candidates = subparsers.add_parser("candidates", help="按硬条件查询候选商品")
     candidates.add_argument("--category")
     candidates.add_argument("--sub-category")
+    candidates.add_argument("--min-price", type=float)
     candidates.add_argument("--max-price", type=float)
     candidates.add_argument("--brand-exclude", action="append", default=[])
     candidates.add_argument("--limit", type=int, default=5)
@@ -404,6 +424,7 @@ def main() -> None:
         candidates = store.find_candidates(
             category=args.category,
             sub_category=args.sub_category,
+            min_price=args.min_price,
             max_price=args.max_price,
             brand_exclude=args.brand_exclude,
             limit=args.limit,
