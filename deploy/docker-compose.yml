@@ -1,0 +1,15 @@
+services:
+  backend:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: cartpilot-backend:local
+    env_file:
+      - ../.env
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8000
+      USE_RERANK: ${USE_RERANK:-0}
+    ports:
+      - "8000:8000"
+    restart: unless-stopped

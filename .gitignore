@@ -48,8 +48,7 @@ xcuserdata/
 *.dSYM/
 
 # Xcode project user data
-client/DerivedDataBuild/
-client/DerivedDataSim/
+client/DerivedData*
 client/.derivedData/
 client/*.xcworkspace/xcuserdata/
 client/*.xcodeproj/xcuserdata/

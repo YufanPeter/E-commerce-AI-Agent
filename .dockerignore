@@ -1,0 +1,24 @@
+.git/
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.DS_Store
+
+.env
+.env.*
+!.env.example
+
+client/DerivedData*/
+client/.derivedData/
+client/**/*.xcuserdata/
+
+docs/
+*.pdf
+
+# Keep backend/storage in the Docker context when it exists. The runtime needs
+# the prebuilt SQLite and Chroma indexes; secrets still come from env vars.

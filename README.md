@@ -15,6 +15,8 @@ ARK_MODEL=你的endpoint_id
 # 向量库 embedding（豆包多模态 embedding 接入点）
 ARK_EMBEDDING_API_KEY=你的embedding_API_Key   # 不填则回退复用 ARK_API_KEY
 ARK_EMBEDDING_MODEL=你的embedding_endpoint_id
+# 图片存储网址
+ARK_BASE_URL=https://ark.cn-*
 ```
 
 ### 2. 启动后端
@@ -41,6 +43,14 @@ PORT=8000 ./scripts/start_backend.sh
 ```
 
 > `USE_RERANK=0` 会跳过 reranker（约 280MB 模型）的加载与精排，召回质量略降但启动更快、低配机器更稳；默认启用精排。
+
+也可以用 Docker 固定后端运行环境，便于换机器和后续云部署：
+
+```bash
+docker compose up --build
+```
+
+详细镜像构建、火山云镜像仓库推送和云服务器运行步骤见 [Backend Docker 部署说明](docs/backend_docker_deploy.md)。
 
 ### 3. 启动客户端
 
