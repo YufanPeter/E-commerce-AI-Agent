@@ -26,15 +26,26 @@ ARK_MODEL=你的endpoint_id
 ARK_BASE_URL=https://ark.cn-beijing.volces.com/api/v3/
 ARK_EMBEDDING_API_KEY=你的embedding_API_Key
 ARK_EMBEDDING_MODEL=你的embedding_endpoint_id
+ARK_RERANKING_API_KEY=你的rerank_API_Key
+ARK_RERANKING_MODEL=doubao-seed-rerank
+# ARK_RERANKING_PATH=/rerank
 ```
 
 ## 本地运行
 
-Docker 相关文件都放在 `deploy/`，需要先进入该目录再执行 compose 命令：
+推荐直接使用统一启动脚本，脚本会自动指定 `deploy/docker-compose.yml`，并轮询 `/health`：
 
 ```bash
-cd deploy
-docker compose up --build
+./scripts/start_backend.sh --docker
+
+# 后台运行
+./scripts/start_backend.sh --docker -d
+```
+
+也可以手动执行 compose。Docker 相关文件都放在 `deploy/`，需要通过 `-f` 指定 compose 文件：
+
+```bash
+docker compose -f deploy/docker-compose.yml up --build
 ```
 
 健康检查：
@@ -48,16 +59,14 @@ curl http://127.0.0.1:8000/health
 后台运行：
 
 ```bash
-cd deploy
-docker compose up -d --build
-docker compose logs -f backend
+docker compose -f deploy/docker-compose.yml up -d --build
+docker compose -f deploy/docker-compose.yml logs -f backend
 ```
 
 停止：
 
 ```bash
-cd deploy
-docker compose down
+docker compose -f deploy/docker-compose.yml down
 ```
 
 ## 直接使用 docker 命令
@@ -97,5 +106,6 @@ docker run -d \
 
 - `.env` 不要打进镜像，也不要提交到 Git。
 - 如果更换 embedding endpoint，必须重建 `backend/storage/chroma` 后重新构建镜像。
-- 默认 `USE_RERANK=0`，这样镜像启动更快、云上资源占用更低；需要精排时运行容器时设为 `USE_RERANK=1`。
+- Rerank 走云端 API，不再安装本地 `torch` / `sentence-transformers` / CUDA 依赖。
+- Docker 默认 `USE_RERANK=1`，通过 `ARK_RERANKING_API_KEY`、`ARK_RERANKING_MODEL` 调用云端精排；默认请求路径是 `/rerank`，路径不同可设置 `ARK_RERANKING_PATH`；需要减少 API 请求时运行容器时设为 `USE_RERANK=0`。
 - 如果不想把 `backend/storage` 打进镜像，可以在云服务器挂载外部目录到 `/app/backend/storage`。
