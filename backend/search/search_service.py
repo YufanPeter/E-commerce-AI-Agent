@@ -26,6 +26,8 @@ from __future__ import annotations
 - 不做的事：业务重排（销量 / 评分 / 个性化）放在更上层的 Recommender，本模块只负责检索。
 """
 
+import logging
+import os
 from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any
@@ -34,6 +36,20 @@ from rag.retriever import ChromaRetriever, RetrievedChunk
 from rag.reranker import CrossEncoderReranker, RerankedChunk, get_reranker
 from search.query_understanding import ParsedQuery, understand_query
 from search.where_builder import build_chroma_where
+
+logger = logging.getLogger(__name__)
+
+
+def _env_use_rerank() -> bool:
+    """从环境变量 USE_RERANK 读取是否启用精排，默认启用。
+
+    设为 0/false/no/off 可禁用 reranker——在机器繁忙、CrossEncoder 模型
+    加载缓慢时，禁用后链路只走向量距离排序，避免请求卡在模型加载上。
+    """
+    raw = os.getenv("USE_RERANK")
+    if raw is None:
+        return True
+    return raw.strip().lower() not in {"0", "false", "no", "off", ""}
 
 
 @dataclass(frozen=True)
@@ -94,11 +110,12 @@ class SearchService:
         self,
         retriever: ChromaRetriever | None = None,
         reranker: CrossEncoderReranker | None = None,
-        use_rerank: bool = True,
+        use_rerank: bool | None = None,
     ) -> None:
         # 允许测试时注入 mock retriever/reranker；生产环境用默认单例。
         self._retriever = retriever or ChromaRetriever()
-        self._use_rerank = use_rerank
+        # use_rerank 未显式传入时由环境变量 USE_RERANK 决定（默认启用）。
+        self._use_rerank = _env_use_rerank() if use_rerank is None else use_rerank
         # reranker 延迟加载：__init__ 只记录意图，首次 search 时才下模型，
         # 避免 use_rerank=False 的场景白费 ~280MB 内存 + ~2s 启动。
         self._reranker = reranker
@@ -144,13 +161,20 @@ class SearchService:
         filtered_count = len(chunks)
 
         # ④ CrossEncoder 精排（可选）
+        # rerank 失败（模型加载超时 / 推理异常）不应让整条链路报错：
+        # 捕获后降级为向量距离排序，保证始终有结果返回。
+        reranked_ok = False
         if self._use_rerank and chunks:
-            reranked = self._get_reranker().rerank(
-                query=parsed.retrieval_query or user_query,
-                chunks=chunks,
-            )
-            hits = _aggregate_reranked_by_product(reranked)[:top_k_products]
-        else:
+            try:
+                reranked = self._get_reranker().rerank(
+                    query=parsed.retrieval_query or user_query,
+                    chunks=chunks,
+                )
+                hits = _aggregate_reranked_by_product(reranked)[:top_k_products]
+                reranked_ok = True
+            except Exception:  # noqa: BLE001 - 精排失败降级为向量排序
+                logger.warning("Reranker failed, fallback to vector-distance ordering", exc_info=True)
+        if not reranked_ok:
             hits = _aggregate_by_distance(chunks)[:top_k_products]
 
         return SearchResult(
