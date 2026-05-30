@@ -6,6 +6,7 @@
 #   ./scripts/start_backend.sh                # 前台启动，Ctrl+C 退出
 #   HOST=0.0.0.0 ./scripts/start_backend.sh   # 监听局域网，供 iOS 真机连接
 #   PORT=8000 ./scripts/start_backend.sh      # 自定义端口
+#   USE_RERANK=0 ./scripts/start_backend.sh   # 禁用 CrossEncoder 精排（机器繁忙/模型加载慢时用）
 #   ./scripts/start_backend.sh --reload       # 开发热重载（额外参数透传给 uvicorn）
 #
 # 脚本会自动：
