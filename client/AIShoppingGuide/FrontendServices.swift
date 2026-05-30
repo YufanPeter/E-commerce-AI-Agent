@@ -8,7 +8,7 @@ import SwiftUI
 ///   再把下面的 `defaultBaseURL` 改成 Mac 的局域网地址，例如
 ///   `http://192.168.1.23:8000`（脚本就绪后会在终端打印该地址）。
 enum BackendConfig {
-    static let defaultBaseURL = URL(string: "http://127.0.0.1:8000")!
+    static let defaultBaseURL = URL(string: "http://192.168.1.198:8000")!
 
     /// 健康检查端点。
     static var healthURL: URL { defaultBaseURL.appendingPathComponent("health") }
