@@ -1,3 +1,4 @@
+import AVFoundation
 import SwiftUI
 
 struct GuideView: View {
@@ -11,6 +12,7 @@ struct GuideView: View {
     @State private var selectedProduct: Product?
     @State private var lastQuery: String = ""
     @State private var agentService = RESTAgentService()
+    @StateObject private var speechPlayback = SpeechPlaybackController()
     @FocusState private var isInputFocused: Bool
 
     private let examples = ["适合油皮的洗面奶", "200 元内蓝牙耳机", "轻量跑鞋", "不要含酒精的防晒"]
@@ -78,7 +80,9 @@ struct GuideView: View {
                             examples: message.id == messages.first?.id ? examples : [],
                             onExampleTap: send,
                             onRetry: retryLast,
-                            onProductTap: { selectedProduct = $0 }
+                            onProductTap: { selectedProduct = $0 },
+                            onSpeak: { speechPlayback.toggle(messageID: message.id, text: message.text) },
+                            isSpeaking: speechPlayback.activeMessageID == message.id
                         )
                         .id(message.id)
                     }
@@ -198,6 +202,7 @@ struct GuideView: View {
 
     private func send(_ query: String) {
         isComposerExpanded = false
+        speechPlayback.stop()
         lastQuery = query
         messages.append(ChatMessage(sender: .user, text: query))
         messages.append(ChatMessage(sender: .ai, text: "正在理解你的需求", state: .understanding))
@@ -206,6 +211,7 @@ struct GuideView: View {
 
     private func retryLast() {
         messages.removeAll { $0.canRetry }
+        speechPlayback.stop()
         let query = lastQuery.isEmpty ? "重新推荐" : lastQuery
         messages.append(ChatMessage(sender: .ai, text: "正在重新理解你的需求", state: .understanding))
         runAgent(for: query)
@@ -352,6 +358,8 @@ struct MessageRow: View {
     let onExampleTap: (String) -> Void
     let onRetry: () -> Void
     let onProductTap: (Product) -> Void
+    let onSpeak: () -> Void
+    let isSpeaking: Bool
 
     var body: some View {
         HStack(alignment: .top) {
@@ -364,10 +372,23 @@ struct MessageRow: View {
                     .padding(.horizontal, 14)
                     .padding(.vertical, 11)
                     .background(bubbleColor, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .stroke(AppTheme.border, lineWidth: message.sender == .ai ? 1 : 0)
+	                    .overlay(
+	                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+	                            .stroke(AppTheme.border, lineWidth: message.sender == .ai ? 1 : 0)
                     )
+
+                if canSpeak {
+                    Button(action: onSpeak) {
+                        Label(isSpeaking ? "停止朗读" : "朗读回复", systemImage: isSpeaking ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(AppTheme.primary)
+                            .padding(.horizontal, 11)
+                            .padding(.vertical, 7)
+                            .background(AppTheme.softPurple, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(isSpeaking ? "停止朗读 AI 回复" : "朗读 AI 回复")
+                }
 
                 if !examples.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
@@ -413,12 +434,73 @@ struct MessageRow: View {
         }
     }
 
+    private var canSpeak: Bool {
+        message.sender == .ai
+            && message.state == .ready
+            && !message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && examples.isEmpty
+    }
+
     private var bubbleColor: Color {
         switch message.sender {
         case .user:
             return AppTheme.softBlue
         case .ai:
             return message.state == .failed ? AppTheme.error.opacity(0.08) : AppTheme.surface
+        }
+    }
+}
+
+@MainActor
+final class SpeechPlaybackController: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
+    @Published private(set) var activeMessageID: UUID?
+
+    private let synthesizer = AVSpeechSynthesizer()
+
+    override init() {
+        super.init()
+        synthesizer.delegate = self
+    }
+
+    func toggle(messageID: UUID, text: String) {
+        if activeMessageID == messageID {
+            stop()
+            return
+        }
+        stop()
+
+        let cleanText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanText.isEmpty else { return }
+
+        let utterance = AVSpeechUtterance(string: cleanText)
+        utterance.voice = AVSpeechSynthesisVoice(language: "zh-CN")
+        utterance.rate = AVSpeechUtteranceDefaultSpeechRate
+        activeMessageID = messageID
+        synthesizer.speak(utterance)
+    }
+
+    func stop() {
+        if synthesizer.isSpeaking {
+            synthesizer.stopSpeaking(at: .immediate)
+        }
+        activeMessageID = nil
+    }
+
+    nonisolated func speechSynthesizer(
+        _ synthesizer: AVSpeechSynthesizer,
+        didFinish utterance: AVSpeechUtterance
+    ) {
+        Task { @MainActor in
+            activeMessageID = nil
+        }
+    }
+
+    nonisolated func speechSynthesizer(
+        _ synthesizer: AVSpeechSynthesizer,
+        didCancel utterance: AVSpeechUtterance
+    ) {
+        Task { @MainActor in
+            activeMessageID = nil
         }
     }
 }
