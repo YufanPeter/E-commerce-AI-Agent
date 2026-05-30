@@ -324,9 +324,15 @@ private struct APIErrorEnvelope: Decodable {
 
 /// 跨轮复用 session_id 的线程安全存储。
 private actor SessionIDStore {
-    private var sessionID: String?
+    private static let defaultsKey = "cartpilot.agent.sessionID"
+    private var sessionID: String? = UserDefaults.standard.string(forKey: defaultsKey)
+
     func current() -> String? { sessionID }
-    func update(_ value: String) { sessionID = value }
+
+    func update(_ value: String) {
+        sessionID = value
+        UserDefaults.standard.set(value, forKey: Self.defaultsKey)
+    }
 }
 
 /// 真实 Agent 服务：连接后端 `/chat/stream`（SSE），驱动 LLM + RAG 流水线。
@@ -446,11 +452,17 @@ final class RESTAgentService: AgentServicing {
             )
 
         case "tool_result":
+            if let comparison = Self.extractComparison(fromToolResult: bytes) {
+                continuation.yield(AgentStreamEventPayload(type: .comparison, comparison: comparison))
+            }
             let ids = Self.extractProductIDs(fromToolResult: bytes)
             guard !ids.isEmpty else { return }
-            // 补全：Agent 只给精简卡片，这里用商品 ID 取完整数据用于渲染。
-            if let payloads = try? await productService.fetchProducts(productIDs: ids), !payloads.isEmpty {
-                continuation.yield(AgentStreamEventPayload(type: .products, products: payloads))
+            // 补全商品详情可能比 token 生成慢，不能阻塞 SSE 主循环；否则 UI 会等商品接口返回后
+            // 才继续显示后续文本，看起来就像“不支持流式”。
+            Task { [productService] in
+                if let payloads = try? await productService.fetchProducts(productIDs: ids), !payloads.isEmpty {
+                    continuation.yield(AgentStreamEventPayload(type: .products, products: payloads))
+                }
             }
 
         case "token":
@@ -497,6 +509,42 @@ final class RESTAgentService: AgentServicing {
             return []
         }
         return products.compactMap { $0["product_id"] as? String }
+    }
+
+    private static func extractComparison(fromToolResult bytes: Data) -> ProductComparisonPayload? {
+        guard
+            let obj = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
+            (obj["tool_name"] as? String) == "compare",
+            let payload = obj["payload"] as? [String: Any],
+            let products = payload["products"] as? [[String: Any]],
+            let dimensions = payload["dimensions"] as? [[String: Any]],
+            products.count >= 2,
+            !dimensions.isEmpty
+        else {
+            return nil
+        }
+
+        let productIDs = products.compactMap { $0["product_id"] as? String }
+        let rows = dimensions.enumerated().map { index, dimension in
+            let label = dimension["label"] as? String ?? "维度"
+            let rawValues = dimension["values"] as? [Any] ?? []
+            let values = rawValues.enumerated().map { valueIndex, rawValue in
+                ProductComparisonValue(
+                    productID: valueIndex < productIDs.count ? productIDs[valueIndex] : "\(valueIndex)",
+                    text: String(describing: rawValue),
+                    isHighlighted: false,
+                    evidence: []
+                )
+            }
+            return ProductComparisonRow(id: "row-\(index)", label: label, values: values)
+        }
+
+        return ProductComparisonPayload(
+            title: "商品对比",
+            products: [],
+            rows: rows,
+            recommendation: ""
+        )
     }
 }
 

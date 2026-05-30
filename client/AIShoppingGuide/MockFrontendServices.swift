@@ -43,12 +43,19 @@ final class MockAgentService: AgentServicing {
                     return
                 }
 
-                continuation.yield(
-                    AgentStreamEventPayload(
-                        type: .textDelta,
-                        textDelta: "I found options that match your request."
+                for piece in ["I found ", "options that ", "match your ", "request."] {
+                    guard !Task.isCancelled else {
+                        continuation.finish()
+                        return
+                    }
+                    continuation.yield(
+                        AgentStreamEventPayload(
+                            type: .textDelta,
+                            textDelta: piece
+                        )
                     )
-                )
+                    try? await Task.sleep(nanoseconds: 120_000_000)
+                }
                 continuation.yield(
                     AgentStreamEventPayload(
                         type: .products,

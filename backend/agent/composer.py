@@ -104,6 +104,25 @@ def _trim_payload_for_llm(payload: dict[str, Any]) -> dict[str, Any]:
         {k: h.get(k) for k in _HIT_KEEP_KEYS if k in h}
         for h in hits
     ]
+
+    # product_detail：单品全貌（卖点 + FAQ + 评价）。tool 侧已裁过样，直接透传。
+    if isinstance(payload.get("product"), dict):
+        trimmed["product"] = payload["product"]
+    if payload.get("focus_aspect"):
+        trimmed["focus_aspect"] = payload["focus_aspect"]
+
+    # compare：结构化对比维度表，透传给 LLM 生成决策话术。
+    if payload.get("dimensions"):
+        trimmed["dimensions"] = payload["dimensions"]
+
+    # cart：购物车快照 / 订单。透传给 LLM 自然口吻汇报，已是精简结构。
+    if payload.get("cart"):
+        trimmed["cart"] = payload["cart"]
+    if payload.get("order"):
+        trimmed["order"] = payload["order"]
+    if payload.get("action"):
+        trimmed["action"] = payload["action"]
+
     return trimmed
 
 

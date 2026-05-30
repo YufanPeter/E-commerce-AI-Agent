@@ -10,9 +10,9 @@ struct GuideView: View {
     @State private var showHistory = false
     @State private var selectedProduct: Product?
     @State private var lastQuery: String = ""
+    @State private var agentService = RESTAgentService()
     @FocusState private var isInputFocused: Bool
 
-    private let agentService = RESTAgentService()
     private let examples = ["适合油皮的洗面奶", "200 元内蓝牙耳机", "轻量跑鞋", "不要含酒精的防晒"]
     private let histories = [
         HistoryItem(title: "无酒精防晒推荐", subtitle: "今天 21:42 · 3 个商品"),
@@ -96,6 +96,13 @@ struct GuideView: View {
             .onChange(of: messages.count) { _, _ in
                 if let last = messages.last?.id {
                     withAnimation(.easeOut(duration: 0.25)) {
+                        proxy.scrollTo(last, anchor: .bottom)
+                    }
+                }
+            }
+            .onChange(of: messages.last?.text) { _, _ in
+                if let last = messages.last?.id {
+                    withAnimation(.easeOut(duration: 0.18)) {
                         proxy.scrollTo(last, anchor: .bottom)
                     }
                 }
@@ -208,7 +215,9 @@ struct GuideView: View {
         Task { @MainActor in
             var narrative = ""
             var hydrated: [Product] = []
+            var comparison: ProductComparisonPayload?
             var statusText = "正在理解你的需求"
+            var didFinish = false
 
             do {
                 let request = AgentRequestPayload(text: query)
@@ -221,7 +230,8 @@ struct GuideView: View {
                                 updateLastAI(
                                     text: statusText,
                                     state: status.phase.messageState,
-                                    products: hydrated
+                                    products: hydrated,
+                                    comparison: comparison
                                 )
                             }
                         }
@@ -230,21 +240,38 @@ struct GuideView: View {
                         hydrated = event.products.map(Product.init(payload:))
                         updateLastAI(
                             text: narrative.isEmpty ? statusText : narrative,
-                            state: .generating,
-                            products: hydrated
+                            state: didFinish ? .ready : .generating,
+                            products: hydrated,
+                            comparison: comparison
+                        )
+
+                    case .comparison:
+                        comparison = event.comparison
+                        updateLastAI(
+                            text: narrative.isEmpty ? statusText : narrative,
+                            state: didFinish ? .ready : .generating,
+                            products: hydrated,
+                            comparison: comparison
                         )
 
                     case .textDelta:
                         if let piece = event.textDelta {
                             narrative += piece
-                            updateLastAI(text: narrative, state: .generating, products: hydrated)
+                            updateLastAI(
+                                text: narrative,
+                                state: .generating,
+                                products: hydrated,
+                                comparison: comparison
+                            )
                         }
 
                     case .done:
+                        didFinish = true
                         updateLastAI(
                             text: narrative.isEmpty ? statusText : narrative,
                             state: .ready,
-                            products: hydrated
+                            products: hydrated,
+                            comparison: comparison
                         )
 
                     default:
@@ -258,7 +285,8 @@ struct GuideView: View {
                     updateLastAI(
                         text: narrative.isEmpty ? statusText : narrative,
                         state: .ready,
-                        products: hydrated
+                        products: hydrated,
+                        comparison: comparison
                     )
                 }
             } catch {
@@ -278,12 +306,14 @@ struct GuideView: View {
         text: String,
         state: MessageState,
         products: [Product] = [],
+        comparison: ProductComparisonPayload? = nil,
         canRetry: Bool = false
     ) {
         guard let index = messages.lastIndex(where: { $0.sender == .ai }) else { return }
         messages[index].text = text
         messages[index].state = state
         messages[index].products = products
+        messages[index].comparison = comparison
         messages[index].canRetry = canRetry
     }
 
@@ -342,6 +372,10 @@ struct MessageRow: View {
                     Button("重试", action: onRetry)
                         .buttonStyle(.borderedProminent)
                         .tint(AppTheme.primary)
+                }
+
+                if let comparison = message.comparison {
+                    ComparisonTable(comparison: comparison, products: message.products)
                 }
 
                 ForEach(message.products) { product in
@@ -457,6 +491,60 @@ struct ProductCard: View {
         }
         .padding(14)
         .floatingLiquidPanel(cornerRadius: 22)
+    }
+}
+
+struct ComparisonTable: View {
+    let comparison: ProductComparisonPayload
+    let products: [Product]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(comparison.title)
+                .font(.headline)
+                .foregroundStyle(AppTheme.textPrimary)
+
+            VStack(spacing: 0) {
+                ForEach(comparison.rows) { row in
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(row.label)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(AppTheme.textSecondary)
+
+                        ForEach(Array(row.values.enumerated()), id: \.offset) { index, value in
+                            HStack(alignment: .top, spacing: 8) {
+                                Text(productName(for: index, productID: value.productID))
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(AppTheme.primary)
+                                    .frame(width: 72, alignment: .leading)
+
+                                Text(value.text)
+                                    .font(.caption)
+                                    .foregroundStyle(AppTheme.textPrimary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }
+                    .padding(.vertical, 10)
+
+                    if row.id != comparison.rows.last?.id {
+                        Divider().overlay(AppTheme.border)
+                    }
+                }
+            }
+        }
+        .padding(14)
+        .floatingLiquidPanel(cornerRadius: 18)
+    }
+
+    private func productName(for index: Int, productID: String) -> String {
+        if index < products.count {
+            return products[index].title
+        }
+        if let product = products.first(where: { $0.id == productID }) {
+            return product.title
+        }
+        return "商品\(index + 1)"
     }
 }
 

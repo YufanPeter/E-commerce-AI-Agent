@@ -191,6 +191,7 @@ struct ChatMessage: Identifiable {
     var text: String
     var state: MessageState = .ready
     var products: [Product] = []
+    var comparison: ProductComparisonPayload?
     var canRetry: Bool = false
 }
 
