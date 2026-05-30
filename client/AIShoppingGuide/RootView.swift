@@ -121,6 +121,22 @@ struct RootView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .animation(.easeOut(duration: 0.16), value: selectedTab)
 
+            // 底部模糊遮罩：卡片滑到导航栏区域时自然淡出，保证导航栏清晰可读
+            Rectangle()
+                .fill(.ultraThinMaterial)
+                .frame(height: AppTheme.bottomTabBarHeight + 64)
+                .mask(
+                    LinearGradient(
+                        colors: [.clear, .black.opacity(0.6), .black, .black],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                .allowsHitTesting(false)
+                .ignoresSafeArea(edges: .bottom)
+                .offset(y: keyboardOffset)
+
             NativeTabBar(selectedTab: $selectedTab)
                 .padding(.horizontal, 18)
                 .padding(.bottom, AppTheme.bottomTabBarBottomPadding)
