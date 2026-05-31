@@ -1,3 +1,5 @@
+import AVFoundation
+import Speech
 import SwiftUI
 
 struct GuideView: View {
@@ -10,6 +12,7 @@ struct GuideView: View {
     @State private var showHistory = false
     @State private var selectedProduct: Product?
     @State private var lastQuery: String = ""
+    @StateObject private var speechInput = SpeechInputController()
     @FocusState private var isInputFocused: Bool
 
     private let agentService = RESTAgentService()
@@ -149,10 +152,14 @@ struct GuideView: View {
                     .foregroundStyle(AppTheme.textPrimary)
                     .focused($isInputFocused)
 
-                Button {} label: {
-                    Image(systemName: "mic.fill")
+                Button {
+                    Task {
+                        await speechInput.toggle()
+                    }
+                } label: {
+                    Image(systemName: speechInput.isListening ? "waveform.circle.fill" : "mic.fill")
                         .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(AppTheme.textSecondary)
+                        .foregroundStyle(speechInput.isListening ? AppTheme.primary : AppTheme.textSecondary)
                         .frame(width: 32, height: 32)
                 }
                 .buttonStyle(.plain)
@@ -174,6 +181,18 @@ struct GuideView: View {
             .padding(.vertical, 8)
             .padding(.horizontal, 10)
             .floatingLiquidPanel(cornerRadius: 28)
+
+            if let error = speechInput.errorMessage {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(AppTheme.error)
+                    .padding(.horizontal, 14)
+            }
+        }
+        .onChange(of: speechInput.transcript) { _, newValue in
+            if speechInput.isListening {
+                inputText = newValue
+            }
         }
     }
 
@@ -184,6 +203,7 @@ struct GuideView: View {
     private func sendCurrentInput() {
         let trimmed = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        speechInput.stop()
         inputText = ""
         isInputFocused = false
         send(trimmed)
@@ -191,6 +211,7 @@ struct GuideView: View {
 
     private func send(_ query: String) {
         isComposerExpanded = false
+        speechInput.stop()
         lastQuery = query
         messages.append(ChatMessage(sender: .user, text: query))
         messages.append(ChatMessage(sender: .ai, text: "正在理解你的需求", state: .understanding))
@@ -234,6 +255,11 @@ struct GuideView: View {
                             products: hydrated
                         )
 
+                    case .cartSnapshot:
+                        if let snapshot = event.cartSnapshot {
+                            syncCartItems(from: snapshot)
+                        }
+
                     case .textDelta:
                         if let piece = event.textDelta {
                             narrative += piece
@@ -264,6 +290,16 @@ struct GuideView: View {
             } catch {
                 updateLastAI(text: errorMessage(error), state: .failed, canRetry: true)
             }
+        }
+    }
+
+    private func syncCartItems(from snapshot: CartSnapshotPayload) {
+        cartItems = snapshot.items.map { item in
+            CartItem(
+                product: Product(payload: item.product),
+                selectedOptions: item.selectedOptions,
+                quantity: item.quantity
+            )
         }
     }
 
@@ -374,6 +410,136 @@ struct MessageRow: View {
     }
 }
 
+@MainActor
+final class SpeechInputController: NSObject, ObservableObject, SFSpeechRecognizerDelegate {
+    @Published private(set) var isListening = false
+    @Published private(set) var transcript = ""
+    @Published private(set) var errorMessage: String?
+
+    private let speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "zh_CN"))
+    private let audioEngine = AVAudioEngine()
+    private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
+    private var recognitionTask: SFSpeechRecognitionTask?
+
+    override init() {
+        super.init()
+        speechRecognizer?.delegate = self
+    }
+
+    func toggle() async {
+        if isListening {
+            stop()
+        } else {
+            await start()
+        }
+    }
+
+    func start() async {
+        errorMessage = nil
+        guard speechRecognizer?.isAvailable == true else {
+            errorMessage = "语音识别暂时不可用。"
+            return
+        }
+        guard await requestSpeechAuthorization() else {
+            errorMessage = "请允许语音识别权限后再使用语音输入。"
+            return
+        }
+        guard await requestMicrophoneAuthorization() else {
+            errorMessage = "请允许麦克风权限后再使用语音输入。"
+            return
+        }
+
+        recognitionTask?.cancel()
+        recognitionTask = nil
+        transcript = ""
+
+        do {
+            let audioSession = AVAudioSession.sharedInstance()
+            try audioSession.setCategory(.record, mode: .measurement, options: .duckOthers)
+            try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
+
+            let request = SFSpeechAudioBufferRecognitionRequest()
+            request.shouldReportPartialResults = true
+            recognitionRequest = request
+
+            let inputNode = audioEngine.inputNode
+            inputNode.removeTap(onBus: 0)
+            let recordingFormat = inputNode.outputFormat(forBus: 0)
+            inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak request] buffer, _ in
+                request?.append(buffer)
+            }
+
+            audioEngine.prepare()
+            try audioEngine.start()
+            isListening = true
+
+            recognitionTask = speechRecognizer?.recognitionTask(with: request) { [weak self] result, error in
+                Task { @MainActor in
+                    guard let self else { return }
+                    if let result {
+                        self.transcript = result.bestTranscription.formattedString
+                        if result.isFinal {
+                            self.stop()
+                        }
+                    }
+                    if error != nil {
+                        self.stop()
+                    }
+                }
+            }
+        } catch {
+            stop()
+            errorMessage = "语音输入启动失败，请稍后重试。"
+        }
+    }
+
+    func stop() {
+        if audioEngine.isRunning {
+            audioEngine.stop()
+            audioEngine.inputNode.removeTap(onBus: 0)
+        }
+        recognitionRequest?.endAudio()
+        recognitionTask?.cancel()
+        recognitionRequest = nil
+        recognitionTask = nil
+        isListening = false
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    }
+
+    private func requestSpeechAuthorization() async -> Bool {
+        await withCheckedContinuation { continuation in
+            SFSpeechRecognizer.requestAuthorization { status in
+                continuation.resume(returning: status == .authorized)
+            }
+        }
+    }
+
+    private func requestMicrophoneAuthorization() async -> Bool {
+        await withCheckedContinuation { continuation in
+            if #available(iOS 17.0, *) {
+                AVAudioApplication.requestRecordPermission { granted in
+                    continuation.resume(returning: granted)
+                }
+            } else {
+                AVAudioSession.sharedInstance().requestRecordPermission { granted in
+                    continuation.resume(returning: granted)
+                }
+            }
+        }
+    }
+
+    nonisolated func speechRecognizer(
+        _ speechRecognizer: SFSpeechRecognizer,
+        availabilityDidChange available: Bool
+    ) {
+        if !available {
+            Task { @MainActor in
+                stop()
+                errorMessage = "语音识别暂时不可用。"
+            }
+        }
+    }
+}
 struct ComposerAction: View {
     let icon: String
     let title: String

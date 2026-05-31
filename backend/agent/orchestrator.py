@@ -41,6 +41,7 @@ from agent.composer import AnswerComposer
 from agent.intent_router import IntentDecision, KNOWN_TOOLS, route
 from agent.session import AgentSession
 from agent.tools.base import Tool, ToolResult
+from agent.tools.cart import CartTool
 from agent.tools.clarify import ClarifyTool
 from agent.tools.compare import CompareTool
 from agent.tools.fallback import FallbackTool
@@ -92,6 +93,7 @@ _TOOL_WORKING_HINT = {
     "refine": "正在重新筛选…",
     "compare": "正在对比商品…",
     "product_detail": "正在查看商品详情…",
+    "cart": "正在处理购物车…",
     "clarify": "正在整理追问…",
     "fallback": "正在生成回复…",
 }
@@ -129,6 +131,7 @@ class Agent:
             "refine": RefineTool(),
             "compare": CompareTool(),
             "product_detail": ProductDetailTool(),
+            "cart": CartTool(),
             "clarify": ClarifyTool(),
             "fallback": FallbackTool(),
         }
