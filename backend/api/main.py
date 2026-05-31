@@ -108,7 +108,7 @@ def _get_agent() -> Agent:
 
 @app.on_event("startup")
 def _warmup() -> None:
-    """启动预热：在后台线程把 Agent / SearchService / embedding / API rerank 拉热。
+    """启动预热：在后台线程把 Agent / SearchService / embedding / reranker 拉热。
 
     否则首条真实查询会在 SSE 请求内部触发 ~30-90s 的模型懒加载，
     导致流卡在 status(tool) 之后迟迟收不到 tool_result。
@@ -126,7 +126,7 @@ def _warmup() -> None:
 
             _get_agent()
             svc = get_search_service()
-            # 跑一次真实检索，强制 embedding + API rerank HTTP client 完成初始化
+            # 跑一次真实检索，强制 embedding + reranker(CrossEncoder) 完成加载
             svc.search("预热查询", top_k_products=1)
             logger.info("Warmup done: models are hot.")
         except Exception:  # noqa: BLE001 - 预热失败不应阻止服务运行

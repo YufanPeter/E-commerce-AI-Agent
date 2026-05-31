@@ -15,10 +15,6 @@ ARK_MODEL=你的endpoint_id
 # 向量库 embedding（豆包多模态 embedding 接入点）
 ARK_EMBEDDING_API_KEY=你的embedding_API_Key   # 不填则回退复用 ARK_API_KEY
 ARK_EMBEDDING_MODEL=你的embedding_endpoint_id
-# 云端 rerank（可选；不填时可用 USE_RERANK=0 只走向量排序）
-ARK_RERANKING_API_KEY=你的rerank_API_Key      # 不填则回退复用 ARK_API_KEY
-ARK_RERANKING_MODEL=doubao-seed-rerank
-# ARK_RERANKING_PATH=/rerank                 # 可选：你的 rerank endpoint 路径不同再改
 # 图片存储网址
 ARK_BASE_URL=https://ark.cn-*
 ```
@@ -39,22 +35,19 @@ ARK_BASE_URL=https://ark.cn-*
 # 监听局域网，供 iOS 真机连接（手机与 Mac 同一 Wi-Fi）
 HOST=0.0.0.0 ./scripts/start_backend.sh
 
-# 禁用云端 rerank（链路只走向量召回排序）
+# 禁用 CrossEncoder 精排（机器繁忙 / 模型加载慢时用，链路只走向量召回排序）
 USE_RERANK=0 ./scripts/start_backend.sh
 
 # 自定义端口
 PORT=8000 ./scripts/start_backend.sh
 ```
 
-> Rerank 已改为 API 调用，不再安装本地 `torch` / `sentence-transformers`。`USE_RERANK=0` 会跳过云端 rerank，召回质量略降但请求更少；默认启用精排。当前代码优先读取 `ARK_RERANKING_API_KEY` / `ARK_RERANKING_MODEL`，默认请求路径是 `/rerank`，路径不同可设置 `ARK_RERANKING_PATH`。
+> `USE_RERANK=0` 会跳过 reranker（约 280MB 模型）的加载与精排，召回质量略降但启动更快、低配机器更稳；默认启用精排。
 
 也可以用 Docker 固定后端运行环境，便于换机器和后续云部署：
 
 ```bash
-./scripts/start_backend.sh --docker
-
-# 后台运行
-./scripts/start_backend.sh --docker -d
+docker compose up --build
 ```
 
 详细镜像构建、火山云镜像仓库推送和云服务器运行步骤见 [Backend Docker 部署说明](docs/backend_docker_deploy.md)。

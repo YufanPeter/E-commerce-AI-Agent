@@ -1,4 +1,8 @@
 chromadb==1.5.9
+# sentence-transformers 5.x 在 Python 3.9 下 import 会挂死。
+# 我们要么用 Python 3.10+ 跑 5.x，要么在 3.9 上锁到 4.x。
+# 这里要求 Python 3.10+，避免踩坑。
+sentence-transformers>=2.7.0,<6
 openai>=1.40.0
 python-dotenv>=1.0.0
 fastapi>=0.111.0

@@ -33,7 +33,7 @@ from functools import lru_cache
 from typing import Any
 
 from rag.retriever import ChromaRetriever, RetrievedChunk
-from rag.reranker import ApiReranker, RerankedChunk, get_reranker
+from rag.reranker import CrossEncoderReranker, RerankedChunk, get_reranker
 from search.query_understanding import ParsedQuery, understand_query
 from search.where_builder import build_chroma_where
 
@@ -41,10 +41,10 @@ logger = logging.getLogger(__name__)
 
 
 def _env_use_rerank() -> bool:
-    """从环境变量 USE_RERANK 读取是否启用 API 精排，默认启用。
+    """从环境变量 USE_RERANK 读取是否启用精排，默认启用。
 
-    设为 0/false/no/off 可禁用 reranker，链路只走向量距离排序。Docker
-    也默认启用云端 rerank；需要减少 API 请求时可显式设为 0。
+    设为 0/false/no/off 可禁用 reranker——在机器繁忙、CrossEncoder 模型
+    加载缓慢时，禁用后链路只走向量距离排序，避免请求卡在模型加载上。
     """
     raw = os.getenv("USE_RERANK")
     if raw is None:
@@ -62,11 +62,11 @@ class ProductHit:
     category: str
     sub_category: str
     base_price: float
-    # 商品排序分数：启用 API rerank 后用 rerank_score（高 = 好），
+    # 商品排序分数：加了 rerank 后用 rerank_score（高 = 好），
     # 未启用 rerank 时退化为 -best_distance（距离越小分越高）。
     score: float
     best_distance: float | None         # 保留原始 Chroma 距离供排查
-    rerank_score: float | None          # API rerank 原始分数，未 rerank 时为 None
+    rerank_score: float | None          # CrossEncoder 原始分数，未 rerank 时为 None
     evidence: list[RetrievedChunk] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -104,22 +104,23 @@ class SearchResult:
 
 
 class SearchService:
-    """检索服务：组合 query 理解、Chroma 召回、API 精排、后置过滤、商品聚合。"""
+    """检索服务：组合 query 理解、Chroma 召回、CrossEncoder 精排、后置过滤、商品聚合。"""
 
     def __init__(
         self,
         retriever: ChromaRetriever | None = None,
-        reranker: ApiReranker | None = None,
+        reranker: CrossEncoderReranker | None = None,
         use_rerank: bool | None = None,
     ) -> None:
         # 允许测试时注入 mock retriever/reranker；生产环境用默认单例。
         self._retriever = retriever or ChromaRetriever()
         # use_rerank 未显式传入时由环境变量 USE_RERANK 决定（默认启用）。
         self._use_rerank = _env_use_rerank() if use_rerank is None else use_rerank
-        # reranker 延迟加载：__init__ 只记录意图，首次 search 时才创建 HTTP client。
+        # reranker 延迟加载：__init__ 只记录意图，首次 search 时才下模型，
+        # 避免 use_rerank=False 的场景白费 ~280MB 内存 + ~2s 启动。
         self._reranker = reranker
 
-    def _get_reranker(self) -> ApiReranker:
+    def _get_reranker(self) -> CrossEncoderReranker:
         if self._reranker is None:
             self._reranker = get_reranker()
         return self._reranker
@@ -133,8 +134,8 @@ class SearchService:
     ) -> SearchResult:
         """端到端入口。
 
-        top_k_chunks: Chroma 召回的 chunk 数量。rerank 时要多召（默认 50）
-                      给 API 精排选择余地；不 rerank 时 30 也够。
+        top_k_chunks: Chroma 召回的 chunk 数量。rerank 续班时要多召（默认 50）
+                      给 CrossEncoder 选择余地；不 rerank 时 30 也够。
         top_k_products: 聚合后返回的商品数量。
         base: 上一轮结构化检索意图。非空表示这是一次"细化"——把本轮解析叠加到
               base 上（见 ParsedQuery.merge_base），避免丢失品类/价格等上下文。
@@ -168,8 +169,8 @@ class SearchService:
             ]
         filtered_count = len(chunks)
 
-        # ④ API 精排（可选）
-        # rerank 失败（配置缺失 / 网络超时 / 服务异常）不应让整条链路报错：
+        # ④ CrossEncoder 精排（可选）
+        # rerank 失败（模型加载超时 / 推理异常）不应让整条链路报错：
         # 捕获后降级为向量距离排序，保证始终有结果返回。
         reranked_ok = False
         if self._use_rerank and chunks:
@@ -301,7 +302,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="端到端检索 demo")
     parser.add_argument("query")
     parser.add_argument("--top-k", type=int, default=10)
-    parser.add_argument("--no-rerank", action="store_true", help="不走 API 精排（快但质量低）。")
+    parser.add_argument("--no-rerank", action="store_true", help="不走 CrossEncoder 精排（快但质量低）。")
     args = parser.parse_args()
 
     service = SearchService(use_rerank=not args.no_rerank)
