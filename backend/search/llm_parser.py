@@ -210,14 +210,18 @@ def _extract_tool_arguments(response: Any) -> dict[str, Any]:
 def _loads_arguments(raw: str) -> dict[str, Any]:
     """容错解析 function arguments。
 
-    豆包 function calling 偶发返回畸形 JSON，已知三类污染：
+    豆包 function calling 偶发返回畸形 JSON，已知四类污染：
     1. 多包一层 ```json code fence、前后夹带说明文字；
     2. 把内部工具标记 ``<parameter name="x">v</parameter>`` 泄漏进 JSON 串
        （表现为 ``"category" string="null">数码电子</parameter>``，缺冒号且夹 XML）；
-    3. 上述两者叠加。
+    3. 把内部 tool-call 包裹标记（``</function>``、``</seed:tool_call>`` 等）
+       泄漏进 arguments，且常在 JSON 闭合前就插入停止标记导致 JSON 被截断
+       （表现为 ``{...]\n</function>`` 这类缺最外层 ``}`` 的串）；
+    4. 上述多者叠加。
     直接 ``json.loads`` 会让整条检索链崩溃并降级到无过滤的纯向量召回（会召回到
     跨品类的无关商品）。这里做多级解析：原样 → 剥 code fence + 截取首个 JSON 对象
-    → 修复 <parameter> 泄漏。全部失败才抛异常，交由上层降级。
+    → 修复 <parameter> 泄漏 → 剥 tool-call 协议噪声 + 括号配平补全截断。
+    全部失败才抛异常，交由上层降级。
     """
     try:
         return json.loads(raw)
@@ -243,7 +247,65 @@ def _loads_arguments(raw: str) -> dict[str, Any]:
         r_end = repaired.rfind("}")
         if r_start != -1 and r_end != -1 and r_end > r_start:
             repaired = repaired[r_start : r_end + 1]
-        return json.loads(repaired)
+        try:
+            return json.loads(repaired)
+        except json.JSONDecodeError:
+            # 最终兜底：豆包把内部 tool-call 标记（</function>、</seed:tool_call>
+            # 等）泄漏进 arguments，且常在 JSON 闭合前插入停止标记导致截断。
+            # 剥掉协议噪声后对未闭合的 { / [ 做括号配平补全，再解析。
+            return json.loads(_strip_tool_noise_and_balance(text))
+
+
+def _balance_brackets(text: str) -> str:
+    """为被截断的 JSON 补全缺失的闭合括号。
+
+    正确跳过字符串字面量（含转义），用栈统计未闭合的 ``{`` / ``[``，
+    在末尾按逆序补上对应的 ``}`` / ``]``。
+    """
+    stack: list[str] = []
+    in_str = False
+    esc = False
+    for ch in text:
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch in "{[":
+            stack.append(ch)
+        elif ch in "}]" and stack:
+            stack.pop()
+    closers = "".join("}" if c == "{" else "]" for c in reversed(stack))
+    return text + closers
+
+
+def _strip_tool_noise_and_balance(text: str) -> str:
+    """剥离豆包泄漏的 tool-call 协议标记，并对截断的 JSON 做括号配平。
+
+    已知畸形样例（单行）::
+
+        {"requests": [{...}, {..."防晒霜"}]\n</function>\n</seed:tool_call>
+
+    JSON 主体本身基本完整，只是缺最外层 ``}`` 且尾部拖着协议标记。
+    策略：从首个 ``{`` 起截取，砍掉首个 XML/协议标记及其之后内容，再配平括号。
+    """
+    import re
+
+    start = text.find("{")
+    if start == -1:
+        return text
+    body = text[start:]
+    # 砍掉首个泄漏的 XML/协议标记（如 </function>、</seed:tool_call>）及之后内容。
+    # function arguments 的 JSON 值是中文商品词，不含裸 <tag>，故此处切割安全。
+    match = re.search(r"<\s*/?\s*[A-Za-z][\w:.-]*[^>]*>", body)
+    if match:
+        body = body[: match.start()]
+    return _balance_brackets(body.rstrip())
 
 
 def _repair_param_leak(text: str) -> str:
