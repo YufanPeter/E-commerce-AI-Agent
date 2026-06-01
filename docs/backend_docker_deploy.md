@@ -26,9 +26,9 @@ ARK_MODEL=你的endpoint_id
 ARK_BASE_URL=https://ark.cn-beijing.volces.com/api/v3/
 ARK_EMBEDDING_API_KEY=你的embedding_API_Key
 ARK_EMBEDDING_MODEL=你的embedding_endpoint_id
-ARK_RERANKING_API_KEY=你的rerank_API_Key
-ARK_RERANKING_MODEL=doubao-seed-rerank
-# ARK_RERANKING_PATH=/rerank
+ZHIPU_API_KEY=你的智谱APIKey
+RERANK_MODEL=rerank
+RERANK_BASE_URL=https://open.bigmodel.cn/api/paas/v4/rerank
 ```
 
 ## 本地运行
@@ -106,6 +106,6 @@ docker run -d \
 
 - `.env` 不要打进镜像，也不要提交到 Git。
 - 如果更换 embedding endpoint，必须重建 `backend/storage/chroma` 后重新构建镜像。
-- Rerank 走云端 API，不再安装本地 `torch` / `sentence-transformers` / CUDA 依赖。
-- Docker 默认 `USE_RERANK=1`，通过 `ARK_RERANKING_API_KEY`、`ARK_RERANKING_MODEL` 调用云端精排；默认请求路径是 `/rerank`，路径不同可设置 `ARK_RERANKING_PATH`；需要减少 API 请求时运行容器时设为 `USE_RERANK=0`。
+- Rerank 走智谱云端 API，不再安装本地 `torch` / `sentence-transformers` / CUDA 依赖。
+- Docker 默认 `USE_RERANK=1`，通过 `ZHIPU_API_KEY`、`RERANK_MODEL`、`RERANK_BASE_URL` 调用智谱精排；调试阶段不做失败降级，智谱接口失败会直接报错。需要减少 API 请求时运行容器时设为 `USE_RERANK=0`。
 - 如果不想把 `backend/storage` 打进镜像，可以在云服务器挂载外部目录到 `/app/backend/storage`。

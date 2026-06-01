@@ -67,14 +67,14 @@ def test_search_service_uses_api_rerank(monkeypatch):
     assert result.hits[0].rerank_score == 0.95
 
 
-def test_search_service_falls_back_when_api_rerank_fails(monkeypatch):
+def test_search_service_raises_when_api_rerank_fails(monkeypatch):
     monkeypatch.setattr("search.search_service.understand_query", lambda query: _parsed())
 
-    result = SearchService(
-        retriever=_FakeRetriever(),
-        reranker=_BoomReranker(),
-        use_rerank=True,
-    ).search("轻量跑鞋", top_k_products=2)
+    import pytest
 
-    assert [hit.product_id for hit in result.hits] == ["b", "a"]
-    assert all(hit.rerank_score is None for hit in result.hits)
+    with pytest.raises(RuntimeError, match="rerank api down"):
+        SearchService(
+            retriever=_FakeRetriever(),
+            reranker=_BoomReranker(),
+            use_rerank=True,
+        ).search("轻量跑鞋", top_k_products=2)

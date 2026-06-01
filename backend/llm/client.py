@@ -12,8 +12,11 @@ import os
 from functools import lru_cache
 from pathlib import Path
 
+import httpx
 from dotenv import load_dotenv
 from openai import OpenAI
+
+DEFAULT_RERANK_BASE_URL = "https://open.bigmodel.cn/api/paas/v4/rerank"
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -88,48 +91,41 @@ def get_embedding_client() -> OpenAI:
 
 
 @lru_cache(maxsize=1)
-def get_rerank_client() -> OpenAI:
-    """rerank 专用客户端单例。
+def get_rerank_client() -> httpx.Client:
+    """rerank 专用 HTTP 客户端单例（智谱 ``/paas/v4/rerank``）。
 
-    Rerank 走云端 API，避免后端镜像安装 sentence-transformers / torch / CUDA
-    这类超大本地推理依赖。配置回退顺序：
-    - API Key：ARK_RERANKING_API_KEY → ARK_RERANK_API_KEY → ARK_API_KEY
-    - base_url：ARK_RERANKING_BASE_URL → ARK_RERANK_BASE_URL → ARK_BASE_URL → 默认 Ark 地址
+    精排改为云端 rerank API，避免后端镜像安装 sentence-transformers / torch 等
+    超大本地推理依赖。智谱 rerank 用 Bearer API Key 鉴权，直接复用 httpx。
+
+    配置只读取 ZHIPU_API_KEY；调试阶段不做其他 key 回退，避免接错服务。
     """
     _load_env_once()
-    api_key = (
-        os.getenv("ARK_RERANKING_API_KEY")
-        or os.getenv("ARK_RERANK_API_KEY")
-        or os.getenv("ARK_API_KEY")
-    )
+    api_key = os.getenv("ZHIPU_API_KEY")
     if not api_key:
         raise RuntimeError(
-            "缺少 rerank 的 API Key。请在 .env 中设置 ARK_RERANKING_API_KEY"
-            "（或复用 ARK_API_KEY）。"
+            "缺少 rerank 的 API Key。请在 .env 中设置 ZHIPU_API_KEY；"
+            "不需要 rerank 时请设置 USE_RERANK=0。"
         )
-    base_url = (
-        os.getenv("ARK_RERANKING_BASE_URL")
-        or os.getenv("ARK_RERANK_BASE_URL")
-        or os.getenv("ARK_BASE_URL")
-        or "https://ark.cn-beijing.volces.com/api/v3/"
-    )
-    timeout = float(os.getenv(
-        "ARK_RERANKING_TIMEOUT",
-        os.getenv("ARK_RERANK_TIMEOUT", os.getenv("ARK_TIMEOUT", "30")),
-    ))
-    max_retries = int(os.getenv("ARK_MAX_RETRIES", "1"))
-    return OpenAI(
-        api_key=api_key,
-        base_url=base_url,
+    timeout = float(os.getenv("RERANK_TIMEOUT", os.getenv("ARK_TIMEOUT", "30")))
+    return httpx.Client(
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
         timeout=timeout,
-        max_retries=max_retries,
     )
+
+
+def get_rerank_base_url() -> str:
+    """返回 rerank 接口地址。"""
+    _load_env_once()
+    return os.getenv("RERANK_BASE_URL", DEFAULT_RERANK_BASE_URL)
 
 
 def get_rerank_model_id() -> str:
-    """返回 rerank 模型 / endpoint id。"""
+    """返回 rerank 模型名（如智谱 ``rerank``）。"""
     _load_env_once()
-    model = os.getenv("ARK_RERANKING_MODEL") or os.getenv("ARK_RERANK_MODEL")
+    model = os.getenv("RERANK_MODEL")
     if not model:
-        raise RuntimeError("缺少 ARK_RERANKING_MODEL。未配置时请设置 USE_RERANK=0。")
+        raise RuntimeError("缺少 RERANK_MODEL。请在 .env 中设置 RERANK_MODEL=rerank。")
     return model

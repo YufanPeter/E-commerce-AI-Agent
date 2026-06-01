@@ -15,10 +15,10 @@ ARK_MODEL=你的endpoint_id
 # 向量库 embedding（豆包多模态 embedding 接入点）
 ARK_EMBEDDING_API_KEY=你的embedding_API_Key   # 不填则回退复用 ARK_API_KEY
 ARK_EMBEDDING_MODEL=你的embedding_endpoint_id
-# 云端 rerank（可选；不填时可用 USE_RERANK=0 只走向量排序）
-ARK_RERANKING_API_KEY=你的rerank_API_Key      # 不填则回退复用 ARK_API_KEY
-ARK_RERANKING_MODEL=doubao-seed-rerank
-# ARK_RERANKING_PATH=/rerank                 # 可选：你的 rerank endpoint 路径不同再改
+# 智谱云端 rerank
+ZHIPU_API_KEY=你的智谱APIKey
+RERANK_MODEL=rerank
+RERANK_BASE_URL=https://open.bigmodel.cn/api/paas/v4/rerank
 # 图片存储网址
 ARK_BASE_URL=https://ark.cn-*
 ```
@@ -46,7 +46,7 @@ USE_RERANK=0 ./scripts/start_backend.sh
 PORT=8000 ./scripts/start_backend.sh
 ```
 
-> Rerank 已改为 API 调用，不再安装本地 `torch` / `sentence-transformers`。`USE_RERANK=0` 会跳过云端 rerank，召回质量略降但请求更少；默认启用精排。当前代码优先读取 `ARK_RERANKING_API_KEY` / `ARK_RERANKING_MODEL`，默认请求路径是 `/rerank`，路径不同可设置 `ARK_RERANKING_PATH`。
+> Rerank 走智谱 `/paas/v4/rerank`，不再安装本地 `torch` / `sentence-transformers`。默认启用精排，只读取 `ZHIPU_API_KEY`、`RERANK_MODEL`、`RERANK_BASE_URL`；调试阶段不做失败降级，智谱接口失败会直接报错。需要完全跳过精排时才设置 `USE_RERANK=0`。
 
 也可以用 Docker 固定后端运行环境，便于换机器和后续云部署：
 

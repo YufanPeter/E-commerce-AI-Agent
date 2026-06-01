@@ -26,7 +26,6 @@ from __future__ import annotations
 - 不做的事：业务重排（销量 / 评分 / 个性化）放在更上层的 Recommender，本模块只负责检索。
 """
 
-import logging
 import os
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -36,9 +35,6 @@ from rag.retriever import ChromaRetriever, RetrievedChunk
 from rag.reranker import ApiReranker, RerankedChunk, get_reranker
 from search.query_understanding import ParsedQuery, understand_query
 from search.where_builder import build_chroma_where
-
-logger = logging.getLogger(__name__)
-
 
 def _env_use_rerank() -> bool:
     """从环境变量 USE_RERANK 读取是否启用 API 精排，默认启用。
@@ -168,21 +164,15 @@ class SearchService:
             ]
         filtered_count = len(chunks)
 
-        # ④ API 精排（可选）
-        # rerank 失败（配置缺失 / 网络超时 / 服务异常）不应让整条链路报错：
-        # 捕获后降级为向量距离排序，保证始终有结果返回。
-        reranked_ok = False
+        # ④ API 精排。调试智谱接入阶段不做失败降级：配置缺失、网络超时或
+        # 响应格式异常都直接抛出，方便尽早发现问题。
         if self._use_rerank and chunks:
-            try:
-                reranked = self._get_reranker().rerank(
-                    query=parsed.retrieval_query or user_query,
-                    chunks=chunks,
-                )
-                hits = _aggregate_reranked_by_product(reranked)[:top_k_products]
-                reranked_ok = True
-            except Exception:  # noqa: BLE001 - 精排失败降级为向量排序
-                logger.warning("Reranker failed, fallback to vector-distance ordering", exc_info=True)
-        if not reranked_ok:
+            reranked = self._get_reranker().rerank(
+                query=parsed.retrieval_query or user_query,
+                chunks=chunks,
+            )
+            hits = _aggregate_reranked_by_product(reranked)[:top_k_products]
+        else:
             hits = _aggregate_by_distance(chunks)[:top_k_products]
 
         return SearchResult(
