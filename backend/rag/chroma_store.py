@@ -113,7 +113,10 @@ def create_collection(
         ) from exc
 
     persist_dir.mkdir(parents=True, exist_ok=True)
-    client = chromadb.PersistentClient(path=str(persist_dir))
+    client = chromadb.PersistentClient(
+        path=str(persist_dir),
+        settings=chromadb.Settings(anonymized_telemetry=False),
+    )
     if reset:
         try:
             client.delete_collection(collection_name)
