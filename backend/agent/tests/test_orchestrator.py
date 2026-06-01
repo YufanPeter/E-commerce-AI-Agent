@@ -30,6 +30,7 @@ from agent.tools.fallback import FallbackTool
 from agent.tools.product_detail import ProductDetailTool
 from agent.tools.recommend import RecommendTool
 from agent.tools.refine import RefineTool
+from search.query_decomposer import SubRequest
 
 
 # ---------- 工具：构造伪响应 ----------
@@ -64,7 +65,6 @@ def _fake_stream_chunks(pieces: list[str]):
 
 class _StubSearchService:
     """模拟 SearchService，可控返回 hits 和 needs_clarification。"""
-
     def __init__(self, hits: list[dict] | None = None, needs_clarify: bool = False):
         self._hits = hits or []
         self._needs_clarify = needs_clarify
@@ -95,13 +95,18 @@ class _StubSearchService:
         )
 
 
+def _single_decomposer(query: str) -> list[SubRequest]:
+    """测试用 stub：永远当作单需求，避免 RecommendTool.run 触发真实 LLM 拆解。"""
+    return [SubRequest(label=query, query=query)]
+
+
 def _make_agent(
     tool_search_hits: list[dict] | None = None,
     needs_clarify: bool = False,
 ) -> Agent:
     stub = _StubSearchService(hits=tool_search_hits, needs_clarify=needs_clarify)
     return Agent(tools={
-        "recommend": RecommendTool(search_service=stub),
+        "recommend": RecommendTool(search_service=stub, decomposer=_single_decomposer),
         "refine": RefineTool(),
         "compare": CompareTool(),
         "product_detail": ProductDetailTool(),
@@ -164,7 +169,7 @@ class TestStaticTools:
 class TestRecommendTool:
     def test_with_hits(self):
         hits = [{"product_id": "p1", "title": "雅诗兰黛精华", "brand": "雅诗兰黛", "base_price": 480}]
-        tool = RecommendTool(search_service=_StubSearchService(hits=hits))
+        tool = RecommendTool(search_service=_StubSearchService(hits=hits), decomposer=_single_decomposer)
         session = AgentSession()
         r = tool.run("500内精华", session, {})
         assert r.tool_name == "recommend"
@@ -184,14 +189,61 @@ class TestRecommendTool:
         assert "1 款商品" in r.composer_hint
 
     def test_zero_hits_hint(self):
-        tool = RecommendTool(search_service=_StubSearchService(hits=[]))
+        tool = RecommendTool(search_service=_StubSearchService(hits=[]), decomposer=_single_decomposer)
         r = tool.run("xxx", AgentSession(), {})
         assert "未命中" in r.composer_hint
 
     def test_needs_clarification_hint(self):
-        tool = RecommendTool(search_service=_StubSearchService(hits=[], needs_clarify=True))
+        tool = RecommendTool(
+            search_service=_StubSearchService(hits=[], needs_clarify=True),
+            decomposer=_single_decomposer,
+        )
         r = tool.run("随便看看", AgentSession(), {})
         assert "模糊" in r.composer_hint
+
+    def test_refine_path_skips_decompose(self):
+        """有 base_parsed（refine）时不应触发拆解：注入一个会爆炸的 decomposer 验证。"""
+        def _boom(_q: str):
+            raise AssertionError("refine 路径不应调用 decomposer")
+
+        hits = [{"product_id": "p1", "title": "雅诗兰黛精华", "base_price": 480}]
+        tool = RecommendTool(search_service=_StubSearchService(hits=hits), decomposer=_boom)
+        r = tool.run("再便宜点", AgentSession(), {"base_parsed": object()})
+        assert r.tool_name == "recommend"
+        assert "groups" not in r.payload  # 单需求路径不产出 groups
+
+    def test_multi_intent_fan_out_and_grouping(self):
+        """多需求：分别检索后按组聚合，products 扁平化，groups 保留分区。"""
+        hits = [
+            {"product_id": "p1", "title": "安热沙防晒", "base_price": 298},
+            {"product_id": "p2", "title": "速干短袖", "base_price": 99},
+        ]
+
+        def _multi(_q: str):
+            return [
+                SubRequest(label="防晒", query="三亚海边 防晒霜"),
+                SubRequest(label="衣服", query="三亚夏季 速干衣"),
+            ]
+
+        tool = RecommendTool(search_service=_StubSearchService(hits=hits), decomposer=_multi)
+        session = AgentSession()
+        r = tool.run("去三亚旅游推荐衣服和防晒", session, {})
+
+        assert r.tool_name == "recommend"
+        # groups 结构存在且含两个子需求标签
+        labels = [g["label"] for g in r.payload["groups"]]
+        assert labels == ["防晒", "衣服"]
+        # 跨组去重：同一组商品不会重复进第二组（stub 每次返回相同 hits）
+        all_ids = [p["product_id"] for p in r.payload["products"]]
+        assert len(all_ids) == len(set(all_ids))  # 无重复
+        # summary 反映多需求
+        assert r.payload["summary"]["group_count"] >= 1
+        assert r.payload["debug"]["multi_intent"] is True
+        # composer_hint 引导分组介绍
+        assert "分组" in r.composer_hint
+        # last_hits 存合并后的全部命中
+        assert session.get("last_hits")
+
 
 
 # ---------- AnswerComposer ----------

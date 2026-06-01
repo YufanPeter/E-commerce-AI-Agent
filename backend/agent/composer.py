@@ -36,6 +36,7 @@ SYSTEM_PROMPT = """你是一位友好、专业的电商导购助手，说话像�
 - 介绍每款时落到使用场景和人群（通勤、学习、送礼…），而不是只报价格和参数。
 - 适度点出关键差异帮用户决策（价格梯度、核心卖点、适合谁）。
 - 若 payload.hits 为空，坦诚告知未找到，并给出具体的放宽建议（提高预算到 X、放宽品牌等）。
+- 若 payload 里有 groups（用户一次提了多个需求，如"衣服和防晒"），请【按组分段】介绍：每组先点明需求（如"防晒方面"、"衣服方面"），再说该组挑了哪几款、为什么适合，不要把不同需求的商品混在一起说。
 - 不要复述 JSON 字段名，用自然口语介绍。"""
 
 
@@ -104,6 +105,26 @@ def _trim_payload_for_llm(payload: dict[str, Any]) -> dict[str, Any]:
         {k: h.get(k) for k in _HIT_KEEP_KEYS if k in h}
         for h in hits
     ]
+    # 多需求场景：透传分组结构，让 composer 按需求分组介绍。
+    # 每组只保留 label + 精简商品，避免把 query/空组等噪声塞进 prompt。
+    groups = payload.get("groups")
+    if isinstance(groups, list):
+        trimmed_groups = []
+        for g in groups:
+            g_products = g.get("products") or []
+            if not g_products:
+                continue
+            trimmed_groups.append(
+                {
+                    "label": g.get("label"),
+                    "hits": [
+                        {k: h.get(k) for k in _HIT_KEEP_KEYS if k in h}
+                        for h in g_products
+                    ],
+                }
+            )
+        if trimmed_groups:
+            trimmed["groups"] = trimmed_groups
     return trimmed
 
 
