@@ -1,11 +1,11 @@
 import Foundation
 
-enum Sender {
+enum Sender: String, Codable {
     case user
     case ai
 }
 
-enum MessageState: String {
+enum MessageState: String, Codable {
     case understanding = "理解中"
     case retrieving = "检索中"
     case generating = "生成中"
@@ -13,7 +13,7 @@ enum MessageState: String {
     case failed
 }
 
-struct Product: Identifiable, Hashable {
+struct Product: Identifiable, Hashable, Codable {
     let id: String
     let title: String
     let price: String
@@ -138,13 +138,13 @@ struct Product: Identifiable, Hashable {
     ]
 }
 
-struct ProductSpecification: Identifiable, Hashable {
-    let id = UUID()
+struct ProductSpecification: Identifiable, Hashable, Codable {
+    var id = UUID()
     let name: String
     let options: [String]
 }
 
-struct ProductSKU: Identifiable, Hashable {
+struct ProductSKU: Identifiable, Hashable, Codable {
     let id: String
     let selectedOptions: [String: String]
     let price: Double
@@ -185,8 +185,8 @@ struct CartItem: Identifiable, Hashable {
     }
 }
 
-struct ChatMessage: Identifiable {
-    let id = UUID()
+struct ChatMessage: Identifiable, Codable {
+    var id = UUID()
     let sender: Sender
     var text: String
     var state: MessageState = .ready
@@ -194,8 +194,61 @@ struct ChatMessage: Identifiable {
     var canRetry: Bool = false
 }
 
-struct HistoryItem: Identifiable {
-    let id = UUID()
-    let title: String
-    let subtitle: String
+/// 一段完整对话：对应后端一个 session_id，整段 transcript 本地持久化。
+struct Conversation: Identifiable, Codable {
+    let id: UUID
+    /// 后端会话 id：重开历史后继续追问仍接到同一上下文。
+    let sessionID: String
+    var title: String
+    var createdAt: Date
+    var updatedAt: Date
+    var messages: [ChatMessage]
+
+    init(
+        id: UUID = UUID(),
+        sessionID: String = UUID().uuidString,
+        title: String = "新对话",
+        createdAt: Date = Date(),
+        updatedAt: Date = Date(),
+        messages: [ChatMessage] = []
+    ) {
+        self.id = id
+        self.sessionID = sessionID
+        self.title = title
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.messages = messages
+    }
+
+    /// 是否已有真实用户消息（用于判断空白对话不入库）。
+    var hasUserMessage: Bool {
+        messages.contains { $0.sender == .user }
+    }
+
+    private var productCount: Int {
+        messages.reduce(0) { $0 + $1.products.count }
+    }
+
+    /// 历史列表副标题：相对时间 +（可选）商品数。
+    var subtitle: String {
+        let time = Conversation.relativeLabel(for: updatedAt)
+        return productCount > 0 ? "\(time) · \(productCount) 个商品" : time
+    }
+
+    private static func relativeLabel(for date: Date) -> String {
+        let calendar = Calendar.current
+        let timeFormatter = DateFormatter()
+        timeFormatter.locale = Locale(identifier: "zh_CN")
+        timeFormatter.dateFormat = "HH:mm"
+        if calendar.isDateInToday(date) {
+            return "今天 \(timeFormatter.string(from: date))"
+        }
+        if calendar.isDateInYesterday(date) {
+            return "昨天 \(timeFormatter.string(from: date))"
+        }
+        let dayFormatter = DateFormatter()
+        dayFormatter.locale = Locale(identifier: "zh_CN")
+        dayFormatter.dateFormat = "M月d日 HH:mm"
+        return dayFormatter.string(from: date)
+    }
 }

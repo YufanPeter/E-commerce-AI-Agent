@@ -4,24 +4,36 @@ import SwiftUI
 
 struct GuideView: View {
     @Binding var cartItems: [CartItem]
-    @State private var messages: [ChatMessage] = [
-        ChatMessage(sender: .ai, text: "你可以问")
-    ]
+    @StateObject private var store = ConversationStore()
+    @State private var messages: [ChatMessage] = []
     @State private var inputText = ""
     @State private var isComposerExpanded = false
     @State private var showHistory = false
     @State private var selectedProduct: Product?
     @State private var lastQuery: String = ""
+    @State private var currentConversationID = UUID()
+    @State private var currentSessionID = UUID().uuidString
+    @State private var currentTitle = GuideView.newConversationTitle
+    @State private var examples: [String] = GuideView.freshExamples()
     @StateObject private var speechInput = SpeechInputController()
     @FocusState private var isInputFocused: Bool
 
     private let agentService = RESTAgentService()
-    private let examples = ["适合油皮的洗面奶", "200 元内蓝牙耳机", "轻量跑鞋", "不要含酒精的防晒"]
-    private let histories = [
-        HistoryItem(title: "无酒精防晒推荐", subtitle: "今天 21:42 · 3 个商品"),
-        HistoryItem(title: "通勤蓝牙耳机对比", subtitle: "昨天 · 预算 200 元内"),
-        HistoryItem(title: "春季轻量跑鞋", subtitle: "周一 · 跑步场景")
+
+    /// 示例 query 池：每次空态出现时随机取 4 条，避免每次都是同样几个。
+    private static let examplePool = [
+        "适合油皮的洗面奶", "200 元内蓝牙耳机", "轻量跑鞋", "不要含酒精的防晒",
+        "通勤双肩包推荐", "敏感肌身体乳", "适合送女友的香水", "300 元内机械键盘",
+        "冬天保暖羽绒服", "学生党平价护眼台灯", "适合露营的折叠椅", "低糖代餐零食",
+        "降噪头戴式耳机", "夏天透气运动短裤", "适合新手的口红色号", "家用空气炸锅"
     ]
+
+    /// 从池子里随机抽 4 条不重复示例。
+    private static func freshExamples() -> [String] {
+        Array(examplePool.shuffled().prefix(4))
+    }
+
+    private static let newConversationTitle = "新对话"
 
     var body: some View {
         NavigationStack {
@@ -38,9 +50,13 @@ struct GuideView: View {
             }
             .background(AppTheme.background)
             .sheet(isPresented: $showHistory) {
-                HistorySheet(items: histories)
-                    .presentationDetents([.medium])
-                    .presentationDragIndicator(.visible)
+                HistorySheet(
+                    conversations: store.conversations,
+                    onSelect: { openConversation($0) },
+                    onDelete: { store.delete($0) }
+                )
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
             }
             .navigationDestination(item: $selectedProduct) { product in
                 ProductDetailView(product: product) { product, selectedOptions, quantity in
@@ -56,6 +72,15 @@ struct GuideView: View {
                 .font(.title3.bold())
                 .foregroundStyle(AppTheme.textPrimary)
             Spacer()
+            Button {
+                startNewConversation()
+            } label: {
+                Image(systemName: "square.and.pencil")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(AppTheme.primary)
+                    .frame(width: 40, height: 40)
+                    .floatingLiquidPanel(cornerRadius: 20)
+            }
             Button {
                 showHistory = true
             } label: {
@@ -75,10 +100,13 @@ struct GuideView: View {
         ScrollViewReader { proxy in
             ScrollView(showsIndicators: false) {
                 LazyVStack(alignment: .leading, spacing: 16) {
+                    if messages.isEmpty {
+                        emptyState
+                    }
                     ForEach(messages) { message in
                         MessageRow(
                             message: message,
-                            examples: message.id == messages.first?.id ? examples : [],
+                            examples: [],
                             onExampleTap: send,
                             onRetry: retryLast,
                             onProductTap: { selectedProduct = $0 }
@@ -104,6 +132,36 @@ struct GuideView: View {
                 }
             }
         }
+    }
+
+    /// 空态：欢迎语 + 随机示例气泡。仅在当前会话还没有任何消息时显示，
+    /// 用户发起检索后随消息出现而隐去；开新对话会重新出现并换一批示例。
+    private var emptyState: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("你可以问")
+                .font(.subheadline)
+                .foregroundStyle(AppTheme.textPrimary)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 11)
+                .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .stroke(AppTheme.border, lineWidth: 1)
+                )
+
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(examples, id: \.self) { example in
+                    Button(example) { send(example) }
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(AppTheme.primary)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .frame(maxWidth: 220, alignment: .leading)
+                        .background(AppTheme.softPurple, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var composerStack: some View {
@@ -213,6 +271,9 @@ struct GuideView: View {
         isComposerExpanded = false
         speechInput.stop()
         lastQuery = query
+        if currentTitle == GuideView.newConversationTitle {
+            currentTitle = String(query.prefix(20))
+        }
         messages.append(ChatMessage(sender: .user, text: query))
         messages.append(ChatMessage(sender: .ai, text: "正在理解你的需求", state: .understanding))
         runAgent(for: query)
@@ -232,7 +293,7 @@ struct GuideView: View {
             var statusText = "正在理解你的需求"
 
             do {
-                let request = AgentRequestPayload(text: query)
+                let request = AgentRequestPayload(sessionID: currentSessionID, text: query)
                 for try await event in agentService.streamResponse(for: request) {
                     switch event.type {
                     case .status:
@@ -287,10 +348,53 @@ struct GuideView: View {
                         products: hydrated
                     )
                 }
+                persistCurrent()
             } catch {
                 updateLastAI(text: errorMessage(error), state: .failed, canRetry: true)
+                persistCurrent()
             }
         }
+    }
+
+    // MARK: - 会话历史
+
+    /// 把当前对话写入本地历史（无用户消息的空白对话会被仓库忽略）。
+    private func persistCurrent() {
+        let title = currentTitle == GuideView.newConversationTitle
+            ? (messages.first { $0.sender == .user }.map { String($0.text.prefix(20)) } ?? GuideView.newConversationTitle)
+            : currentTitle
+        let createdAt = store.conversation(by: currentConversationID)?.createdAt ?? Date()
+        let conversation = Conversation(
+            id: currentConversationID,
+            sessionID: currentSessionID,
+            title: title,
+            createdAt: createdAt,
+            messages: messages
+        )
+        store.upsert(conversation)
+    }
+
+    /// 开启全新对话：存档当前 → 清空 → 换新 session_id（后端会 mint 新会话）。
+    private func startNewConversation() {
+        persistCurrent()
+        messages = []
+        examples = GuideView.freshExamples()
+        currentConversationID = UUID()
+        currentSessionID = UUID().uuidString
+        currentTitle = GuideView.newConversationTitle
+        lastQuery = ""
+        showHistory = false
+    }
+
+    /// 重开历史对话：存档当前 → 载入选中会话（含其 session_id，可继续追问）。
+    private func openConversation(_ conversation: Conversation) {
+        persistCurrent()
+        messages = conversation.messages
+        currentConversationID = conversation.id
+        currentSessionID = conversation.sessionID
+        currentTitle = conversation.title
+        lastQuery = conversation.messages.last { $0.sender == .user }?.text ?? ""
+        showHistory = false
     }
 
     private func syncCartItems(from snapshot: CartSnapshotPayload) {
@@ -701,36 +805,104 @@ private struct PlaceholderSizing: ViewModifier {
 }
 
 struct HistorySheet: View {
-    let items: [HistoryItem]
+    let conversations: [Conversation]
+    let onSelect: (Conversation) -> Void
+    let onDelete: (Conversation) -> Void
+
+    @State private var pendingDelete: Conversation?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 12) {
             Text("历史记录")
                 .font(.title3.bold())
-                .padding(.top, 10)
+                .padding(.horizontal, 20)
+                .padding(.top, 16)
 
-            ForEach(items) { item in
-                HStack(spacing: 12) {
-                    Image(systemName: "message")
-                        .foregroundStyle(AppTheme.primary)
-                        .frame(width: 40, height: 40)
-                        .background(AppTheme.softPurple, in: Circle())
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(item.title).font(.headline)
-                        Text(item.subtitle).font(.caption).foregroundStyle(AppTheme.textSecondary)
+            if conversations.isEmpty {
+                emptyState
+            } else {
+                List {
+                    ForEach(conversations) { conversation in
+                        Button {
+                            onSelect(conversation)
+                        } label: {
+                            row(conversation)
+                        }
+                        .buttonStyle(.plain)
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                        // 左滑出现删除按钮（全滑直接删除）
+                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                            Button(role: .destructive) {
+                                onDelete(conversation)
+                            } label: {
+                                Label("删除", systemImage: "trash")
+                            }
+                        }
+                        // 长按弹出菜单删除（带确认）
+                        .contextMenu {
+                            Button(role: .destructive) {
+                                pendingDelete = conversation
+                            } label: {
+                                Label("删除对话", systemImage: "trash")
+                            }
+                        }
                     }
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(AppTheme.textSecondary)
                 }
-                .padding(12)
-                .floatingLiquidPanel(cornerRadius: 18)
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(AppTheme.background)
+        .confirmationDialog(
+            "删除这段对话？",
+            isPresented: Binding(
+                get: { pendingDelete != nil },
+                set: { if !$0 { pendingDelete = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("删除", role: .destructive) {
+                if let target = pendingDelete { onDelete(target) }
+                pendingDelete = nil
+            }
+            Button("取消", role: .cancel) { pendingDelete = nil }
+        } message: {
+            Text(pendingDelete?.title ?? "")
+        }
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "clock.arrow.circlepath")
+                .font(.largeTitle)
+                .foregroundStyle(AppTheme.textSecondary)
+            Text("还没有历史对话")
+                .font(.subheadline)
+                .foregroundStyle(AppTheme.textSecondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func row(_ conversation: Conversation) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: "message")
+                .foregroundStyle(AppTheme.primary)
+                .frame(width: 40, height: 40)
+                .background(AppTheme.softPurple, in: Circle())
+            VStack(alignment: .leading, spacing: 4) {
+                Text(conversation.title).font(.headline).lineLimit(1)
+                Text(conversation.subtitle).font(.caption).foregroundStyle(AppTheme.textSecondary)
             }
             Spacer()
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(AppTheme.textSecondary)
         }
-        .padding(20)
-        .background(AppTheme.background)
+        .padding(12)
+        .floatingLiquidPanel(cornerRadius: 18)
     }
 }
 
