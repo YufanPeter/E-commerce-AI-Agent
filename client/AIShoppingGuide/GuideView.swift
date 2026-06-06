@@ -1,6 +1,16 @@
 import AVFoundation
+import Combine
 import Speech
 import SwiftUI
+import UIKit
+
+private struct ComposerHeightPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 56
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
 
 struct GuideView: View {
     @Binding var cartItems: [CartItem]
@@ -15,10 +25,22 @@ struct GuideView: View {
     @State private var currentSessionID = UUID().uuidString
     @State private var currentTitle = GuideView.newConversationTitle
     @State private var examples: [String] = GuideView.freshExamples()
+    @State private var keyboardHeight: CGFloat = 0
+    @State private var composerHeight: CGFloat = 56
+    @State private var isAutoFollowEnabled = true
+    @State private var isNearChatBottom = true
+    @State private var isUserInteractingWithChat = false
+    @State private var shouldShowJumpToLatest = false
+    @State private var pendingQuestionAnchorID: UUID?
+    @State private var shouldHoldLatestQuestionAnchor = false
+    @State private var pendingAutoFollowWorkItem: DispatchWorkItem?
     @StateObject private var speechInput = SpeechInputController()
     @FocusState private var isInputFocused: Bool
 
     private let agentService = RESTAgentService()
+    private let nearBottomThreshold: CGFloat = 96
+    private let questionAnchorCharacterLimit = 220
+    private let autoFollowTimer = Timer.publish(every: 0.12, on: .main, in: .common).autoconnect()
 
     /// 示例 query 池：每次空态出现时随机取 4 条，避免每次都是同样几个。
     private static let examplePool = [
@@ -45,10 +67,19 @@ struct GuideView: View {
 
                 composerStack
                     .padding(.horizontal, 16)
-                    .padding(.bottom, AppTheme.guideComposerBottomPadding)
+                    .padding(.bottom, composerBottomPadding)
+                    .background(
+                        GeometryReader { geometry in
+                            Color.clear.preference(key: ComposerHeightPreferenceKey.self, value: geometry.size.height)
+                        }
+                    )
                     .zIndex(1)
             }
             .background(AppTheme.background)
+            .onPreferenceChange(ComposerHeightPreferenceKey.self) { height in
+                guard height > 0 else { return }
+                composerHeight = height
+            }
             .sheet(isPresented: $showHistory) {
                 HistorySheet(
                     conversations: store.conversations,
@@ -62,6 +93,12 @@ struct GuideView: View {
                 ProductDetailView(product: product) { product, selectedOptions, quantity in
                     addToCart(product, selectedOptions: selectedOptions, quantity: quantity)
                 }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { notification in
+                updateKeyboardHeight(from: notification)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { notification in
+                updateKeyboardHeight(from: notification)
             }
         }
     }
@@ -98,40 +135,129 @@ struct GuideView: View {
 
     private var chatList: some View {
         ScrollViewReader { proxy in
-            ScrollView(showsIndicators: false) {
-                LazyVStack(alignment: .leading, spacing: 16) {
-                    if messages.isEmpty {
-                        emptyState
+            ZStack(alignment: .bottomTrailing) {
+                trackedChatScrollView
+
+                if shouldShowJumpToLatest {
+                    jumpToLatestButton {
+                        jumpToLatest(proxy)
                     }
-                    ForEach(messages) { message in
-                        MessageRow(
-                            message: message,
-                            examples: [],
-                            onExampleTap: send,
-                            onRetry: retryLast,
-                            onProductTap: { selectedProduct = $0 }
-                        )
-                        .id(message.id)
-                    }
+                    .padding(.trailing, 18)
+                    .padding(.bottom, jumpButtonBottomPadding)
+                    .transition(.scale(scale: 0.92).combined(with: .opacity))
                 }
-                .padding(.horizontal, 18)
-                .padding(.top, 12)
-                .padding(.bottom, AppTheme.guideComposerBottomPadding + 112)
             }
-            .scrollDismissesKeyboard(.interactively)
-            .simultaneousGesture(
-                TapGesture().onEnded {
-                    isInputFocused = false
+            .onAppear {
+                scrollToLatestMessage(proxy, animated: false)
+            }
+            .onChange(of: pendingQuestionAnchorID) { _, newValue in
+                guard let newValue else { return }
+                scrollToQuestion(newValue, proxy: proxy)
+            }
+            .onChange(of: scrollAnchorToken) { _, _ in
+                handleContentChange(proxy)
+            }
+            .onChange(of: isInputFocused) { _, focused in
+                if focused, isAutoFollowEnabled || isNearChatBottom {
+                    scheduleAutoFollowScroll(proxy, animated: true)
                 }
-            )
-            .onChange(of: messages.count) { _, _ in
-                if let last = messages.last?.id {
-                    withAnimation(.easeOut(duration: 0.25)) {
-                        proxy.scrollTo(last, anchor: .bottom)
-                    }
+            }
+            .onReceive(autoFollowTimer) { _ in
+                if isAssistantStreaming && isAutoFollowEnabled && !shouldKeepLatestQuestionVisible {
+                    scrollToLatestMessage(proxy, animated: false)
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private var trackedChatScrollView: some View {
+        if #available(iOS 18.0, *) {
+            chatScrollView
+                .onScrollGeometryChange(for: Bool.self) { geometry in
+                    let distanceFromBottom = geometry.contentSize.height - geometry.visibleRect.maxY
+                    return distanceFromBottom <= nearBottomThreshold
+                } action: { _, isNearBottom in
+                    updateScrollPosition(isNearBottom: isNearBottom)
+                }
+        } else {
+            chatScrollView
+        }
+    }
+
+    private var chatScrollView: some View {
+        ScrollView(showsIndicators: false) {
+            LazyVStack(alignment: .leading, spacing: 16) {
+                if messages.isEmpty {
+                    emptyState
+                }
+                ForEach(messages) { message in
+                    MessageRow(
+                        message: message,
+                        examples: [],
+                        onExampleTap: send,
+                        onRetry: retryLast,
+                        onProductTap: { selectedProduct = $0 }
+                    )
+                    .id(message.id)
+
+                    Color.clear
+                        .frame(height: 1)
+                        .id(messageTailAnchorID(for: message.id))
+                }
+                // The composer is an overlay, so the scroll target needs a real spacer
+                // instead of trailing padding; otherwise the latest message can hide beneath it.
+                Color.clear
+                    .frame(height: chatListBottomPadding)
+            }
+            .padding(.horizontal, 18)
+            .padding(.top, 12)
+        }
+        .scrollDismissesKeyboard(.interactively)
+        .simultaneousGesture(
+            TapGesture().onEnded {
+                isInputFocused = false
+            }
+        )
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 8)
+                .onChanged { _ in
+                    isUserInteractingWithChat = true
+                    if isAssistantStreaming {
+                        isAutoFollowEnabled = false
+                    }
+                    if !isNearChatBottom {
+                        shouldShowJumpToLatest = true
+                    }
+                }
+                .onEnded { _ in
+                    isUserInteractingWithChat = false
+                    if isNearChatBottom {
+                        isAutoFollowEnabled = true
+                        shouldShowJumpToLatest = false
+                    } else {
+                        isAutoFollowEnabled = false
+                        shouldShowJumpToLatest = true
+                    }
+                }
+        )
+    }
+
+    private func jumpToLatestButton(action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.down")
+                    .font(.system(size: 13, weight: .bold))
+                Text("最新")
+                    .font(.caption.weight(.semibold))
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .background(AppTheme.primary, in: Capsule())
+            .shadow(color: AppTheme.primary.opacity(0.28), radius: 12, y: 5)
+        }
+        .buttonStyle(.plain)
     }
 
     /// 空态：欢迎语 + 随机示例气泡。仅在当前会话还没有任何消息时显示，
@@ -258,12 +384,57 @@ struct GuideView: View {
         !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    private var isKeyboardPresented: Bool {
+        keyboardHeight > 0
+    }
+
+    private var composerBottomPadding: CGFloat {
+        isKeyboardPresented ? 10 : AppTheme.guideComposerBottomPadding
+    }
+
+    private var chatListBottomPadding: CGFloat {
+        composerHeight + composerBottomPadding + (isKeyboardPresented ? 16 : 24)
+    }
+
+    private var jumpButtonBottomPadding: CGFloat {
+        composerHeight + composerBottomPadding + 16
+    }
+
+    private var latestAssistantMessage: ChatMessage? {
+        messages.last { $0.sender == .ai }
+    }
+
+    private var isAssistantStreaming: Bool {
+        guard let message = latestAssistantMessage else { return false }
+        return message.state != .ready && message.state != .failed
+    }
+
+    private var shouldKeepLatestQuestionVisible: Bool {
+        guard shouldHoldLatestQuestionAnchor, let message = latestAssistantMessage else { return false }
+        return isAssistantStreaming
+            && message.text.count < questionAnchorCharacterLimit
+            && message.products.isEmpty
+    }
+
+    private var scrollAnchorToken: String {
+        let messageToken = messages.map { message in
+            [
+                message.id.uuidString,
+                message.state.rawValue,
+                "\(message.products.count)",
+                "\(message.canRetry)"
+            ].joined(separator: ":")
+        }
+        .joined(separator: "|")
+
+        return messageToken
+    }
+
     private func sendCurrentInput() {
         let trimmed = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         speechInput.stop()
         inputText = ""
-        isInputFocused = false
         send(trimmed)
     }
 
@@ -274,7 +445,15 @@ struct GuideView: View {
         if currentTitle == GuideView.newConversationTitle {
             currentTitle = String(query.prefix(20))
         }
-        messages.append(ChatMessage(sender: .user, text: query))
+        let userMessage = ChatMessage(sender: .user, text: query)
+        pendingAutoFollowWorkItem?.cancel()
+        isAutoFollowEnabled = true
+        isNearChatBottom = false
+        isUserInteractingWithChat = false
+        shouldShowJumpToLatest = false
+        shouldHoldLatestQuestionAnchor = true
+        pendingQuestionAnchorID = userMessage.id
+        messages.append(userMessage)
         messages.append(ChatMessage(sender: .ai, text: "正在理解你的需求", state: .understanding))
         runAgent(for: query)
     }
@@ -282,6 +461,10 @@ struct GuideView: View {
     private func retryLast() {
         messages.removeAll { $0.canRetry }
         let query = lastQuery.isEmpty ? "重新推荐" : lastQuery
+        pendingAutoFollowWorkItem?.cancel()
+        isAutoFollowEnabled = true
+        shouldHoldLatestQuestionAnchor = false
+        shouldShowJumpToLatest = false
         messages.append(ChatMessage(sender: .ai, text: "正在重新理解你的需求", state: .understanding))
         runAgent(for: query)
     }
@@ -377,6 +560,7 @@ struct GuideView: View {
     /// 开启全新对话：存档当前 → 清空 → 换新 session_id（后端会 mint 新会话）。
     private func startNewConversation() {
         persistCurrent()
+        resetScrollFollowState()
         messages = []
         examples = GuideView.freshExamples()
         currentConversationID = UUID()
@@ -389,6 +573,7 @@ struct GuideView: View {
     /// 重开历史对话：存档当前 → 载入选中会话（含其 session_id，可继续追问）。
     private func openConversation(_ conversation: Conversation) {
         persistCurrent()
+        resetScrollFollowState()
         messages = conversation.messages
         currentConversationID = conversation.id
         currentSessionID = conversation.sessionID
@@ -412,6 +597,116 @@ struct GuideView: View {
             return restError.displayMessage
         }
         return "商品服务暂时不可用，请稍后重试。\n错误码：API_UNKNOWN_ERROR"
+    }
+
+    private func updateKeyboardHeight(from notification: Notification) {
+        guard let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else {
+            keyboardHeight = 0
+            return
+        }
+
+        let screenHeight = UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.screen.bounds.height }
+            .first ?? frame.maxY
+        let height = max(0, screenHeight - frame.minY)
+        let duration = notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double ?? 0.25
+
+        withAnimation(.easeOut(duration: duration)) {
+            keyboardHeight = height
+        }
+    }
+
+    private func resetScrollFollowState() {
+        pendingAutoFollowWorkItem?.cancel()
+        pendingQuestionAnchorID = nil
+        shouldHoldLatestQuestionAnchor = false
+        isAutoFollowEnabled = true
+        isNearChatBottom = true
+        isUserInteractingWithChat = false
+        shouldShowJumpToLatest = false
+    }
+
+    private func updateScrollPosition(isNearBottom: Bool) {
+        guard isNearChatBottom != isNearBottom else { return }
+        isNearChatBottom = isNearBottom
+
+        if isNearBottom {
+            shouldShowJumpToLatest = false
+            if !isUserInteractingWithChat {
+                isAutoFollowEnabled = true
+            }
+        } else if isUserInteractingWithChat {
+            isAutoFollowEnabled = false
+            shouldShowJumpToLatest = true
+        } else if !isAutoFollowEnabled {
+            shouldShowJumpToLatest = true
+        }
+    }
+
+    private func handleContentChange(_ proxy: ScrollViewProxy) {
+        if shouldKeepLatestQuestionVisible {
+            return
+        }
+
+        shouldHoldLatestQuestionAnchor = false
+        if isAutoFollowEnabled {
+            scheduleAutoFollowScroll(proxy, animated: true)
+        } else if !isNearChatBottom {
+            shouldShowJumpToLatest = true
+        }
+    }
+
+    private func scrollToQuestion(_ id: UUID, proxy: ScrollViewProxy) {
+        pendingAutoFollowWorkItem?.cancel()
+        DispatchQueue.main.async {
+            withAnimation(.easeOut(duration: 0.24)) {
+                proxy.scrollTo(id, anchor: .top)
+            }
+        }
+    }
+
+    private func jumpToLatest(_ proxy: ScrollViewProxy) {
+        shouldHoldLatestQuestionAnchor = false
+        isAutoFollowEnabled = true
+        shouldShowJumpToLatest = false
+        scheduleAutoFollowScroll(proxy, animated: true, delay: 0)
+    }
+
+    private func scheduleAutoFollowScroll(
+        _ proxy: ScrollViewProxy,
+        animated: Bool,
+        delay: TimeInterval = 0.05
+    ) {
+        guard isAutoFollowEnabled else { return }
+        pendingAutoFollowWorkItem?.cancel()
+
+        let workItem = DispatchWorkItem {
+            scrollToLatestMessage(proxy, animated: animated)
+        }
+        pendingAutoFollowWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
+    }
+
+    private func scrollToLatestMessage(_ proxy: ScrollViewProxy, animated: Bool) {
+        guard let latestMessageID = messages.last?.id else { return }
+        let targetID = messageTailAnchorID(for: latestMessageID)
+        let anchor = latestContentAnchor
+
+        if animated {
+            withAnimation(.easeOut(duration: 0.22)) {
+                proxy.scrollTo(targetID, anchor: anchor)
+            }
+        } else {
+            proxy.scrollTo(targetID, anchor: anchor)
+        }
+    }
+
+    private var latestContentAnchor: UnitPoint {
+        UnitPoint(x: 0.5, y: isKeyboardPresented ? 0.62 : 0.78)
+    }
+
+    private func messageTailAnchorID(for messageID: UUID) -> String {
+        "guide-message-tail-\(messageID.uuidString)"
     }
 
     private func updateLastAI(
@@ -688,7 +983,7 @@ struct ProductCard: View {
         VStack(alignment: .leading, spacing: 12) {
             ProductRemoteImage(url: product.imageURL, cornerRadius: 16, placeholderIcon: "shippingbox", contentMode: .fit)
                 .frame(maxWidth: .infinity)
-                .frame(maxHeight: 300)
+                .frame(height: 300)
 
             if !product.tags.isEmpty {
                 HStack(spacing: 8) {
