@@ -251,17 +251,36 @@ class Agent:
         self, query: str, session: AgentSession, trace: dict[str, Any],
     ) -> IntentDecision:
         logger.info("turn start: query=%r", query[:60])
+        # 若上一轮 cart 正在等用户选规格或选商品，则本轮强制走 cart，跳过 router LLM——
+        # 否则"暗夜黑 42码""第一个"这类回答会被路由误判为 refine/recommend。
+        if session.get("pending_cart") or session.get("pending_add"):
+            decision = IntentDecision(
+                tool="cart",
+                rewritten_query=query,
+                confidence="high",
+                reasoning="pending cart selection",
+            )
+            trace["timings"]["router_ms"] = 0
+            trace["decision"] = decision.to_dict()
+            logger.info("router skipped: pending cart selection → tool=cart")
+            return decision
         t0 = time.perf_counter()
         try:
             decision = route(query, session)
         except Exception as exc:  # noqa: BLE001
-            logger.exception("Router failed, defaulting to recommend")
+            # router LLM 偶发抽风（返回空响应/不调用 route_to_tool）。粗暴默认
+            # recommend 会把"把小米加入购物车"误当搜索。这里按关键词做确定性
+            # 兜底：明显是管车/下单意图时兜到 cart，否则才退回 recommend。
+            fallback_tool = self._keyword_fallback_tool(query)
+            logger.warning(
+                "Router failed (%r), keyword fallback → %s", exc, fallback_tool
+            )
             trace["router_error"] = repr(exc)
             decision = IntentDecision(
-                tool="recommend",
+                tool=fallback_tool,
                 rewritten_query=query,
                 confidence="low",
-                reasoning="router failure, default to recommend",
+                reasoning=f"router failure, keyword fallback to {fallback_tool}",
             )
         trace["timings"]["router_ms"] = int((time.perf_counter() - t0) * 1000)
         trace["decision"] = decision.to_dict()
@@ -270,6 +289,22 @@ class Agent:
             trace["timings"]["router_ms"], decision.tool,
         )
         return decision
+
+    @staticmethod
+    def _keyword_fallback_tool(query: str) -> str:
+        """router LLM 失败时的确定性兜底：按关键词粗判工具，避免一律 recommend。
+
+        只覆盖最确定的"管车/下单"意图（加购、删除、改数量、查看车、结算）；
+        其余情况仍退回 recommend（搜索/推荐是最安全的默认）。"""
+        text = query or ""
+        cart_words = (
+            "加入购物车", "加购", "购物车", "加进来", "来一件", "来一个",
+            "下单", "结算", "买这些", "就买", "删掉", "删除", "去掉",
+            "不要了", "改成", "数量",
+        )
+        if any(w in text for w in cart_words):
+            return "cart"
+        return "recommend"
 
     def _safe_run_tool(
         self,

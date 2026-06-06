@@ -134,19 +134,30 @@ def route(query: str, session: AgentSession, timeout: float = 6.0) -> IntentDeci
     user_content = _build_user_content(query, session)
 
     client = get_client()
-    response = client.chat.completions.create(
-        model=get_model_id(),
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_content},
-        ],
-        tools=[_TOOL_SCHEMA],
-        tool_choice={"type": "function", "function": {"name": "route_to_tool"}},
-        temperature=0.1,
-        timeout=timeout,
-    )
+    # 已强制 tool_choice，但 LLM 仍偶发返回空响应（不调用 route_to_tool）。
+    # 重试一次能把这种抖动概率显著压低；仍失败才抛给 orchestrator 兜底。
+    last_exc: Exception | None = None
+    for attempt in range(2):
+        response = client.chat.completions.create(
+            model=get_model_id(),
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_content},
+            ],
+            tools=[_TOOL_SCHEMA],
+            tool_choice={"type": "function", "function": {"name": "route_to_tool"}},
+            temperature=0.1,
+            timeout=timeout,
+        )
+        try:
+            args = _extract_tool_arguments(response)
+            break
+        except ValueError as exc:
+            last_exc = exc
+            logger.warning("Router empty response (attempt %d/2), retrying", attempt + 1)
+    else:
+        raise last_exc  # type: ignore[misc]
 
-    args = _extract_tool_arguments(response)
     tool = args.get("tool")
     if tool not in KNOWN_TOOLS:
         logger.warning("Router returned unknown tool %r, falling back to clarify", tool)
