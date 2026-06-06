@@ -197,7 +197,8 @@ struct GuideView: View {
                         examples: [],
                         onExampleTap: send,
                         onRetry: retryLast,
-                        onProductTap: { selectedProduct = $0 }
+                        onProductTap: { selectedProduct = $0 },
+                        onSpecSubmit: send
                     )
                     .id(message.id)
 
@@ -510,6 +511,11 @@ struct GuideView: View {
                             updateLastAI(text: narrative, state: .generating)
                         }
 
+                    case .specSelection:
+                        if let spec = event.specSelection {
+                            attachSpecSelection(spec)
+                        }
+
                     case .done:
                         updateLastAI(
                             text: narrative.isEmpty ? statusText : narrative,
@@ -722,6 +728,13 @@ struct GuideView: View {
         messages[index].canRetry = canRetry
     }
 
+    /// 把后端「请选择规格」的可交互卡片挂到当前 AI 消息上；后续 token/done
+    /// 只更新文本与状态，不会清掉已挂上的卡片。
+    private func attachSpecSelection(_ spec: SpecSelection) {
+        guard let index = messages.lastIndex(where: { $0.sender == .ai }) else { return }
+        messages[index].specSelection = spec
+    }
+
     private func addToCart(
         _ product: Product,
         selectedOptions: [String: String] = [:],
@@ -742,6 +755,7 @@ struct MessageRow: View {
     let onExampleTap: (String) -> Void
     let onRetry: () -> Void
     let onProductTap: (Product) -> Void
+    let onSpecSubmit: (String) -> Void
 
     var body: some View {
         HStack(alignment: .top) {
@@ -777,6 +791,10 @@ struct MessageRow: View {
                     Button("重试", action: onRetry)
                         .buttonStyle(.borderedProminent)
                         .tint(AppTheme.primary)
+                }
+
+                if let spec = message.specSelection {
+                    SpecSelectionCard(selection: spec, onSubmit: onSpecSubmit)
                 }
 
                 ForEach(message.products) { product in
@@ -1022,6 +1040,128 @@ struct ProductCard: View {
         }
         .padding(14)
         .floatingLiquidPanel(cornerRadius: 22)
+    }
+}
+
+/// 多规格商品加购时的交互卡片：逐维度点选规格值，选齐后一键加入购物车。
+/// 提交时把选择组合成自然语言（如「我要 黑色 Black 42码」）发回后端完成精确加购。
+struct SpecSelectionCard: View {
+    let selection: SpecSelection
+    let onSubmit: (String) -> Void
+
+    @State private var selected: [String: String] = [:]
+    @State private var submitted = false
+
+    private var allChosen: Bool {
+        selection.dimensions.allSatisfy { selected[$0.name] != nil }
+    }
+
+    private var buttonTitle: String {
+        if submitted { return "已选择" }
+        return allChosen ? "加入购物车" : "请选择规格"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            ForEach(selection.dimensions) { dimension in
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(dimension.name)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(AppTheme.textPrimary)
+                    FlowLayout(spacing: 8) {
+                        ForEach(dimension.values, id: \.self) { value in
+                            chip(dimension: dimension.name, value: value)
+                        }
+                    }
+                }
+            }
+
+            Button(action: submit) {
+                Text(buttonTitle)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 11)
+                    .background(
+                        (allChosen && !submitted) ? AppTheme.primary : AppTheme.primary.opacity(0.4),
+                        in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    )
+            }
+            .disabled(!allChosen || submitted)
+        }
+        .padding(14)
+        .frame(maxWidth: 320, alignment: .leading)
+        .floatingLiquidPanel(cornerRadius: 22)
+    }
+
+    private func chip(dimension: String, value: String) -> some View {
+        let isSelected = selected[dimension] == value
+        return Button {
+            guard !submitted else { return }
+            selected[dimension] = value
+        } label: {
+            Text(value)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(isSelected ? .white : AppTheme.primary)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 9)
+                .background(isSelected ? AppTheme.primary : AppTheme.softPurple, in: Capsule())
+        }
+        .disabled(submitted)
+    }
+
+    private func submit() {
+        guard allChosen, !submitted else { return }
+        submitted = true
+        let phrase = "我要 " + selection.dimensions
+            .compactMap { selected[$0.name] }
+            .joined(separator: " ")
+        onSubmit(phrase)
+    }
+}
+
+/// 轻量流式布局：子视图按行从左到右排列，超出宽度自动换行（用于规格 chip）。
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        var x: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        var totalHeight: CGFloat = 0
+        var maxRowWidth: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x + size.width > maxWidth, x > 0 {
+                totalHeight += rowHeight + spacing
+                maxRowWidth = max(maxRowWidth, x - spacing)
+                x = 0
+                rowHeight = 0
+            }
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
+        totalHeight += rowHeight
+        maxRowWidth = max(maxRowWidth, x - spacing)
+        let width = maxWidth.isFinite ? min(maxRowWidth, maxWidth) : maxRowWidth
+        return CGSize(width: max(width, 0), height: totalHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x: CGFloat = bounds.minX
+        var y: CGFloat = bounds.minY
+        var rowHeight: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x + size.width > bounds.maxX, x > bounds.minX {
+                x = bounds.minX
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            subview.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
     }
 }
 

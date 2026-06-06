@@ -192,6 +192,24 @@ struct ChatMessage: Identifiable, Codable {
     var state: MessageState = .ready
     var products: [Product] = []
     var canRetry: Bool = false
+    /// 多规格商品加购时，AI 给出的可交互规格选择卡片；无则为 nil。
+    var specSelection: SpecSelection? = nil
+}
+
+/// 多规格商品的一个可选维度（如「颜色」对应一组取值）。
+struct SpecDimension: Identifiable, Hashable, Codable {
+    var id = UUID()
+    let name: String
+    let values: [String]
+}
+
+/// 一次「请选择规格」交互所需的全部数据：商品 + 各维度可选值。
+/// 用户在卡片上逐维度点选后，组合成自然语言发回后端完成精确加购。
+struct SpecSelection: Identifiable, Hashable, Codable {
+    var id = UUID()
+    let productID: String
+    let title: String
+    let dimensions: [SpecDimension]
 }
 
 /// 一段完整对话：对应后端一个 session_id，整段 transcript 本地持久化。

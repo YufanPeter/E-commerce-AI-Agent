@@ -457,17 +457,27 @@ final class RESTAgentService: AgentServicing {
             )
 
         case "tool_result":
+            // 多规格加购：后端要求用户选规格 → 透出可交互的规格选择卡片，
+            // 不再继续解析商品/购物车（此时尚未真正加购）。
+            if let spec = Self.extractSpecSelection(fromToolResult: bytes) {
+                continuation.yield(
+                    AgentStreamEventPayload(type: .specSelection, specSelection: spec)
+                )
+                return
+            }
             if Self.isCartToolResult(bytes) {
-                Task { [productService] in
-                    if let snapshot = try? await Self.extractCartSnapshot(
-                        fromToolResult: bytes,
-                        productService: productService
-                    ) {
-                        continuation.yield(
-                            AgentStreamEventPayload(type: .cartSnapshot, cartSnapshot: snapshot)
-                        )
-                    }
+                // 必须同步 await：购物车快照要在 done 之前按顺序透出，否则
+                // 加购很快返回时（needs_composer=False）detached Task 还没取完
+                // 商品就被 done 收尾，导致购物车显示为空 / 价格错位。
+                if let snapshot = try? await Self.extractCartSnapshot(
+                    fromToolResult: bytes,
+                    productService: productService
+                ) {
+                    continuation.yield(
+                        AgentStreamEventPayload(type: .cartSnapshot, cartSnapshot: snapshot)
+                    )
                 }
+                return  // cart 结果不含 products[]，无需再走商品补全
             }
             let ids = Self.extractProductIDs(fromToolResult: bytes)
             guard !ids.isEmpty else { return }
@@ -530,6 +540,33 @@ final class RESTAgentService: AgentServicing {
             return false
         }
         return true
+    }
+
+    /// 从 cart 工具的 `ask_spec` 结果中解析规格选择卡片所需数据。
+    /// 仅当 action==ask_spec 且带有有序的 `dimensions` 时返回，否则 nil。
+    private static func extractSpecSelection(fromToolResult bytes: Data) -> SpecSelection? {
+        guard
+            let obj = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
+            (obj["tool_name"] as? String) == "cart",
+            let payload = obj["payload"] as? [String: Any],
+            (payload["action"] as? String) == "ask_spec",
+            let productID = payload["product_id"] as? String,
+            let rawDimensions = payload["dimensions"] as? [[String: Any]]
+        else {
+            return nil
+        }
+        let title = payload["title"] as? String ?? ""
+        let dimensions = rawDimensions.compactMap { dim -> SpecDimension? in
+            guard
+                let name = dim["name"] as? String,
+                let values = dim["values"] as? [String], !values.isEmpty
+            else {
+                return nil
+            }
+            return SpecDimension(name: name, values: values)
+        }
+        guard !dimensions.isEmpty else { return nil }
+        return SpecSelection(productID: productID, title: title, dimensions: dimensions)
     }
 
     private static func extractCartSnapshot(
