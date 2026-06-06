@@ -303,7 +303,7 @@ struct GuideView: View {
                                 updateLastAI(
                                     text: statusText,
                                     state: status.phase.messageState,
-                                    products: hydrated
+                                    products: []
                                 )
                             }
                         }
@@ -313,7 +313,7 @@ struct GuideView: View {
                         updateLastAI(
                             text: narrative.isEmpty ? statusText : narrative,
                             state: .generating,
-                            products: hydrated
+                            products: []
                         )
 
                     case .cartSnapshot:
@@ -324,7 +324,7 @@ struct GuideView: View {
                     case .textDelta:
                         if let piece = event.textDelta {
                             narrative += piece
-                            updateLastAI(text: narrative, state: .generating, products: hydrated)
+                            updateLastAI(text: narrative, state: .generating)
                         }
 
                     case .done:
