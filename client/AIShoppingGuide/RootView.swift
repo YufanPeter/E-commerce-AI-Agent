@@ -93,9 +93,7 @@ struct SegmentedTabControl: UIViewRepresentable {
 struct RootView: View {
     @StateObject private var healthMonitor = BackendHealthMonitor()
     @State private var selectedTab: AppTab = .guide
-    @State private var cartItems: [CartItem] = Product.samples.prefix(2).map {
-        CartItem(product: $0, selectedOptions: $0.defaultSpecificationSelection)
-    }
+    @State private var cartItems: [CartItem] = []
     @State private var keyboardOffset: CGFloat = 0
 
     var body: some View {
@@ -147,6 +145,7 @@ struct RootView: View {
         }
         .task {
             healthMonitor.startMonitoring()
+            await resetBackendCartOnLaunch()
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { notification in
             updateKeyboardOffset(from: notification)
@@ -154,6 +153,16 @@ struct RootView: View {
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { notification in
             updateKeyboardOffset(from: notification)
         }
+    }
+
+    /// App 冷启动：清空后端残留购物车，保证“启动即空车”与前端本地一致。
+    /// 购物车在后端 SQLite 持久化且与会话无关，不清会在首次加购时回灌历史、算错总价。
+    private func resetBackendCartOnLaunch() async {
+        cartItems = []
+        var request = URLRequest(url: BackendConfig.cartResetURL)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 4
+        _ = try? await URLSession.shared.data(for: request)
     }
 
     private func updateKeyboardOffset(from notification: Notification) {

@@ -149,3 +149,14 @@ class TestChatStream:
         import json as _json
         sid = _json.loads(events[0][1])["session_id"]
         assert sid
+
+
+class TestCartReset:
+    def test_reset_clears_cart(self, client):
+        c, m = client
+        with patch.object(m, "CartStore") as MockStore:
+            MockStore.return_value.clear.return_value = 3
+            r = c.post("/cart/reset")
+        assert r.status_code == 200
+        assert r.json() == {"status": "cleared", "removed": 3}
+        MockStore.return_value.clear.assert_called_once_with()

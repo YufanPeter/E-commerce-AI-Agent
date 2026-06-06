@@ -31,6 +31,7 @@ from pydantic import BaseModel, Field
 from agent.orchestrator import Agent
 from agent.session import AgentSession
 from api import products as products_router
+from store.cart_store import CartStore
 
 
 logger = logging.getLogger(__name__)
@@ -206,3 +207,15 @@ def chat_stream(req: ChatRequest) -> StreamingResponse:
 def reset_session(session_id: str) -> dict[str, str]:
     _sessions.reset(session_id)
     return {"status": "reset", "session_id": session_id}
+
+
+@app.post("/cart/reset")
+def reset_cart() -> dict[str, Any]:
+    """清空购物车（演示单用户 demo_user）。
+
+    购物车持久化在 SQLite 里且与会话无关，跨 App 重启会残留上次数据。
+    前端 App 冷启动时调用本端点归零，保证“启动即空车”与前端本地
+    状态一致，避免首次加购时后端返回全量（历史残留+新加）导致价格错乱。
+    """
+    removed = CartStore().clear()
+    return {"status": "cleared", "removed": removed}

@@ -23,6 +23,9 @@ enum BackendConfig {
 
     /// 健康检查端点。
     static var healthURL: URL { defaultBaseURL.appendingPathComponent("health") }
+
+    /// 购物车清空端点：App 冷启动调用，清掉后端跨重启残留的购物车。
+    static var cartResetURL: URL { defaultBaseURL.appendingPathComponent("cart/reset") }
 }
 
 /// 后端可达性状态。
