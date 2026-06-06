@@ -105,6 +105,37 @@ class CartStore:
             ).fetchall()
         return [self._line_from_row(row) for row in rows]
 
+    def list_skus(self, product_id: str) -> list[dict[str, Any]]:
+        """列出某商品全部在售 SKU（规格 + 价格），按价格升序。
+
+        给 CartTool 判断"是否需要问用户选规格"用：当返回多于一个时，
+        意味着加购前应让用户在颜色/尺码/容量等维度上做选择。
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT sku_id, properties_json, price, stock_qty FROM product_skus "
+                "WHERE product_id = ? AND status = 'active' "
+                "ORDER BY price ASC, sku_id ASC",
+                (product_id,),
+            ).fetchall()
+        return [
+            {
+                "sku_id": row["sku_id"],
+                "options": load_json_text(row["properties_json"]),
+                "price": float(row["price"]),
+                "stock_qty": int(row["stock_qty"]),
+            }
+            for row in rows
+        ]
+
+    def product_title(self, product_id: str) -> str:
+        """取商品标题；用于加购询问/确认话术。找不到时回退 product_id。"""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT title FROM products WHERE product_id = ?", (product_id,)
+            ).fetchone()
+        return row["title"] if row else product_id
+
     # ------------------------------ 写 ------------------------------
 
     def add_product(

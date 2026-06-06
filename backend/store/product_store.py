@@ -171,6 +171,84 @@ class ProductStore:
         by_id = {candidate.product_id: candidate for candidate in candidates}
         return [by_id[product_id] for product_id in product_ids if product_id in by_id]
 
+    def search_by_keyword(
+        self, keyword: str, limit: int = 8, brand_only: bool = False
+    ) -> list[ProductCandidate]:
+        """按关键词在全库做不区分大小写的模糊匹配。
+
+        给对话式工具（如 cart 加购）做"点名定位"用：用户说"把小米/oppo
+        加进来"时，不论当前推荐列表里有没有，都能从整库精确找到对应商品。
+        命中可能 0/1/多个，由调用方决定直接成交还是反问。
+
+        brand_only=True 时只匹配 brand 字段（不看 title），用于"是否切换到
+        别的品牌"这种判断——规格值（256GB/宇宙橙）不会命中任何品牌，可避免
+        把规格回答误判成换商品。
+        """
+        kw = (keyword or "").strip()
+        if not kw:
+            return []
+        like = f"%{kw.lower()}%"
+        if brand_only:
+            where_kw = "LOWER(p.brand) LIKE ?"
+            params: list[Any] = [like, limit]
+        else:
+            where_kw = "(LOWER(p.brand) LIKE ? OR LOWER(p.title) LIKE ?)"
+            params = [like, like, limit]
+        with self.connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT p.product_id
+                FROM products p
+                JOIN product_price_ranges pr ON pr.product_id = p.product_id
+                WHERE p.status = 'active' AND {where_kw}
+                ORDER BY pr.min_price ASC, p.product_id ASC
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+        ids = [row["product_id"] for row in rows]
+        return self.get_products_by_ids(ids)
+
+    def match_brands_in_text(self, text: str, limit: int = 8) -> list[ProductCandidate]:
+        """拿原句直接和库里所有品牌名做子串匹配，命中品牌则返回其商品。
+
+        不依赖分词/剥停用词——"请你把小米加入购物车"这类带语气前缀也能稳稳命中
+        "小米"，避免了"逐个补停用词"的打地鼠。品牌名按空白拆词（如"Apple 苹果"
+        →["apple","苹果"]），任一长度≥2 的词是句子的子串即算命中；规格值
+        （256GB/宇宙橙/深空黑）不等于任何品牌词，故不会把规格回答误判成换品牌。
+        """
+        t = (text or "").lower()
+        if not t:
+            return []
+        with self.connect() as conn:
+            brand_rows = conn.execute(
+                "SELECT DISTINCT brand FROM products "
+                "WHERE status = 'active' AND brand IS NOT NULL AND brand <> ''"
+            ).fetchall()
+            matched: list[str] = []
+            for row in brand_rows:
+                brand = row["brand"]
+                for tok in brand.lower().split():
+                    if len(tok) >= 2 and tok in t:
+                        matched.append(brand)
+                        break
+            if not matched:
+                return []
+            placeholders = ",".join("?" for _ in matched)
+            id_rows = conn.execute(
+                f"""
+                SELECT p.product_id
+                FROM products p
+                JOIN product_price_ranges pr ON pr.product_id = p.product_id
+                WHERE p.status = 'active' AND p.brand IN ({placeholders})
+                ORDER BY pr.min_price ASC, p.product_id ASC
+                LIMIT ?
+                """,
+                [*matched, limit],
+            ).fetchall()
+        ids = [row["product_id"] for row in id_rows]
+        return self.get_products_by_ids(ids)
+
     def get_product_detail(self, product_id: str) -> ProductDetail | None:
         """查询详情页所需的完整商品结构化数据。"""
         with self.connect() as conn:

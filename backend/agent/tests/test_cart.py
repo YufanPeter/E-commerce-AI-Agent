@@ -110,6 +110,14 @@ def test_store_checkout_empty_raises(store: CartStore):
         store.build_order()
 
 
+def test_store_clear_removes_all(store: CartStore):
+    store.add_product("p1", quantity=2)
+    store.add_product("p2")
+    removed = store.clear()
+    assert removed == 2  # 两个 SKU 行被删
+    assert store.list_items() == []
+
+
 # --------------------------- CartTool + 统一调用层 ---------------------------
 
 
