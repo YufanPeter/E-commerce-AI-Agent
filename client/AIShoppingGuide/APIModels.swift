@@ -178,6 +178,8 @@ struct AgentRequestPayload: Codable, Hashable {
     let cart: CartSnapshotPayload?
     let locale: String
     let timezone: String
+    /// 拍照找货：图片的 base64（可带 data URI 前缀）。纯文本请求为 nil。
+    let imageBase64: String?
 
     init(
         sessionID: String? = nil,
@@ -188,7 +190,8 @@ struct AgentRequestPayload: Codable, Hashable {
         profile: UserProfilePayload? = nil,
         cart: CartSnapshotPayload? = nil,
         locale: String = Locale.current.identifier,
-        timezone: String = TimeZone.current.identifier
+        timezone: String = TimeZone.current.identifier,
+        imageBase64: String? = nil
     ) {
         self.sessionID = sessionID
         self.clientMessageID = clientMessageID
@@ -199,6 +202,7 @@ struct AgentRequestPayload: Codable, Hashable {
         self.cart = cart
         self.locale = locale
         self.timezone = timezone
+        self.imageBase64 = imageBase64
     }
 }
 

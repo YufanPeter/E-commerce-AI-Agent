@@ -12,6 +12,8 @@ from __future__ import annotations
     - 不直接生成话术（那是 composer 的事，便于流式 / 个性化注入）
 """
 
+import logging
+import os
 from typing import Any, Callable
 
 from agent.session import AgentSession
@@ -20,8 +22,19 @@ from search.query_decomposer import SubRequest, decompose_query
 from search.search_service import ProductHit, SearchResult, SearchService
 
 
+logger = logging.getLogger(__name__)
+
 # 默认 top-k；composer 不需要更多，前端卡片场景 5 已经够。
 DEFAULT_TOP_K = 5
+
+# 图搜重排融合权重：最终分 = 文本相关性 * α + 视觉相似度 * β。
+# 文本（VLM 抽取的 query 走 RAG）保证"类目/属性对得上"，视觉保证"长得像"，
+# 两者互补。默认偏重文本（语义意图更贴合电商"找同类"），视觉做次级排序。
+_VISUAL_TEXT_WEIGHT = float(os.getenv("VISUAL_TEXT_WEIGHT", "0.6"))
+_VISUAL_IMAGE_WEIGHT = float(os.getenv("VISUAL_IMAGE_WEIGHT", "0.4"))
+
+# 图搜召回池：先用文本多召回一些，再用视觉相似度重排取 top_k，给重排留空间。
+_VISUAL_POOL_SIZE = int(os.getenv("VISUAL_POOL_SIZE", "12"))
 
 # 多需求分组时，每个子需求保留的商品数。比单需求少，是因为多个品类
 # 叠加后总量会很大；每类取 top-3 既能覆盖主流选择，又不让卡片列表过长。
@@ -71,6 +84,100 @@ class RecommendTool:
         if len(subs) <= 1:
             return self._run_single(query, session, top_k=top_k, base=None)
         return self._run_multi(query, subs, session)
+
+    # ------------------------------------------------------------------
+    # 图搜路径（拍照找货）：VLM 已抽好的 query 走文本 RAG 召回，再用视觉相似度重排
+    # ------------------------------------------------------------------
+    def run_image(
+        self,
+        query: str,
+        image: str,
+        session: AgentSession,
+        top_k: int = DEFAULT_TOP_K,
+    ) -> ToolResult:
+        """图搜：``query`` 是 VLM 从图里抽出的检索词，``image`` 是原图（URL/base64）。
+
+        流程：文本 RAG 多召回一池候选 → 用图片向量对候选算视觉相似度 →
+        融合（文本相关性 + 视觉相似度）重排 → 取 top_k → 复用商品卡片契约。
+        视觉索引缺失或编码失败时，自动退化为纯文本顺序（不报错）。
+        """
+        pool = max(top_k, _VISUAL_POOL_SIZE)
+        result = self._get_service().search(query, top_k_products=pool)
+
+        hits = self._visual_rerank(result.hits, image, top_k)
+
+        session.remember_search(
+            result.parsed.to_dict(),
+            [{"product_id": h.product_id, "title": h.title} for h in hits],
+        )
+
+        products = [_to_product_card(h) for h in hits]
+        payload = {
+            "query": query,
+            "products": products,
+            "summary": {
+                "hit_count": len(hits),
+                "needs_clarification": False,
+                "category": result.parsed.category,
+                "source": "visual_search",
+            },
+            "debug": {
+                "parsed": result.parsed.to_dict(),
+                "pool_size": len(result.hits),
+                "extracted_query": query,
+            },
+        }
+        if not hits:
+            hint = (
+                "用户上传了一张商品图，但库里没有找到相似商品。"
+                "请坦诚告知，并建议换张更清晰的图或用文字描述。"
+            )
+        else:
+            hint = (
+                f"用户上传了一张商品图，我识别为「{query}」并找到 {len(hits)} 款相似商品。"
+                "请说明这是【根据图片】找到的相似/同类商品，再简明介绍推荐理由。"
+            )
+        return ToolResult(tool_name=self.name, payload=payload, composer_hint=hint)
+
+    def _visual_rerank(
+        self, hits: list[ProductHit], image: str, top_k: int
+    ) -> list[ProductHit]:
+        """用图片视觉相似度对文本召回的候选重排，取 top_k。
+
+        融合分 = 归一化文本分 * α + 视觉余弦 * β。视觉信号拿不到（索引缺失/
+        编码失败/该商品无图向量）时，β 部分记 0，等价于退化到纯文本排序。"""
+        if not hits:
+            return []
+
+        # 1) 文本分 min-max 归一化到 [0,1]，让两路信号同量纲再融合。
+        scores = [h.score for h in hits]
+        lo, hi = min(scores), max(scores)
+        span = (hi - lo) or 1.0
+        text_norm = {h.product_id: (h.score - lo) / span for h in hits}
+
+        # 2) 视觉相似度（拿不到则整体退化为纯文本）。
+        visual: dict[str, float] = {}
+        try:
+            from llm.vision import embed_image
+            from search.visual_index import get_visual_index
+
+            query_vec = embed_image(image)
+            visual = get_visual_index().score_many(
+                query_vec, [h.product_id for h in hits]
+            )
+        except Exception as exc:  # noqa: BLE001 - 视觉重排是增强项，失败不应中断图搜
+            logger.warning("视觉重排失败，退化为纯文本排序：%r", exc)
+
+        def _fused(h: ProductHit) -> float:
+            t = text_norm.get(h.product_id, 0.0)
+            v = visual.get(h.product_id)
+            if v is None:
+                return t  # 无视觉信号 → 只看文本
+            return _VISUAL_TEXT_WEIGHT * t + _VISUAL_IMAGE_WEIGHT * v
+
+        ranked = sorted(hits, key=_fused, reverse=True)
+        return ranked[:top_k]
+
 
     # ------------------------------------------------------------------
     # 单需求路径（原逻辑，保持不变）

@@ -407,6 +407,7 @@ final class RESTAgentService: AgentServicing {
         let resolvedSession = payload.sessionID ?? storedSession
         var body: [String: Any] = ["query": payload.text]
         if let resolvedSession { body["session_id"] = resolvedSession }
+        if let image = payload.imageBase64 { body["image_base64"] = image }
         urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         // 用 URLSessionDataDelegate 做增量 SSE 解析：URLSession.AsyncBytes 在 iOS 上

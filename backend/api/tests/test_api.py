@@ -53,6 +53,15 @@ class _FakeAgent:
         yield {"type": "token", "data": query}
         yield {"type": "done", "data": {"timings": {"router_ms": 1, "tool_ms": 1, "composer_ms": 1}, "narrative": f"hi {query}"}}
 
+    def handle_image_turn_stream(self, image, session, hint_text="") -> Iterator[dict]:
+        # 记录收到的图片，供断言路由是否走了图搜
+        self.received_image = image
+        self.received_hint = hint_text
+        yield {"type": "meta", "data": {"decision": {"tool": "recommend", "rewritten_query": "视觉query", "confidence": "high", "reasoning": "image"}, "trace": {"timings": {}, "extracted_query": "视觉query"}}}
+        yield {"type": "tool_result", "data": {"tool_name": "recommend", "payload": {"products": [{"product_id": "p_clothes_001"}], "summary": {"source": "visual_search"}}}}
+        yield {"type": "token", "data": "根据图片找到相似商品"}
+        yield {"type": "done", "data": {"timings": {}, "narrative": "根据图片找到相似商品"}}
+
 
 class TestHealthz:
     def test_ok(self, client):
@@ -160,3 +169,75 @@ class TestCartReset:
         assert r.status_code == 200
         assert r.json() == {"status": "cleared", "removed": 3}
         MockStore.return_value.clear.assert_called_once_with()
+
+
+class TestResolveImage:
+    def _req(self, **kw):
+        from api.main import ChatRequest
+        return ChatRequest(query=kw.pop("query", ""), **kw)
+
+    def test_no_image_returns_none(self):
+        from api.main import _resolve_image
+        assert _resolve_image(self._req()) is None
+
+    def test_image_url_takes_priority(self):
+        from api.main import _resolve_image
+        req = self._req(image_url="https://x/y.jpg", image_base64="abc")
+        assert _resolve_image(req) == "https://x/y.jpg"
+
+    def test_raw_base64_gets_data_uri_prefix(self):
+        from api.main import _resolve_image
+        req = self._req(image_base64="/9j/abcd")
+        assert _resolve_image(req) == "data:image/jpeg;base64,/9j/abcd"
+
+    def test_data_uri_passthrough(self):
+        from api.main import _resolve_image
+        data_uri = "data:image/png;base64,iVBOR"
+        req = self._req(image_base64=data_uri)
+        assert _resolve_image(req) == data_uri
+
+
+class TestVisualSearchStream:
+    def _parse_sse(self, raw: str):
+        out = []
+        cur_event, cur_data = "message", []
+        for line in raw.splitlines():
+            if line.startswith("event: "):
+                cur_event = line[len("event: "):]
+            elif line.startswith("data: "):
+                cur_data.append(line[len("data: "):])
+            elif line == "":
+                if cur_data:
+                    out.append((cur_event, "\n".join(cur_data)))
+                cur_event, cur_data = "message", []
+        if cur_data:
+            out.append((cur_event, "\n".join(cur_data)))
+        return out
+
+    def test_image_request_routes_to_visual_search(self, client):
+        c, m = client
+        agent = _FakeAgent()
+        m._agent = agent
+        with c.stream(
+            "POST", "/chat/stream",
+            json={"query": "", "image_base64": "/9j/zzz"},
+        ) as r:
+            assert r.status_code == 200
+            body = "".join(chunk for chunk in r.iter_text())
+        # 走了图搜入口，且 base64 被补上 data URI 前缀
+        assert agent.received_image == "data:image/jpeg;base64,/9j/zzz"
+        events = self._parse_sse(body)
+        types = [e for e, _ in events]
+        assert types[0] == "session"
+        assert "tool_result" in types
+        assert types[-1] == "done"
+
+    def test_text_request_does_not_route_to_visual(self, client):
+        c, m = client
+        agent = _FakeAgent()
+        m._agent = agent
+        with c.stream("POST", "/chat/stream", json={"query": "推荐耳机"}) as r:
+            body = "".join(chunk for chunk in r.iter_text())
+        # 纯文本不应触发图搜
+        assert not hasattr(agent, "received_image")
+

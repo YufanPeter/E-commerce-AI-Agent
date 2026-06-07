@@ -194,6 +194,8 @@ struct ChatMessage: Identifiable, Codable {
     var canRetry: Bool = false
     /// 多规格商品加购时，AI 给出的可交互规格选择卡片；无则为 nil。
     var specSelection: SpecSelection? = nil
+    /// 拍照找货：用户这条消息附带的本地图片（缩略图渲染用）；无则为 nil。
+    var localImageData: Data? = nil
 }
 
 /// 多规格商品的一个可选维度（如「颜色」对应一组取值）。

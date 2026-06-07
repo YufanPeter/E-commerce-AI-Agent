@@ -44,6 +44,13 @@ logger = logging.getLogger(__name__)
 class ChatRequest(BaseModel):
     query: str = Field(..., description="用户输入的自然语言 query")
     session_id: str | None = Field(None, description="会话 id；不传则服务端新建")
+    image_base64: str | None = Field(
+        None,
+        description="拍照找货：图片的 base64（可带 data:image/...;base64, 前缀，也可纯 base64）",
+    )
+    image_url: str | None = Field(
+        None, description="拍照找货：图片的远程 URL（与 image_base64 二选一）"
+    )
 
 
 class ChatResponse(BaseModel):
@@ -160,6 +167,22 @@ def chat(req: ChatRequest) -> ChatResponse:
     )
 
 
+def _resolve_image(req: ChatRequest) -> str | None:
+    """把请求里的图片归一成 Ark image_url 字段能直接吃的形态。
+
+    优先用远程 URL；否则用 base64（裸 base64 自动补 data URI 前缀）。
+    都没有则返回 None（走普通文本链路）。
+    """
+    if req.image_url and req.image_url.strip():
+        return req.image_url.strip()
+    if req.image_base64 and req.image_base64.strip():
+        b64 = req.image_base64.strip()
+        if b64.startswith("data:"):
+            return b64
+        return f"data:image/jpeg;base64,{b64}"
+    return None
+
+
 @app.post("/chat/stream")
 def chat_stream(req: ChatRequest) -> StreamingResponse:
     """SSE 流式端点。
@@ -179,6 +202,7 @@ def chat_stream(req: ChatRequest) -> StreamingResponse:
     """
     session = _sessions.get_or_create(req.session_id)
     agent = _get_agent()
+    image = _resolve_image(req)
 
     def _format_sse(event: str, payload: Any) -> str:
         data = json.dumps(payload, ensure_ascii=False)
@@ -188,7 +212,14 @@ def chat_stream(req: ChatRequest) -> StreamingResponse:
         # 首条：先把 session_id 告诉客户端（便于客户端持久化）
         yield _format_sse("session", {"session_id": session.session_id})
         try:
-            for ev in agent.handle_turn_stream(req.query, session):
+            # 有图 → 走图搜（拍照找货）；query 作为随图附带文字（可空）
+            if image:
+                stream = agent.handle_image_turn_stream(
+                    image, session, hint_text=req.query
+                )
+            else:
+                stream = agent.handle_turn_stream(req.query, session)
+            for ev in stream:
                 yield _format_sse(ev["type"], ev["data"])
         except Exception as exc:  # noqa: BLE001 - 流式中任何异常都要给前端
             logger.exception("Stream pipeline crashed")

@@ -245,6 +245,118 @@ class Agent:
             "trace": trace,
         }}
 
+    # ----------------------------- 图搜（拍照找货）-----------------------------
+
+    def handle_image_turn_stream(
+        self,
+        image: str,
+        session: AgentSession,
+        hint_text: str = "",
+    ) -> Iterator[dict[str, Any]]:
+        """图片输入的流式入口：看图 → 抽检索词 → 视觉重排检索 → composer 流式。
+
+        模态已知（就是图搜），无需 router LLM 分类，直接走 recommend 的图搜路径。
+        ``hint_text`` 是用户随图附带的文字（图+文场景，可空）。
+        """
+        from llm.vision import UNRECOGNIZED, vision_extract_query
+
+        trace: dict[str, Any] = {"timings": {}}
+        image = (image or "").strip()
+        hint_text = (hint_text or "").strip()
+
+        # ① 看图：把图片抽成中文检索词
+        yield {"type": "status", "data": {"phase": "vision", "message": "正在识别图片…"}}
+        t0 = time.perf_counter()
+        try:
+            extracted = vision_extract_query(image)
+        except Exception as exc:  # noqa: BLE001 - 视觉抽取失败要降级而非崩流
+            logger.exception("vision_extract_query failed")
+            trace["vision_error"] = repr(exc)
+            extracted = UNRECOGNIZED
+        trace["timings"]["vision_ms"] = int((time.perf_counter() - t0) * 1000)
+
+        # 把这一轮用户输入记进历史（含可选附带文字），供 composer 上下文使用
+        display = f"[图片] {hint_text}".strip() if hint_text else "[图片搜索]"
+        session.add_user(display)
+
+        # 图+文：把附带文字并入检索词，让"找便宜点的同款"这类约束也生效
+        effective_query = extracted
+        if extracted != UNRECOGNIZED and hint_text:
+            effective_query = f"{extracted} {hint_text}"
+
+        decision = IntentDecision(
+            tool="recommend",
+            rewritten_query=effective_query,
+            confidence="high",
+            reasoning="image visual search",
+        )
+        yield {"type": "meta", "data": {
+            "decision": decision.to_dict(),
+            "trace": {"timings": dict(trace["timings"]), "extracted_query": extracted},
+        }}
+
+        # 识别失败：不检索，友好澄清
+        if extracted == UNRECOGNIZED:
+            text = "没看清这张图里的商品呢～换张更清晰的图，或者用文字描述一下你想找什么？"
+            yield {"type": "tool_result", "data": {
+                "tool_name": "recommend",
+                "payload": {"action": "image_unrecognized", "products": []},
+            }}
+            yield {"type": "token", "data": text}
+            session.add_assistant(text)
+            yield {"type": "done", "data": {"timings": trace["timings"], "narrative": text}}
+            return
+
+        # ② 工具：图搜 + 视觉重排
+        yield {"type": "status", "data": {
+            "phase": "tool", "tool": "recommend", "message": "正在按图找相似商品…",
+        }}
+        t1 = time.perf_counter()
+        recommend = self._tools["recommend"]
+        try:
+            tool_result = recommend.run_image(effective_query, image, session)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Visual search tool failed")
+            trace["tool_error"] = repr(exc)
+            tool_result = ToolResult(
+                tool_name="recommend",
+                payload={"query": effective_query, "products": [], "error": repr(exc)},
+                narrative_override="抱歉，图片搜索暂时不可用，换种说法或稍后再试？",
+                needs_composer=False,
+            )
+        trace["timings"]["tool_ms"] = int((time.perf_counter() - t1) * 1000)
+        yield {"type": "tool_result", "data": tool_result.to_dict()}
+
+        # ③ composer 流式（与文本链路一致）
+        if tool_result.needs_composer:
+            yield {"type": "status", "data": {"phase": "compose", "message": "正在生成推荐解说…"}}
+        t2 = time.perf_counter()
+        narrative_parts: list[str] = []
+        try:
+            for piece in self._composer.compose_stream(tool_result, session):
+                narrative_parts.append(piece)
+                yield {"type": "token", "data": piece}
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Streaming composer raised unexpectedly (image path)")
+            trace["composer_error"] = repr(exc)
+            fallback = self._fallback_narrative(tool_result)
+            if not narrative_parts:
+                narrative_parts.append(fallback)
+                yield {"type": "token", "data": fallback}
+        trace["timings"]["composer_ms"] = int((time.perf_counter() - t2) * 1000)
+
+        narrative = "".join(narrative_parts).strip()
+        if not narrative:
+            narrative = self._fallback_narrative(tool_result)
+            yield {"type": "token", "data": narrative}
+
+        session.add_assistant(narrative)
+        yield {"type": "done", "data": {
+            "timings": trace["timings"],
+            "narrative": narrative,
+            "trace": trace,
+        }}
+
     # ----------------------------- 内部 -----------------------------
 
     def _safe_route(

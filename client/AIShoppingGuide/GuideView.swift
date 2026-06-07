@@ -1,5 +1,6 @@
 import AVFoundation
 import Combine
+import PhotosUI
 import Speech
 import SwiftUI
 import UIKit
@@ -34,6 +35,9 @@ struct GuideView: View {
     @State private var pendingQuestionAnchorID: UUID?
     @State private var shouldHoldLatestQuestionAnchor = false
     @State private var pendingAutoFollowWorkItem: DispatchWorkItem?
+    @State private var photoPickerItem: PhotosPickerItem?
+    @State private var showPhotoPicker = false
+    @State private var showCamera = false
     @StateObject private var speechInput = SpeechInputController()
     @FocusState private var isInputFocused: Bool
 
@@ -99,6 +103,24 @@ struct GuideView: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { notification in
                 updateKeyboardHeight(from: notification)
+            }
+            .photosPicker(isPresented: $showPhotoPicker, selection: $photoPickerItem, matching: .images)
+            .onChange(of: photoPickerItem) { _, newItem in
+                guard let newItem else { return }
+                Task { @MainActor in
+                    if let data = try? await newItem.loadTransferable(type: Data.self) {
+                        handlePickedImage(data)
+                    }
+                    photoPickerItem = nil
+                }
+            }
+            .fullScreenCover(isPresented: $showCamera) {
+                CameraPicker { image in
+                    if let data = image.jpegData(compressionQuality: 1.0) {
+                        handlePickedImage(data)
+                    }
+                }
+                .ignoresSafeArea()
             }
         }
     }
@@ -297,15 +319,15 @@ struct GuideView: View {
                 if #available(iOS 26.0, *) {
                     GlassEffectContainer(spacing: 12) {
                         VStack(alignment: .leading, spacing: 12) {
-                            ComposerAction(icon: "camera.fill", title: "相机") {}
-                            ComposerAction(icon: "photo.fill", title: "图片上传") {}
+                            ComposerAction(icon: "camera.fill", title: "相机") { openCamera() }
+                            ComposerAction(icon: "photo.fill", title: "图片上传") { openPhotoPicker() }
                         }
                     }
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 } else {
                     VStack(alignment: .leading, spacing: 12) {
-                        ComposerAction(icon: "camera.fill", title: "相机") {}
-                        ComposerAction(icon: "photo.fill", title: "图片上传") {}
+                        ComposerAction(icon: "camera.fill", title: "相机") { openCamera() }
+                        ComposerAction(icon: "photo.fill", title: "图片上传") { openPhotoPicker() }
                     }
                     .padding(14)
                     .frame(width: 156, alignment: .leading)
@@ -470,14 +492,74 @@ struct GuideView: View {
         runAgent(for: query)
     }
 
-    private func runAgent(for query: String) {
+    // MARK: - 拍照找货
+
+    private func openCamera() {
+        isComposerExpanded = false
+        guard UIImagePickerController.isSourceTypeAvailable(.camera) else {
+            // 模拟器无相机：退化为相册选择
+            showPhotoPicker = true
+            return
+        }
+        showCamera = true
+    }
+
+    private func openPhotoPicker() {
+        isComposerExpanded = false
+        showPhotoPicker = true
+    }
+
+    /// 选定/拍摄图片后：压缩 → base64 → 作为一条用户图片消息发起图搜。
+    private func handlePickedImage(_ data: Data) {
+        guard let compressed = Self.compressedJPEG(from: data) else { return }
+        let base64 = compressed.base64EncodedString()
+
+        speechInput.stop()
+        isComposerExpanded = false
+        lastQuery = ""
+        if currentTitle == GuideView.newConversationTitle {
+            currentTitle = "拍照找货"
+        }
+        let userMessage = ChatMessage(sender: .user, text: "", localImageData: compressed)
+        pendingAutoFollowWorkItem?.cancel()
+        isAutoFollowEnabled = true
+        isNearChatBottom = false
+        isUserInteractingWithChat = false
+        shouldShowJumpToLatest = false
+        shouldHoldLatestQuestionAnchor = true
+        pendingQuestionAnchorID = userMessage.id
+        messages.append(userMessage)
+        messages.append(ChatMessage(sender: .ai, text: "正在识别图片", state: .understanding))
+        runAgent(for: "", imageBase64: base64)
+    }
+
+    /// 把图片压到最长边 ≤1024px、JPEG 0.7，控制 base64 体积（~200-400KB）。
+    private static func compressedJPEG(from data: Data, maxSide: CGFloat = 1024) -> Data? {
+        guard let image = UIImage(data: data) else { return nil }
+        let side = max(image.size.width, image.size.height)
+        let scale = side > maxSide ? maxSide / side : 1.0
+        let target = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        let renderer = UIGraphicsImageRenderer(size: target, format: format)
+        let resized = renderer.image { _ in
+            image.draw(in: CGRect(origin: .zero, size: target))
+        }
+        return resized.jpegData(compressionQuality: 0.7)
+    }
+
+    private func runAgent(for query: String, imageBase64: String? = nil) {
         Task { @MainActor in
             var narrative = ""
             var hydrated: [Product] = []
-            var statusText = "正在理解你的需求"
+            var statusText = imageBase64 == nil ? "正在理解你的需求" : "正在识别图片"
 
             do {
-                let request = AgentRequestPayload(sessionID: currentSessionID, text: query)
+                let request = AgentRequestPayload(
+                    sessionID: currentSessionID,
+                    text: query,
+                    imageBase64: imageBase64
+                )
                 for try await event in agentService.streamResponse(for: request) {
                     switch event.type {
                     case .status:
@@ -762,16 +844,30 @@ struct MessageRow: View {
             if message.sender == .user { Spacer(minLength: 44) }
 
             VStack(alignment: message.sender == .user ? .trailing : .leading, spacing: 10) {
-                Text(displayText)
-                    .font(.subheadline)
-                    .foregroundStyle(message.state == .failed ? AppTheme.error : AppTheme.textPrimary)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 11)
-                    .background(bubbleColor, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .stroke(AppTheme.border, lineWidth: message.sender == .ai ? 1 : 0)
-                    )
+                if let data = message.localImageData, let uiImage = UIImage(data: data) {
+                    Image(uiImage: uiImage)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: 160, height: 160)
+                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .stroke(AppTheme.border, lineWidth: 1)
+                        )
+                }
+
+                if !displayText.isEmpty {
+                    Text(displayText)
+                        .font(.subheadline)
+                        .foregroundStyle(message.state == .failed ? AppTheme.error : AppTheme.textPrimary)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 11)
+                        .background(bubbleColor, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .stroke(AppTheme.border, lineWidth: message.sender == .ai ? 1 : 0)
+                        )
+                }
 
                 if !examples.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
@@ -1161,6 +1257,47 @@ struct FlowLayout: Layout {
             subview.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
             x += size.width + spacing
             rowHeight = max(rowHeight, size.height)
+        }
+    }
+}
+
+/// 相机拍照选择器：包装 UIImagePickerController（SwiftUI 无原生相机入口）。
+struct CameraPicker: UIViewControllerRepresentable {
+    let onImage: (UIImage) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.sourceType = .camera
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    final class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+        private let parent: CameraPicker
+
+        init(_ parent: CameraPicker) {
+            self.parent = parent
+        }
+
+        func imagePickerController(
+            _ picker: UIImagePickerController,
+            didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]
+        ) {
+            if let image = info[.originalImage] as? UIImage {
+                parent.onImage(image)
+            }
+            parent.dismiss()
+        }
+
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            parent.dismiss()
         }
     }
 }
