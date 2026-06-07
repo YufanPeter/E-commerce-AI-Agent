@@ -106,7 +106,8 @@ struct GuideView: View {
                         if conversation.id == currentConversationID {
                             currentTitle = newTitle
                         }
-                    }
+                    },
+                    onClearAll: { store.clearAll() }
                 )
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
@@ -148,18 +149,23 @@ struct GuideView: View {
 
     private var header: some View {
         HStack {
-            Text("CartPilot AI 导购助手")
+            Text("CartPilot 智能导购")
                 .font(.title3.bold())
                 .foregroundStyle(AppTheme.textPrimary)
             Spacer()
             Button {
                 startNewConversation()
             } label: {
-                Image(systemName: "square.and.pencil")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(AppTheme.primary)
-                    .frame(width: 40, height: 40)
-                    .floatingLiquidPanel(cornerRadius: 20)
+                HStack(spacing: 5) {
+                    Image(systemName: "square.and.pencil")
+                        .font(.system(size: 15, weight: .semibold))
+                    Text("新对话")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .foregroundStyle(AppTheme.primary)
+                .padding(.horizontal, 14)
+                .frame(height: 40)
+                .floatingLiquidPanel(cornerRadius: 20)
             }
             Button {
                 showHistory = true
@@ -1488,11 +1494,13 @@ struct HistorySheet: View {
     let onSelect: (Conversation) -> Void
     let onDelete: (Conversation) -> Void
     let onRename: (Conversation, String) -> Void
+    let onClearAll: () -> Void
 
     @State private var pendingDelete: Conversation?
     @State private var renameTarget: Conversation?
     @State private var renameText: String = ""
     @State private var searchText: String = ""
+    @State private var showClearAllConfirm = false
 
     /// 按标题 + 消息内容过滤（不区分大小写）。
     private var filtered: [Conversation] {
@@ -1506,10 +1514,23 @@ struct HistorySheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("历史记录")
-                .font(.title3.bold())
-                .padding(.horizontal, 20)
-                .padding(.top, 16)
+            HStack {
+                Text("历史记录")
+                    .font(.title3.bold())
+                Spacer()
+                if !conversations.isEmpty {
+                    Button(role: .destructive) {
+                        showClearAllConfirm = true
+                    } label: {
+                        Label("清空", systemImage: "trash")
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(AppTheme.error)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 16)
 
             if !conversations.isEmpty {
                 searchBar
@@ -1594,6 +1615,14 @@ struct HistorySheet: View {
                 renameTarget = nil
             }
             Button("取消", role: .cancel) { renameTarget = nil }
+        }
+        .confirmationDialog(
+            "清空所有历史对话？此操作不可撤销",
+            isPresented: $showClearAllConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("清空全部 \(conversations.count) 段对话", role: .destructive) { onClearAll() }
+            Button("取消", role: .cancel) {}
         }
     }
 
