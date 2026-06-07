@@ -40,6 +40,68 @@ _VISUAL_POOL_SIZE = int(os.getenv("VISUAL_POOL_SIZE", "12"))
 # 叠加后总量会很大；每类取 top-3 既能覆盖主流选择，又不让卡片列表过长。
 PER_GROUP_TOP_K = 3
 
+# 宽泛浏览（用户没点名品牌，如"推荐数码电子""推荐手机"）时，每个品牌最多保留几款。
+# 纯按语义相关性排，头部很容易被某个强势品牌（如数码里的苹果）刷屏，
+# 这里做轻量品牌多样性筛选，让结果覆盖更多品牌、更像"逛一逛"。
+_MAX_PER_BRAND = 2
+
+# 浏览【整个大类目】（如点"数码电子"色块，没有具体子类目意图）时，每个子类目最多保留几款，
+# 避免语义检索把整页都聚到某一个子类目（如数码全是平板），让用户看到手机/笔电/平板/耳机的混合。
+# 注意：只在没有子类目意图时启用——"推荐手机"这类查询本就该全是手机，不能被打散。
+_MAX_PER_SUBCATEGORY = 2
+
+# 做品牌多样性时多召回的倍数：先取 top_k * 该倍数的候选池，再按每品牌/子类目配额筛出 top_k。
+# 取较大的池，是为了让大类目浏览能召回到足够多的不同子类目（手机/笔电/平板/耳机）再铺开。
+_DIVERSITY_POOL_MULTIPLIER = 5
+
+# 品牌别名归一：库里同一品牌存在中英文/简称多种写法（Apple 苹果 vs 苹果、Nike vs 耐克），
+# 做品牌配额时若不归一，别名会被当成不同品牌而绕过配额（典型："只有苹果"）。
+# key 为「小写去空格」后的写法，value 为规范品牌键。
+_BRAND_ALIASES = {
+    "apple苹果": "apple",
+    "苹果": "apple",
+    "apple": "apple",
+    "nike": "nike",
+    "耐克": "nike",
+    "thenorthface": "thenorthface",
+    "北面": "thenorthface",
+}
+
+
+def _canonical_brand(brand: str) -> str:
+    """把品牌名归一到规范键，合并中英文/简称别名，避免别名绕过品牌配额。"""
+    norm = (brand or "").strip().lower().replace(" ", "")
+    return _BRAND_ALIASES.get(norm, norm)
+
+
+def _diversify(
+    hits: list[ProductHit],
+    top_k: int,
+    caps: list[tuple[Callable[[ProductHit], str], int]],
+) -> list[ProductHit]:
+    """在尽量保持相关性顺序的前提下，按一组「键 → 上限」约束限制结果集中度。
+
+    贪心扫描：一个命中只有在【所有】约束都未超额时才进入主选区，并对应各键计数 +1；
+    任一键已满则搁置（overflow）。若主选区不足 ``top_k``，再用搁置项按原序补齐。
+    ``caps`` 是 (取键函数, 该键最多保留几个) 列表，可叠加「每品牌≤2 且 每子类目≤2」。
+    不指定品牌/宽泛浏览时适用；用户点名品牌时不应调用（应尊重其品牌意图）。"""
+    primary: list[ProductHit] = []
+    overflow: list[ProductHit] = []
+    counters: list[dict[str, int]] = [{} for _ in caps]
+    for h in hits:
+        keys = [key_fn(h) for key_fn, _ in caps]
+        if all(counters[i].get(keys[i], 0) < caps[i][1] for i in range(len(caps))):
+            primary.append(h)
+            for i, k in enumerate(keys):
+                counters[i][k] = counters[i].get(k, 0) + 1
+            if len(primary) >= top_k:
+                return primary
+        else:
+            overflow.append(h)
+    if len(primary) < top_k:
+        primary.extend(overflow[: top_k - len(primary)])
+    return primary[:top_k]
+
 
 class RecommendTool:
     name: str = "recommend"
@@ -223,20 +285,37 @@ class RecommendTool:
         top_k: int,
         base: Any,
     ) -> ToolResult:
-        result = self._get_service().search(query, top_k_products=top_k, base=base)
+        # 宽泛浏览（首轮、未承接 refine）时多召回一个候选池，便于做多样性筛选；
+        # refine（base 非空）是聚焦的承接式追问，保持原样不打散。
+        want_diversity = base is None
+        pool_k = top_k * _DIVERSITY_POOL_MULTIPLIER if want_diversity else top_k
+        result = self._get_service().search(query, top_k_products=pool_k, base=base)
+
+        # 仅当用户没点名品牌时才做多样性筛选；点名了（brand_include 非空）就尊重其意图。
+        if want_diversity and not getattr(result.parsed, "brand_include", None):
+            caps: list[tuple[Callable[[ProductHit], str], int]] = [
+                (lambda h: _canonical_brand(h.brand), _MAX_PER_BRAND),
+            ]
+            # 浏览整个大类目（无具体子类目意图）时，额外限制每个子类目占比，
+            # 让结果跨子类目铺开；"推荐手机"这类有子类目意图的查询不加此约束。
+            if not getattr(result.parsed, "sub_category", None):
+                caps.append((lambda h: h.sub_category or "", _MAX_PER_SUBCATEGORY))
+            hits = _diversify(result.hits, top_k, caps)
+        else:
+            hits = result.hits[:top_k]
 
         # 工作记忆（WorkingMemory 契约）：refine/compare/detail 后续会读这俩字段。
         # 存的是【结构化】ParsedQuery（dict），下一轮才能做无损约束叠加。
         session.remember_search(
             result.parsed.to_dict(),
-            [{"product_id": h.product_id, "title": h.title} for h in result.hits],
+            [{"product_id": h.product_id, "title": h.title} for h in hits],
         )
 
-        products = [_to_product_card(h) for h in result.hits]
+        products = [_to_product_card(h) for h in hits]
         self._attach_price_displays(products)
 
         summary = {
-            "hit_count": len(result.hits),
+            "hit_count": len(hits),
             "needs_clarification": result.parsed.needs_clarification,
             "category": result.parsed.category,
             "max_price": result.parsed.max_price,
@@ -251,17 +330,17 @@ class RecommendTool:
                 "parsed": result.parsed.to_dict(),
                 "raw_chunk_count": result.raw_chunk_count,
                 "filtered_chunk_count": result.filtered_chunk_count,
-                "hits_full": [h.to_dict() for h in result.hits],
+                "hits_full": [h.to_dict() for h in hits],
             },
         }
 
         # 给 composer 一点 hint，让它对零命中、需澄清做不同应答
         if result.parsed.needs_clarification:
             hint = "检索系统认为 query 过于模糊，请引导用户补充关键信息（品类、预算、用途）。"
-        elif not result.hits:
+        elif not hits:
             hint = "本次未命中任何商品，请坦诚告知用户并给出可能放宽的方向建议。"
         else:
-            hint = f"已为用户找到 {len(result.hits)} 款商品，请按推荐理由+对比维度的方式简明介绍。"
+            hint = f"已为用户找到 {len(hits)} 款商品，请按推荐理由+对比维度的方式简明介绍。"
 
         return ToolResult(
             tool_name=self.name,
