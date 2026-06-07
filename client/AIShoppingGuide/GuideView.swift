@@ -13,6 +13,13 @@ private struct ComposerHeightPreferenceKey: PreferenceKey {
     }
 }
 
+/// 进入对比页的上下文：携带候选商品（当前这条 AI 消息推荐的商品），
+/// 对比页内用下拉菜单从中挑选 2-3 件进行对比。
+struct ComparisonContext: Identifiable, Hashable {
+    let id = UUID()
+    let candidates: [Product]
+}
+
 struct GuideView: View {
     @Binding var cartItems: [CartItem]
     @StateObject private var store = ConversationStore()
@@ -21,6 +28,7 @@ struct GuideView: View {
     @State private var isComposerExpanded = false
     @State private var showHistory = false
     @State private var selectedProduct: Product?
+    @State private var comparisonContext: ComparisonContext?
     @State private var lastQuery: String = ""
     @State private var currentConversationID = UUID()
     @State private var currentSessionID = UUID().uuidString
@@ -99,6 +107,9 @@ struct GuideView: View {
                 ProductDetailView(product: product) { product, selectedOptions, quantity in
                     addToCart(product, selectedOptions: selectedOptions, quantity: quantity)
                 }
+            }
+            .navigationDestination(item: $comparisonContext) { context in
+                ComparisonView(candidates: context.candidates)
             }
             .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { notification in
                 updateKeyboardHeight(from: notification)
@@ -222,7 +233,8 @@ struct GuideView: View {
                         onExampleTap: { send($0) },
                         onRetry: retryLast,
                         onProductTap: { selectedProduct = $0 },
-                        onSpecSubmit: { send($0) }
+                        onSpecSubmit: { send($0) },
+                        onCompareTap: { comparisonContext = ComparisonContext(candidates: $0) }
                     )
                     .id(message.id)
 
@@ -628,6 +640,11 @@ struct GuideView: View {
                             attachSpecSelection(spec)
                         }
 
+                    case .comparison:
+                        if let comparison = event.comparison {
+                            attachComparison(comparison)
+                        }
+
                     case .done:
                         updateLastAI(
                             text: narrative.isEmpty ? statusText : narrative,
@@ -847,6 +864,12 @@ struct GuideView: View {
         messages[index].specSelection = spec
     }
 
+    /// 把对比结果挂到当前 AI 消息上，对话流里直接渲染对比卡片。
+    private func attachComparison(_ comparison: ProductComparisonPayload) {
+        guard let index = messages.lastIndex(where: { $0.sender == .ai }) else { return }
+        messages[index].comparison = comparison
+    }
+
     private func addToCart(
         _ product: Product,
         selectedOptions: [String: String] = [:],
@@ -868,6 +891,7 @@ struct MessageRow: View {
     let onRetry: () -> Void
     let onProductTap: (Product) -> Void
     let onSpecSubmit: (String) -> Void
+    let onCompareTap: ([Product]) -> Void
 
     var body: some View {
         HStack(alignment: .top) {
@@ -923,10 +947,29 @@ struct MessageRow: View {
                     SpecSelectionCard(selection: spec, onSubmit: onSpecSubmit)
                 }
 
+                if let comparison = message.comparison {
+                    ComparisonCard(comparison: comparison)
+                }
+
                 ForEach(message.products) { product in
                     ProductCard(product: product) {
                         onProductTap(product)
                     }
+                }
+
+                // 对话结束、推荐了 ≥2 件商品时，给个小按钮进对比页（页内下拉选商品）。
+                if message.sender == .ai, message.state == .ready, message.products.count >= 2 {
+                    Button {
+                        onCompareTap(message.products)
+                    } label: {
+                        Label("对比商品", systemImage: "square.split.2x1")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(AppTheme.primary)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(AppTheme.softPurple, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
                 }
             }
 
@@ -1148,12 +1191,6 @@ struct ProductCard: View {
             Text(product.priceDisplay(for: product.defaultSpecificationSelection))
                 .font(.title3.bold())
                 .foregroundStyle(AppTheme.error)
-//            if !product.reason.isEmpty {
-//                Text(product.reason)
-//                    .font(.subheadline)
-//                    .foregroundStyle(AppTheme.textSecondary)
-//                    .lineLimit(3)
-//            }
 
             Button(action: onDetail) {
                 Text("查看详情")

@@ -128,23 +128,38 @@ struct ProductComparisonRequest: Codable, Hashable {
     let focus: String?
 }
 
-struct ProductComparisonValue: Codable, Hashable {
+/// 对比表里的一个商品表头（轻量，与后端 /compare 的 products[] 对齐）。
+struct ComparisonProductPayload: Codable, Hashable, Identifiable {
     let productID: String
-    let text: String
-    let isHighlighted: Bool
-    let evidence: [EvidencePayload]
+    let title: String
+    let brand: String?
+    let price: Double
+    let imageURL: URL?
+
+    var id: String { productID }
+
+    enum CodingKeys: String, CodingKey {
+        case productID = "product_id"
+        case title
+        case brand
+        case price
+        case imageURL = "image_url"
+    }
 }
 
-struct ProductComparisonRow: Identifiable, Codable, Hashable {
-    let id: String
+/// 对比表的一行维度：label + 各商品的值（按 products 顺序）+ 更优者序号。
+struct ComparisonRowPayload: Codable, Hashable, Identifiable {
     let label: String
-    let values: [ProductComparisonValue]
+    let values: [String]
+    let highlight: Int?
+
+    var id: String { label }
 }
 
 struct ProductComparisonPayload: Codable, Hashable {
     let title: String
-    let products: [ProductPayload]
-    let rows: [ProductComparisonRow]
+    let products: [ComparisonProductPayload]
+    let rows: [ComparisonRowPayload]
     let recommendation: String
 }
 

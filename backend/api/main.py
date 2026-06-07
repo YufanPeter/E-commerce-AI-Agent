@@ -61,6 +61,11 @@ class ChatResponse(BaseModel):
     trace: dict[str, Any]
 
 
+class CompareRequest(BaseModel):
+    product_ids: list[str] = Field(..., description="要对比的商品 id（2-3 个）")
+    focus: str | None = Field(None, description="对比侧重点，如『续航』『适合敏感肌』")
+
+
 # ---------------------------------------------------------------------------
 # 应用 & 会话管理
 # ---------------------------------------------------------------------------
@@ -250,3 +255,30 @@ def reset_cart() -> dict[str, Any]:
     """
     removed = CartStore().clear()
     return {"status": "cleared", "removed": removed}
+
+
+@app.post("/compare")
+def compare(req: CompareRequest) -> dict[str, Any]:
+    """商品对比：给定 2 个商品 id，返回结构化对比表 + 购买建议。
+
+    对话路径走 compare 工具（SSE），这个 REST 端点供「对比页」直接调用，
+    两者复用同一个 build_comparison，产出结构一致。
+    """
+    from agent.comparison import build_comparison
+    from store.product_store import ProductStore
+
+    ids = [pid.strip() for pid in req.product_ids if pid and pid.strip()]
+    if len(ids) < 2:
+        raise HTTPException(status_code=400, detail="对比至少需要 2 个商品 id")
+    ids = ids[:2]  # 固定对比 2 件
+
+    store = ProductStore()
+    details = []
+    for pid in ids:
+        detail = store.get_product_detail(pid)
+        if detail is not None:
+            details.append(detail)
+    if len(details) < 2:
+        raise HTTPException(status_code=404, detail="有效商品不足 2 个，无法对比")
+
+    return build_comparison(details, focus=(req.focus or ""))

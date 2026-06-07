@@ -171,6 +171,40 @@ class TestCartReset:
         MockStore.return_value.clear.assert_called_once_with()
 
 
+class TestCompareEndpoint:
+    def test_too_few_ids_rejected(self, client):
+        c, _ = client
+        r = c.post("/compare", json={"product_ids": ["p1"]})
+        assert r.status_code == 400
+
+    def test_happy_path_returns_comparison(self, client):
+        c, _ = client
+
+        fake = {
+            "title": "对比：A vs B",
+            "products": [{"product_id": "p1", "title": "A"}, {"product_id": "p2", "title": "B"}],
+            "rows": [{"label": "价格", "values": ["¥1", "¥2"], "highlight": 0}],
+            "recommendation": "选 A。",
+        }
+
+        class _D:  # 占位 detail，只要非 None 即可通过有效性校验
+            pass
+
+        with patch("store.product_store.ProductStore.get_product_detail", return_value=_D()), \
+             patch("agent.comparison.build_comparison", return_value=fake):
+            r = c.post("/compare", json={"product_ids": ["p1", "p2"], "focus": "续航"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["title"] == "对比：A vs B"
+        assert len(body["rows"]) == 1
+
+    def test_fewer_than_two_valid_products(self, client):
+        c, _ = client
+        with patch("store.product_store.ProductStore.get_product_detail", return_value=None):
+            r = c.post("/compare", json={"product_ids": ["x1", "x2"]})
+        assert r.status_code == 404
+
+
 class TestResolveImage:
     def _req(self, **kw):
         from api.main import ChatRequest

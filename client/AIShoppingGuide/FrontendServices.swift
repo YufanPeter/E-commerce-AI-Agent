@@ -254,28 +254,36 @@ final class RESTProductService: ProductServicing {
     }
 
     func compareProducts(_ request: ProductComparisonRequest) async throws -> ProductComparisonPayload {
-        let products = try await fetchProducts(productIDs: request.productIDs)
-        guard !products.isEmpty else {
+        var urlRequest = URLRequest(url: baseURL.appendingPathComponent("compare"))
+        urlRequest.httpMethod = "POST"
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        var body: [String: Any] = ["product_ids": request.productIDs]
+        if let focus = request.focus, !focus.isEmpty { body["focus"] = focus }
+        urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: urlRequest)
+        } catch {
+            throw RESTServiceError.connectionFailed
+        }
+        guard let http = response as? HTTPURLResponse else {
             throw RESTServiceError.invalidResponse
         }
-        let priceRow = ProductComparisonRow(
-            id: "price",
-            label: "价格",
-            values: products.enumerated().map { index, product in
-                ProductComparisonValue(
-                    productID: product.productID,
-                    text: product.price.display,
-                    isHighlighted: index == 0,
-                    evidence: product.evidence ?? []
-                )
-            }
-        )
-        return ProductComparisonPayload(
-            title: "商品对比",
-            products: products,
-            rows: [priceRow],
-            recommendation: products.first?.title ?? ""
-        )
+        guard (200..<300).contains(http.statusCode) else {
+            let payload = decodeErrorPayload(from: data)
+            throw RESTServiceError.requestFailed(
+                statusCode: http.statusCode,
+                code: payload?.code ?? "API_HTTP_\(http.statusCode)",
+                message: payload?.message ?? "商品对比请求失败。"
+            )
+        }
+        do {
+            return try decoder.decode(ProductComparisonPayload.self, from: data)
+        } catch {
+            throw RESTServiceError.decodingFailed
+        }
     }
 
     private func get<T: Decodable>(_ type: T.Type, path: String) async throws -> T {
@@ -469,6 +477,13 @@ final class RESTAgentService: AgentServicing {
                 )
                 return
             }
+            // 商品对比：compare 工具返回结构化对比表 → 透出可渲染的对比卡片。
+            if let comparison = Self.extractComparison(fromToolResult: bytes) {
+                continuation.yield(
+                    AgentStreamEventPayload(type: .comparison, comparison: comparison)
+                )
+                return
+            }
             if Self.isCartToolResult(bytes) {
                 // 必须同步 await：购物车快照要在 done 之前按顺序透出，否则
                 // 加购很快返回时（needs_composer=False）detached Task 还没取完
@@ -571,6 +586,23 @@ final class RESTAgentService: AgentServicing {
         }
         guard !dimensions.isEmpty else { return nil }
         return SpecSelection(productID: productID, title: title, dimensions: dimensions)
+    }
+
+    /// 从 compare 工具的结果中解析对比卡片数据；comparison 为 null（如未定位到
+    /// 足够商品）时返回 nil，让对话退回纯文本提示。
+    private static func extractComparison(fromToolResult bytes: Data) -> ProductComparisonPayload? {
+        guard
+            let obj = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
+            (obj["tool_name"] as? String) == "compare",
+            let payload = obj["payload"] as? [String: Any],
+            let comparison = payload["comparison"] as? [String: Any]
+        else {
+            return nil
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: comparison) else {
+            return nil
+        }
+        return try? JSONDecoder().decode(ProductComparisonPayload.self, from: data)
     }
 
     private static func extractCartSnapshot(

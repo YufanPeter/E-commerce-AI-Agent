@@ -98,35 +98,29 @@ final class MockProductService: ProductServicing {
             throw MockServiceError.notFound
         }
 
-        let priceRow = ProductComparisonRow(
-            id: "price",
-            label: "Price",
-            values: products.enumerated().map { index, product in
-                ProductComparisonValue(
-                    productID: product.productID,
-                    text: product.price.display,
-                    isHighlighted: index == 0,
-                    evidence: product.evidence ?? []
-                )
-            }
+        let headers = products.map { product in
+            ComparisonProductPayload(
+                productID: product.productID,
+                title: product.title,
+                brand: product.brand,
+                price: Double(product.price.amountMinor) / 100,
+                imageURL: product.imageURL
+            )
+        }
+        let priceRow = ComparisonRowPayload(
+            label: "价格",
+            values: products.map { $0.price.display },
+            highlight: 0
         )
-
-        let reasonRow = ProductComparisonRow(
-            id: "reason",
-            label: "Recommendation fit",
-            values: products.enumerated().map { index, product in
-                ProductComparisonValue(
-                    productID: product.productID,
-                    text: product.summary ?? "",
-                    isHighlighted: index == 0,
-                    evidence: product.evidence ?? []
-                )
-            }
+        let reasonRow = ComparisonRowPayload(
+            label: "推荐点",
+            values: products.map { $0.summary ?? "" },
+            highlight: nil
         )
 
         return ProductComparisonPayload(
-            title: "Product comparison",
-            products: products,
+            title: "商品对比",
+            products: headers,
             rows: [priceRow, reasonRow],
             recommendation: products.first?.title ?? ""
         )
