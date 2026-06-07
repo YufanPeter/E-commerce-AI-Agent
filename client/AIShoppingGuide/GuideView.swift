@@ -38,6 +38,8 @@ struct GuideView: View {
     @State private var photoPickerItem: PhotosPickerItem?
     @State private var showPhotoPicker = false
     @State private var showCamera = false
+    /// 待发送的图片草稿：选/拍图后先挂在输入区，待用户配上文字一起发送；nil 表示无附件。
+    @State private var pendingImageData: Data?
     @StateObject private var speechInput = SpeechInputController()
     @FocusState private var isInputFocused: Bool
 
@@ -217,10 +219,10 @@ struct GuideView: View {
                     MessageRow(
                         message: message,
                         examples: [],
-                        onExampleTap: send,
+                        onExampleTap: { send($0) },
                         onRetry: retryLast,
                         onProductTap: { selectedProduct = $0 },
-                        onSpecSubmit: send
+                        onSpecSubmit: { send($0) }
                     )
                     .id(message.id)
 
@@ -336,6 +338,37 @@ struct GuideView: View {
                 }
             }
 
+            if let data = pendingImageData, let uiImage = UIImage(data: data) {
+                HStack(spacing: 8) {
+                    ZStack(alignment: .topTrailing) {
+                        Image(uiImage: uiImage)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(width: 64, height: 64)
+                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .stroke(AppTheme.border, lineWidth: 1)
+                            )
+                        Button {
+                            withAnimation(.easeOut(duration: 0.18)) {
+                                pendingImageData = nil
+                            }
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 18))
+                                .symbolRenderingMode(.palette)
+                                .foregroundStyle(.white, Color.black.opacity(0.45))
+                        }
+                        .buttonStyle(.plain)
+                        .offset(x: 7, y: -7)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 6)
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
+
             HStack(spacing: 10) {
                 Button {
                     withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
@@ -351,7 +384,7 @@ struct GuideView: View {
                 }
                 .buttonStyle(.plain)
 
-                TextField("想买点什么？和我聊聊…", text: $inputText)
+                TextField(composerPlaceholder, text: $inputText)
                     .lineLimit(1)
                     .submitLabel(.send)
                     .onSubmit(sendCurrentInput)
@@ -404,7 +437,12 @@ struct GuideView: View {
     }
 
     private var canSend: Bool {
-        !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || pendingImageData != nil
+    }
+
+    /// 输入框占位文案：挂了图片时引导用户配一句话（如"找个相似但平价的"）。
+    private var composerPlaceholder: String {
+        pendingImageData != nil ? "想找相似的？说说要求，比如「平价同款」…" : "想买点什么？和我聊聊…"
     }
 
     private var isKeyboardPresented: Bool {
@@ -455,20 +493,25 @@ struct GuideView: View {
 
     private func sendCurrentInput() {
         let trimmed = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        let attachment = pendingImageData
+        // 至少要有文字或图片其一才发送
+        guard !trimmed.isEmpty || attachment != nil else { return }
         speechInput.stop()
         inputText = ""
-        send(trimmed)
+        pendingImageData = nil
+        send(trimmed, imageData: attachment)
     }
 
-    private func send(_ query: String) {
+    private func send(_ query: String, imageData: Data? = nil) {
         isComposerExpanded = false
         speechInput.stop()
         lastQuery = query
         if currentTitle == GuideView.newConversationTitle {
-            currentTitle = String(query.prefix(20))
+            currentTitle = imageData != nil && query.isEmpty
+                ? "拍照找货"
+                : String(query.prefix(20))
         }
-        let userMessage = ChatMessage(sender: .user, text: query)
+        let userMessage = ChatMessage(sender: .user, text: query, localImageData: imageData)
         pendingAutoFollowWorkItem?.cancel()
         isAutoFollowEnabled = true
         isNearChatBottom = false
@@ -477,8 +520,9 @@ struct GuideView: View {
         shouldHoldLatestQuestionAnchor = true
         pendingQuestionAnchorID = userMessage.id
         messages.append(userMessage)
-        messages.append(ChatMessage(sender: .ai, text: "正在理解你的需求", state: .understanding))
-        runAgent(for: query)
+        let placeholder = imageData != nil ? "正在识别图片" : "正在理解你的需求"
+        messages.append(ChatMessage(sender: .ai, text: placeholder, state: .understanding))
+        runAgent(for: query, imageBase64: imageData?.base64EncodedString())
     }
 
     private func retryLast() {
@@ -509,28 +553,14 @@ struct GuideView: View {
         showPhotoPicker = true
     }
 
-    /// 选定/拍摄图片后：压缩 → base64 → 作为一条用户图片消息发起图搜。
+    /// 选定/拍摄图片后：压缩并挂到输入区作为待发送附件，弹出键盘让用户补充文字描述。
     private func handlePickedImage(_ data: Data) {
         guard let compressed = Self.compressedJPEG(from: data) else { return }
-        let base64 = compressed.base64EncodedString()
-
-        speechInput.stop()
         isComposerExpanded = false
-        lastQuery = ""
-        if currentTitle == GuideView.newConversationTitle {
-            currentTitle = "拍照找货"
+        withAnimation(.easeOut(duration: 0.2)) {
+            pendingImageData = compressed
         }
-        let userMessage = ChatMessage(sender: .user, text: "", localImageData: compressed)
-        pendingAutoFollowWorkItem?.cancel()
-        isAutoFollowEnabled = true
-        isNearChatBottom = false
-        isUserInteractingWithChat = false
-        shouldShowJumpToLatest = false
-        shouldHoldLatestQuestionAnchor = true
-        pendingQuestionAnchorID = userMessage.id
-        messages.append(userMessage)
-        messages.append(ChatMessage(sender: .ai, text: "正在识别图片", state: .understanding))
-        runAgent(for: "", imageBase64: base64)
+        isInputFocused = true
     }
 
     /// 把图片压到最长边 ≤1024px、JPEG 0.7，控制 base64 体积（~200-400KB）。
