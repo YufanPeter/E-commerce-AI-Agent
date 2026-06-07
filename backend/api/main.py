@@ -67,6 +67,11 @@ class CompareRequest(BaseModel):
     focus: str | None = Field(None, description="对比侧重点，如『续航』『适合敏感肌』")
 
 
+class TitleRequest(BaseModel):
+    user_text: str = Field(..., description="用户首条消息")
+    assistant_text: str | None = Field(None, description="AI 首条回复（可空）")
+
+
 # ---------------------------------------------------------------------------
 # 应用 & 会话管理
 # ---------------------------------------------------------------------------
@@ -289,3 +294,49 @@ def compare(req: CompareRequest) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="有效商品不足 2 个，无法对比")
 
     return build_comparison(details, focus=(req.focus or ""))
+
+
+@app.post("/title")
+def generate_title(req: TitleRequest) -> dict[str, str]:
+    """用首轮对话生成一个 4-8 字的对话标题（供历史列表展示）。
+
+    前端首轮 AI 回复完成后异步调用，拿到精炼标题再回写本地历史；调用失败或
+    超时不影响主流程（前端退回截句标题）。生成是确定性约束的轻量 LLM 调用。
+    """
+    user_text = (req.user_text or "").strip()
+    if not user_text:
+        raise HTTPException(status_code=400, detail="user_text 不能为空")
+
+    from llm.client import get_client, get_model_id
+
+    system = (
+        "你是对话标题生成器。根据用户的购物需求，生成一个简洁的中文标题，"
+        "用于历史记录列表展示。要求：① 4-8 个字；② 概括核心需求（品类+关键属性），"
+        "如「油皮洗面奶」「平价蓝牙耳机」「三亚出行搭配」；③ 只输出标题本身，"
+        "不要引号、标点、解释。"
+    )
+    convo = f"用户：{user_text}"
+    if req.assistant_text and req.assistant_text.strip():
+        convo += f"\n助手：{req.assistant_text.strip()[:200]}"
+
+    try:
+        client = get_client()
+        resp = client.chat.completions.create(
+            model=get_model_id(),
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": convo},
+            ],
+            temperature=0.3,
+            max_tokens=20,
+            timeout=float(os.getenv("ARK_TITLE_TIMEOUT", "8")),
+        )
+        title = (resp.choices[0].message.content or "").strip()
+        title = title.strip("「」\"'。.，、 \n\t")[:12]
+    except Exception as exc:  # noqa: BLE001 - 失败不应 500；返回空让前端兜底
+        logger.warning("标题生成失败：%r", exc)
+        title = ""
+
+    if not title:
+        title = user_text[:12]
+    return {"title": title}

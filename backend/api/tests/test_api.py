@@ -275,3 +275,66 @@ class TestVisualSearchStream:
         # 纯文本不应触发图搜
         assert not hasattr(agent, "received_image")
 
+
+class TestGetCart:
+    def test_returns_snapshot_shape(self, client):
+        c, m = client
+
+        class _Line:
+            quantity = 2
+
+            @property
+            def subtotal(self):
+                return 100.0
+
+            def to_dict(self):
+                return {"product_id": "p1", "quantity": 2, "subtotal": 100.0}
+
+        with patch("api.main.CartStore") as MockStore:
+            MockStore.return_value.list_items.return_value = [_Line()]
+            r = c.get("/cart")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["cart"]["item_count"] == 2
+        assert body["cart"]["total"] == 100.0
+        assert body["cart"]["lines"][0]["product_id"] == "p1"
+
+
+class TestTitleEndpoint:
+    def test_empty_user_text_rejected(self, client):
+        c, _ = client
+        r = c.post("/title", json={"user_text": "  "})
+        assert r.status_code == 400
+
+    def test_llm_failure_falls_back_to_truncation(self, client):
+        c, _ = client
+        # 让 get_client 抛错 → 退回截句标题
+        with patch("llm.client.get_client", side_effect=RuntimeError("boom")):
+            r = c.post("/title", json={"user_text": "推荐一款适合油皮的洗面奶啊啊啊啊啊啊啊"})
+        assert r.status_code == 200
+        title = r.json()["title"]
+        assert title  # 非空
+        assert len(title) <= 12
+
+    def test_happy_path_uses_llm_title(self, client):
+        c, _ = client
+
+        class _Msg:
+            content = "油皮洗面奶"
+
+        class _Resp:
+            choices = [type("C", (), {"message": _Msg()})()]
+
+        class _FakeClient:
+            def __init__(self):
+                self.chat = type("Chat", (), {"completions": self})()
+
+            def create(self, **kw):
+                return _Resp()
+
+        with patch("llm.client.get_client", return_value=_FakeClient()), \
+             patch("llm.client.get_model_id", return_value="m"):
+            r = c.post("/title", json={"user_text": "推荐油皮洗面奶", "assistant_text": "给你推荐几款"})
+        assert r.status_code == 200
+        assert r.json()["title"] == "油皮洗面奶"
+

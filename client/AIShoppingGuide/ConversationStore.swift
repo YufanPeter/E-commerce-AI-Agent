@@ -52,6 +52,15 @@ final class ConversationStore: ObservableObject {
         persist()
     }
 
+    /// 手动重命名一段对话；空标题忽略。
+    func rename(_ conversation: Conversation, to newTitle: String) {
+        let trimmed = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let index = conversations.firstIndex(where: { $0.id == conversation.id }) else { return }
+        conversations[index].title = trimmed
+        persist()
+    }
+
     func conversation(by id: UUID) -> Conversation? {
         conversations.first { $0.id == id }
     }

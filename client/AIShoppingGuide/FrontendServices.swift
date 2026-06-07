@@ -368,6 +368,28 @@ final class RESTProductService: ProductServicing {
         )
     }
 
+    /// 用首轮对话生成精炼的会话标题（POST /title）。失败返回 nil，调用方退回截句标题。
+    func fetchTitle(userText: String, assistantText: String?) async -> String? {
+        var request = URLRequest(url: baseURL.appendingPathComponent("title"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 10
+        var body: [String: Any] = ["user_text": userText]
+        if let assistantText, !assistantText.isEmpty { body["assistant_text"] = assistantText }
+        guard let data = try? JSONSerialization.data(withJSONObject: body) else { return nil }
+        request.httpBody = data
+        guard
+            let (respData, response) = try? await session.data(for: request),
+            let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+            let obj = try? JSONSerialization.jsonObject(with: respData) as? [String: Any],
+            let title = obj["title"] as? String,
+            !title.trimmingCharacters(in: .whitespaces).isEmpty
+        else {
+            return nil
+        }
+        return title
+    }
+
     private func request<T: Decodable>(_ type: T.Type, url: URL) async throws -> T {
         let data: Data
         let response: URLResponse

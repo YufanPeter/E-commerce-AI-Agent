@@ -52,6 +52,7 @@ struct GuideView: View {
     @FocusState private var isInputFocused: Bool
 
     private let agentService = RESTAgentService()
+    private let productService = RESTProductService()
     private let nearBottomThreshold: CGFloat = 96
     private let questionAnchorCharacterLimit = 220
     private let autoFollowTimer = Timer.publish(every: 0.12, on: .main, in: .common).autoconnect()
@@ -98,7 +99,14 @@ struct GuideView: View {
                 HistorySheet(
                     conversations: store.conversations,
                     onSelect: { openConversation($0) },
-                    onDelete: { store.delete($0) }
+                    onDelete: { store.delete($0) },
+                    onRename: { conversation, newTitle in
+                        store.rename(conversation, to: newTitle)
+                        // 若改的是当前对话，同步标题，避免下次 persist 覆盖回去。
+                        if conversation.id == currentConversationID {
+                            currentTitle = newTitle
+                        }
+                    }
                 )
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
@@ -667,6 +675,7 @@ struct GuideView: View {
                     )
                 }
                 persistCurrent()
+                await generateTitleIfNeeded()
             } catch {
                 updateLastAI(text: errorMessage(error), state: .failed, canRetry: true)
                 persistCurrent()
@@ -690,6 +699,37 @@ struct GuideView: View {
             messages: messages
         )
         store.upsert(conversation)
+    }
+
+    /// 首轮对话后用 LLM 生成精炼标题（如「油皮洗面奶」），异步、不阻塞对话；
+    /// 仅当标题还是默认/未被用户手动命名时才生成，避免覆盖用户重命名。
+    private func generateTitleIfNeeded() async {
+        // 已被 LLM 或用户改过（非默认、且不是首条消息的截句）就不再生成。
+        guard currentTitle == GuideView.newConversationTitle
+            || isAutoTruncatedTitle else { return }
+        guard let firstUser = messages.first(where: { $0.sender == .user })?.text,
+              !firstUser.isEmpty else { return }
+        let firstAI = messages.first { $0.sender == .ai && $0.state == .ready }?.text
+        let convoID = currentConversationID
+        guard let title = await productService.fetchTitle(userText: firstUser, assistantText: firstAI),
+              !title.isEmpty else { return }
+        // 异步返回期间用户可能已切换对话，确认还在同一对话才回写。
+        guard convoID == currentConversationID else {
+            // 直接更新历史里那条对话的标题
+            if var convo = store.conversation(by: convoID) {
+                convo.title = title
+                store.upsert(convo)
+            }
+            return
+        }
+        currentTitle = title
+        persistCurrent()
+    }
+
+    /// 当前标题是否是「首条消息截句」自动生成的（可被 LLM 标题替换）。
+    private var isAutoTruncatedTitle: Bool {
+        guard let firstUser = messages.first(where: { $0.sender == .user })?.text else { return false }
+        return currentTitle == String(firstUser.prefix(20))
     }
 
     /// 开启全新对话：存档当前 → 清空 → 换新 session_id（后端会 mint 新会话）。
@@ -1447,8 +1487,22 @@ struct HistorySheet: View {
     let conversations: [Conversation]
     let onSelect: (Conversation) -> Void
     let onDelete: (Conversation) -> Void
+    let onRename: (Conversation, String) -> Void
 
     @State private var pendingDelete: Conversation?
+    @State private var renameTarget: Conversation?
+    @State private var renameText: String = ""
+    @State private var searchText: String = ""
+
+    /// 按标题 + 消息内容过滤（不区分大小写）。
+    private var filtered: [Conversation] {
+        let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !q.isEmpty else { return conversations }
+        return conversations.filter { convo in
+            if convo.title.lowercased().contains(q) { return true }
+            return convo.messages.contains { $0.text.lowercased().contains(q) }
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -1457,11 +1511,17 @@ struct HistorySheet: View {
                 .padding(.horizontal, 20)
                 .padding(.top, 16)
 
+            if !conversations.isEmpty {
+                searchBar
+            }
+
             if conversations.isEmpty {
                 emptyState
+            } else if filtered.isEmpty {
+                noResultState
             } else {
                 List {
-                    ForEach(conversations) { conversation in
+                    ForEach(filtered) { conversation in
                         Button {
                             onSelect(conversation)
                         } label: {
@@ -1471,16 +1531,27 @@ struct HistorySheet: View {
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
                         .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
-                        // 左滑出现删除按钮（全滑直接删除）
+                        // 左滑：重命名 + 删除
                         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                             Button(role: .destructive) {
                                 onDelete(conversation)
                             } label: {
                                 Label("删除", systemImage: "trash")
                             }
+                            Button {
+                                startRename(conversation)
+                            } label: {
+                                Label("重命名", systemImage: "pencil")
+                            }
+                            .tint(AppTheme.primary)
                         }
-                        // 长按弹出菜单删除（带确认）
+                        // 长按弹出菜单：重命名 / 删除
                         .contextMenu {
+                            Button {
+                                startRename(conversation)
+                            } label: {
+                                Label("重命名", systemImage: "pencil")
+                            }
                             Button(role: .destructive) {
                                 pendingDelete = conversation
                             } label: {
@@ -1511,6 +1582,51 @@ struct HistorySheet: View {
         } message: {
             Text(pendingDelete?.title ?? "")
         }
+        .alert("重命名对话", isPresented: Binding(
+            get: { renameTarget != nil },
+            set: { if !$0 { renameTarget = nil } }
+        )) {
+            TextField("对话标题", text: $renameText)
+            Button("保存") {
+                if let target = renameTarget {
+                    onRename(target, renameText)
+                }
+                renameTarget = nil
+            }
+            Button("取消", role: .cancel) { renameTarget = nil }
+        }
+    }
+
+    private var searchBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.subheadline)
+                .foregroundStyle(AppTheme.textSecondary)
+            TextField("搜索历史对话", text: $searchText)
+                .font(.subheadline)
+                .foregroundStyle(AppTheme.textPrimary)
+                .submitLabel(.search)
+            if !searchText.isEmpty {
+                Button {
+                    searchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.subheadline)
+                        .foregroundStyle(AppTheme.textSecondary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(AppTheme.surface, in: Capsule())
+        .overlay(Capsule().stroke(AppTheme.border, lineWidth: 1))
+        .padding(.horizontal, 20)
+    }
+
+    private func startRename(_ conversation: Conversation) {
+        renameText = conversation.title
+        renameTarget = conversation
     }
 
     private var emptyState: some View {
@@ -1519,6 +1635,18 @@ struct HistorySheet: View {
                 .font(.largeTitle)
                 .foregroundStyle(AppTheme.textSecondary)
             Text("还没有历史对话")
+                .font(.subheadline)
+                .foregroundStyle(AppTheme.textSecondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var noResultState: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "magnifyingglass")
+                .font(.largeTitle)
+                .foregroundStyle(AppTheme.textSecondary)
+            Text("没有匹配的对话")
                 .font(.subheadline)
                 .foregroundStyle(AppTheme.textSecondary)
         }
