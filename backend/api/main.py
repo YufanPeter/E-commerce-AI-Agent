@@ -32,6 +32,7 @@ from agent.orchestrator import Agent
 from agent.session import AgentSession
 from api import products as products_router
 from store.cart_store import CartStore
+from store.session_store import SqliteSessionStore
 
 
 logger = logging.getLogger(__name__)
@@ -90,24 +91,7 @@ async def http_exception_handler(_request: Request, exc: HTTPException) -> JSONR
     return JSONResponse(status_code=exc.status_code, content=detail)
 
 
-class _SessionStore:
-    """进程内 session 存储；够 demo 用。"""
-
-    def __init__(self) -> None:
-        self._store: dict[str, AgentSession] = {}
-
-    def get_or_create(self, session_id: str | None) -> AgentSession:
-        if session_id and session_id in self._store:
-            return self._store[session_id]
-        sess = AgentSession(session_id=session_id) if session_id else AgentSession()
-        self._store[sess.session_id] = sess
-        return sess
-
-    def reset(self, session_id: str) -> None:
-        self._store.pop(session_id, None)
-
-
-_sessions = _SessionStore()
+_sessions = SqliteSessionStore()
 _agent: Agent | None = None  # 懒加载，避免 import 时就触发 SearchService 初始化
 
 
@@ -163,6 +147,7 @@ def chat(req: ChatRequest) -> ChatResponse:
         raise HTTPException(status_code=400, detail="query 不能为空")
     session = _sessions.get_or_create(req.session_id)
     resp = _get_agent().handle_turn(req.query, session)
+    _sessions.save(session)  # 持久化本轮对话，重启后可接上下文
     return ChatResponse(
         session_id=session.session_id,
         decision=resp.decision.to_dict(),
@@ -229,6 +214,10 @@ def chat_stream(req: ChatRequest) -> StreamingResponse:
         except Exception as exc:  # noqa: BLE001 - 流式中任何异常都要给前端
             logger.exception("Stream pipeline crashed")
             yield _format_sse("error", {"message": f"{type(exc).__name__}: {exc}"})
+        finally:
+            # 流结束（含正常/异常）后持久化会话，history + working_memory 都已在
+            # 生成器内部更新完毕，此时落盘保证重启可恢复。
+            _sessions.save(session)
 
     headers = {
         "Cache-Control": "no-cache, no-transform",
