@@ -291,6 +291,83 @@ final class RESTProductService: ProductServicing {
         return try await request(type, url: url)
     }
 
+    /// 拉取后端当前购物车快照（GET /cart）。App 冷启动恢复购物车用。
+    /// 与 SSE cartSnapshot 走同一套 lines→items 解析，保证渲染一致。
+    func fetchAgentCart() async throws -> CartSnapshotPayload {
+        let url = baseURL.appendingPathComponent("cart")
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(from: url)
+        } catch {
+            throw RESTServiceError.connectionFailed
+        }
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw RESTServiceError.invalidResponse
+        }
+        guard
+            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let cart = obj["cart"] as? [String: Any],
+            let lines = cart["lines"] as? [[String: Any]],
+            !lines.isEmpty
+        else {
+            return Self.emptyAgentCart()
+        }
+
+        let productIDs = lines.compactMap { $0["product_id"] as? String }
+        let productPayloads = (try? await fetchProducts(productIDs: productIDs)) ?? []
+        let productsByID = productPayloads.reduce(into: [String: ProductPayload]()) { acc, p in
+            acc[p.productID] = p
+        }
+        let items = lines.compactMap { line -> CartItemPayload? in
+            guard
+                let productID = line["product_id"] as? String,
+                let product = productsByID[productID]
+            else { return nil }
+            let cartItemID = String(describing: line["cart_item_id"] ?? UUID().uuidString)
+            let selectedOptions = line["options"] as? [String: String] ?? [:]
+            let quantity = (line["quantity"] as? Int) ?? 1
+            let selected = (line["selected"] as? Bool) ?? true
+            let subtotal = (line["subtotal"] as? Double) ?? Double((line["subtotal"] as? Int) ?? 0)
+            return CartItemPayload(
+                id: cartItemID,
+                productID: productID,
+                skuID: line["sku_id"] as? String,
+                product: product,
+                selectedOptions: selectedOptions,
+                quantity: quantity,
+                isSelected: selected,
+                lineTotal: Money(currency: "CNY", amountMinor: Int((subtotal * 100).rounded()), display: "¥\(subtotal)")
+            )
+        }
+        let total = (cart["total"] as? Double) ?? Double((cart["total"] as? Int) ?? 0)
+        return CartSnapshotPayload(
+            cartID: "agent-cart",
+            items: items,
+            selectedItemIDs: items.filter { $0.isSelected }.map { $0.id },
+            priceSummary: CartPriceSummaryPayload(
+                subtotal: Money(currency: "CNY", amountMinor: Int((total * 100).rounded()), display: "¥\(total)"),
+                discount: nil,
+                payable: Money(currency: "CNY", amountMinor: Int((total * 100).rounded()), display: "¥\(total)")
+            ),
+            updatedAt: Date()
+        )
+    }
+
+    private static func emptyAgentCart() -> CartSnapshotPayload {
+        CartSnapshotPayload(
+            cartID: "agent-cart",
+            items: [],
+            selectedItemIDs: [],
+            priceSummary: CartPriceSummaryPayload(
+                subtotal: Money(currency: "CNY", amountMinor: 0, display: "¥0"),
+                discount: nil,
+                payable: Money(currency: "CNY", amountMinor: 0, display: "¥0")
+            ),
+            updatedAt: Date()
+        )
+    }
+
     private func request<T: Decodable>(_ type: T.Type, url: URL) async throws -> T {
         let data: Data
         let response: URLResponse

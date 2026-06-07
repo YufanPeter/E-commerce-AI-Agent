@@ -145,7 +145,7 @@ struct RootView: View {
         }
         .task {
             healthMonitor.startMonitoring()
-            await resetBackendCartOnLaunch()
+            await loadBackendCartOnLaunch()
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { notification in
             updateKeyboardOffset(from: notification)
@@ -155,14 +155,18 @@ struct RootView: View {
         }
     }
 
-    /// App 冷启动：清空后端残留购物车，保证“启动即空车”与前端本地一致。
-    /// 购物车在后端 SQLite 持久化且与会话无关，不清会在首次加购时回灌历史、算错总价。
-    private func resetBackendCartOnLaunch() async {
-        cartItems = []
-        var request = URLRequest(url: BackendConfig.cartResetURL)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 4
-        _ = try? await URLSession.shared.data(for: request)
+    /// App 冷启动：从后端加载已有购物车（GET /cart），让购物车跨启动保留。
+    /// 购物车在后端 SQLite 持久化，启动即拉取真实状态，避免"启动空车 + 首次加购回灌历史"导致的总价错乱。
+    private func loadBackendCartOnLaunch() async {
+        let service = RESTProductService()
+        guard let snapshot = try? await service.fetchAgentCart() else { return }
+        cartItems = snapshot.items.map { item in
+            CartItem(
+                product: Product(payload: item.product),
+                selectedOptions: item.selectedOptions,
+                quantity: item.quantity
+            )
+        }
     }
 
     private func updateKeyboardOffset(from notification: Notification) {

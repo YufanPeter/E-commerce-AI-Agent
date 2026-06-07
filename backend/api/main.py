@@ -249,12 +249,30 @@ def reset_session(session_id: str) -> dict[str, str]:
 def reset_cart() -> dict[str, Any]:
     """清空购物车（演示单用户 demo_user）。
 
-    购物车持久化在 SQLite 里且与会话无关，跨 App 重启会残留上次数据。
-    前端 App 冷启动时调用本端点归零，保证“启动即空车”与前端本地
-    状态一致，避免首次加购时后端返回全量（历史残留+新加）导致价格错乱。
+    购物车持久化在 SQLite 里且与会话无关。本端点仅在需要手动清空时使用
+    （如调试）；App 冷启动不再自动调用——改为启动时加载已有购物车。
     """
     removed = CartStore().clear()
     return {"status": "cleared", "removed": removed}
+
+
+@app.get("/cart")
+def get_cart() -> dict[str, Any]:
+    """读取当前购物车快照（演示单用户 demo_user）。
+
+    购物车持久化在 SQLite，App 冷启动调用本端点恢复购物车，避免"启动即空车"
+    与后端真实状态不一致（首次加购时回灌历史、算错总价）。返回结构与 cart
+    工具 SSE 里的快照一致：{cart: {lines, item_count, total}}，前端可统一解析。
+    """
+    store = CartStore()
+    lines = store.list_items()
+    return {
+        "cart": {
+            "lines": [line.to_dict() for line in lines],
+            "item_count": sum(line.quantity for line in lines),
+            "total": round(sum(line.subtotal for line in lines), 2),
+        }
+    }
 
 
 @app.post("/compare")
