@@ -16,11 +16,11 @@ final class MockAgentService: AgentServicing {
                         type: .status,
                         status: AgentStatusPayload(
                             phase: .understanding,
-                            message: "Understanding request"
+                            message: "正在理解你的需求"
                         )
                     )
                 )
-                try? await Task.sleep(nanoseconds: 250_000_000)
+                try? await Task.sleep(nanoseconds: 500_000_000)
 
                 guard !Task.isCancelled else {
                     continuation.finish()
@@ -32,11 +32,11 @@ final class MockAgentService: AgentServicing {
                         type: .status,
                         status: AgentStatusPayload(
                             phase: .retrieving,
-                            message: "Retrieving product evidence"
+                            message: "正在检索商品"
                         )
                     )
                 )
-                try? await Task.sleep(nanoseconds: 250_000_000)
+                try? await Task.sleep(nanoseconds: 500_000_000)
 
                 guard !Task.isCancelled else {
                     continuation.finish()
@@ -45,16 +45,37 @@ final class MockAgentService: AgentServicing {
 
                 continuation.yield(
                     AgentStreamEventPayload(
-                        type: .textDelta,
-                        textDelta: "I found options that match your request."
+                        type: .status,
+                        status: AgentStatusPayload(
+                            phase: .generating,
+                            message: "正在生成推荐"
+                        )
                     )
                 )
+                try? await Task.sleep(nanoseconds: 300_000_000)
+
+                // 返回商品
+                let products = MockProductCatalog.products(matching: request.text)
                 continuation.yield(
                     AgentStreamEventPayload(
                         type: .products,
-                        products: MockProductCatalog.products(matching: request.text)
+                        products: products
                     )
                 )
+                try? await Task.sleep(nanoseconds: 200_000_000)
+
+                // 返回文本（包含开场白、解说、追问）
+                let responseText = generateMockResponseText(query: request.text, products: products)
+                for (index, char) in responseText.enumerated() {
+                    continuation.yield(
+                        AgentStreamEventPayload(
+                            type: .textDelta,
+                            textDelta: String(char)
+                        )
+                    )
+                    try? await Task.sleep(nanoseconds: 30_000_000)
+                }
+
                 continuation.yield(
                     AgentStreamEventPayload(
                         type: .status,
@@ -72,6 +93,52 @@ final class MockAgentService: AgentServicing {
     }
 
     func cancel(sessionID: String) async {}
+}
+
+private func generateMockResponseText(query: String, products: [ProductPayload]) -> String {
+    let productCount = min(products.count, 3)
+    
+    // 开场白
+    let opening: String
+    if query.lowercased().contains("平板") || query.lowercased().contains("电脑") {
+        opening = "为你推荐了 \(productCount) 款高性能平板电脑"
+    } else if query.lowercased().contains("手机") {
+        opening = "为你推荐了 \(productCount) 款热门智能手机"
+    } else if query.lowercased().contains("耳机") || query.lowercased().contains("音箱") {
+        opening = "为你推荐了 \(productCount) 款优质音频设备"
+    } else {
+        opening = "为你推荐了 \(productCount) 款精选商品"
+    }
+
+    // 商品解说（每个商品一段）
+    var descriptions: [String] = []
+    for (index, product) in products.prefix(productCount).enumerated() {
+        let features = [
+            "性能强劲，流畅运行各种应用",
+            "续航持久，满足全天使用需求",
+            "屏幕出色，视觉体验极佳",
+            "设计精美，手感舒适",
+            "性价比高，物超所值"
+        ]
+        let feature = features[index % features.count]
+        let description = "\(product.title)：\(feature)"
+        descriptions.append(description)
+    }
+
+    // 追问方向
+    let questions = [
+        "需要更平价的选择？",
+        "想要看特定品牌？",
+        "需要详细对比某两款？",
+        "想了解更多规格细节？"
+    ]
+
+    // 组合成完整文本
+    var text = opening + "\n\n"
+    text += descriptions.joined(separator: "\n\n") + "\n\n"
+    text += questions.joined(separator: "\n")
+
+    return text
 }
 
 final class MockProductService: ProductServicing {

@@ -6,7 +6,7 @@ enum Sender: String, Codable {
 }
 
 enum MessageState: String, Codable {
-    case understanding = "理解中"
+    case understanding = "思考中"
     case retrieving = "检索中"
     case generating = "生成中"
     case ready

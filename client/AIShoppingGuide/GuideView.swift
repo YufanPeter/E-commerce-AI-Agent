@@ -203,26 +203,6 @@ struct GuideView: View {
                     .transition(.scale(scale: 0.92).combined(with: .opacity))
                 }
             }
-            .onAppear {
-                scrollToLatestMessage(proxy, animated: false)
-            }
-            .onChange(of: pendingQuestionAnchorID) { _, newValue in
-                guard let newValue else { return }
-                scrollToQuestion(newValue, proxy: proxy)
-            }
-            .onChange(of: scrollAnchorToken) { _, _ in
-                handleContentChange(proxy)
-            }
-            .onChange(of: isInputFocused) { _, focused in
-                if focused, isAutoFollowEnabled || isNearChatBottom {
-                    scheduleAutoFollowScroll(proxy, animated: true)
-                }
-            }
-            .onReceive(autoFollowTimer) { _ in
-                if isAssistantStreaming && isAutoFollowEnabled && !shouldKeepLatestQuestionVisible {
-                    scrollToLatestMessage(proxy, animated: false)
-                }
-            }
         }
     }
 
@@ -255,7 +235,8 @@ struct GuideView: View {
                         onRetry: retryLast,
                         onProductTap: { selectedProduct = $0 },
                         onSpecSubmit: { send($0) },
-                        onCompareTap: { comparisonContext = ComparisonContext(candidates: $0) }
+                        onCompareTap: { comparisonContext = ComparisonContext(candidates: $0) },
+                        onFollowUpQuestionTap: { send($0) }
                     )
                     .id(message.id)
 
@@ -638,10 +619,10 @@ struct GuideView: View {
         }
         let userMessage = ChatMessage(sender: .user, text: query, localImageData: imageData)
         pendingAutoFollowWorkItem?.cancel()
-        isAutoFollowEnabled = true
+        isAutoFollowEnabled = false // 禁用自动滚动，让用户从开头阅读
         isNearChatBottom = false
         isUserInteractingWithChat = false
-        shouldShowJumpToLatest = false
+        shouldShowJumpToLatest = true // 显示"最新"按钮
         shouldHoldLatestQuestionAnchor = true
         pendingQuestionAnchorID = userMessage.id
         messages.append(userMessage)
@@ -895,9 +876,65 @@ struct GuideView: View {
 
     private func errorMessage(_ error: Error) -> String {
         if let restError = error as? RESTServiceError {
-            return restError.displayMessage
+            return detailedErrorMessage(for: restError)
         }
-        return "商品服务暂时不可用，请稍后重试。\n错误码：API_UNKNOWN_ERROR"
+        return defaultErrorMessage()
+    }
+    
+    private func detailedErrorMessage(for error: RESTServiceError) -> String {
+        var message = ""
+        var statusCode: Int? = nil
+        var errorMessage = ""
+        
+        switch error {
+        case .invalidURL:
+            message += "服务地址无效\n\n"
+            errorMessage = "商品服务地址无效。"
+        case .invalidResponse:
+            message += "服务响应无效\n\n"
+            errorMessage = "商品服务返回了无效响应。"
+        case .requestFailed(let code, _, let msg):
+            statusCode = code
+            errorMessage = msg
+            switch code {
+            case 400:
+                message += "请求参数有误\n\n"
+            case 401, 403:
+                message += "认证失败，请检查网络权限\n\n"
+            case 404:
+                message += "找不到相关商品\n\n"
+            case 429:
+                message += "请求过于频繁，请稍候再试\n\n"
+            case 500...599:
+                message += "服务器暂时不可用\n\n"
+            default:
+                message += "商品服务暂时不可用\n\n"
+            }
+        case .connectionFailed:
+            message += "连接失败\n\n"
+            errorMessage = "商品服务暂时不可用，请确认后端 REST API 已启动。"
+        case .decodingFailed:
+            message += "数据解析失败\n\n"
+            errorMessage = "商品服务返回数据解析失败。"
+        }
+        
+        message += "失败原因：\(errorMessage)\n\n"
+        
+        message += "建议：\n"
+        message += "• 检查网络连接是否正常\n"
+        message += "• 尝试简化搜索关键词\n"
+        message += "• 稍后重新尝试\n"
+        
+        return message
+    }
+    
+    private func defaultErrorMessage() -> String {
+        return "商品服务暂时不可用\n\n" +
+               "失败原因：未知错误\n\n" +
+               "建议：\n" +
+               "• 检查网络连接是否正常\n" +
+               "• 尝试简化搜索关键词\n" +
+               "• 点击下方按钮重新尝试"
     }
 
     private func updateKeyboardHeight(from notification: Notification) {
@@ -1058,7 +1095,88 @@ struct MessageRow: View {
     let onProductTap: (Product) -> Void
     let onSpecSubmit: (String) -> Void
     let onCompareTap: ([Product]) -> Void
-
+    let onFollowUpQuestionTap: (String) -> Void
+    @State private var dotCount = 0
+    
+    private struct ProductSection: Identifiable, Equatable {
+        let id: String
+        let product: Product
+        let description: String?
+        
+        init(product: Product, description: String?) {
+            self.id = "\(product.id)_\(description?.hashValue ?? 0)"
+            self.product = product
+            self.description = description
+        }
+        
+        static func == (lhs: ProductSection, rhs: ProductSection) -> Bool {
+            lhs.product.id == rhs.product.id && lhs.description == rhs.description
+        }
+    }
+    
+    private var textParagraphs: [String] {
+        let components = message.text.components(separatedBy: "\n")
+        return components.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
+    
+    private var openingText: String? {
+        textParagraphs.first
+    }
+    
+    private var followUpQuestions: [String] {
+        let questions = textParagraphs.filter { paragraph in
+            paragraph.contains("？") || paragraph.contains("?") || 
+            paragraph.contains("需要") || paragraph.contains("想要") ||
+            paragraph.contains("想看") || paragraph.contains("需要")
+        }
+        return questions
+    }
+    
+    private var middleParagraphs: [String] {
+        guard let opening = openingText else { return textParagraphs }
+        var middle = textParagraphs.filter { $0 != opening && !followUpQuestions.contains($0) }
+        if middle.count > message.products.count {
+            middle = Array(middle.prefix(message.products.count))
+        }
+        return middle
+    }
+    
+    private var productSections: [ProductSection] {
+        let products = message.products
+        let descriptions = middleParagraphs
+        return products.enumerated().map { index, product in
+            ProductSection(
+                product: product,
+                description: index < descriptions.count ? descriptions[index] : product.reason
+            )
+        }
+    }
+    
+    private func refineFollowUpQuestion(_ question: String) -> String {
+        let cleaned = question.trimmingCharacters(in: CharacterSet(charactersIn: "？? "))
+        let lowercased = cleaned.lowercased()
+        
+        if lowercased.contains("平价") || lowercased.contains("更便宜") || lowercased.contains("低价") {
+            return "推荐一些更平价的选择"
+        } else if lowercased.contains("特定品牌") || lowercased.contains("品牌") {
+            return "推荐其他品牌的商品"
+        } else if lowercased.contains("对比") || lowercased.contains("比较") {
+            return "对比一下刚才推荐的商品"
+        } else if lowercased.contains("规格") || lowercased.contains("参数") || lowercased.contains("细节") {
+            return "想了解更多规格细节"
+        } else if lowercased.contains("大包装") || lowercased.contains("囤货") {
+            return "推荐更多大包装囤货选项"
+        } else if lowercased.contains("低价") || lowercased.contains("更低价") {
+            return "推荐更低价的款式"
+        } else if lowercased.contains("无糖") || lowercased.contains("零糖") {
+            return "推荐完全无糖的其他款式"
+        } else if lowercased.contains("更多") {
+            return cleaned.replacingOccurrences(of: "？", with: "").replacingOccurrences(of: "?", with: "")
+        } else {
+            return cleaned
+        }
+    }
+    
     var body: some View {
         HStack(alignment: .top) {
             if message.sender == .user { Spacer(minLength: 44) }
@@ -1076,17 +1194,61 @@ struct MessageRow: View {
                         )
                 }
 
-                if !displayText.isEmpty {
-                    Text(displayText)
-                        .font(.subheadline)
-                        .foregroundStyle(message.state == .failed ? AppTheme.error : AppTheme.textPrimary)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 11)
-                        .background(bubbleColor, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                .stroke(AppTheme.border, lineWidth: message.sender == .ai ? 1 : 0)
-                        )
+                if message.state == .ready {
+                    // 1. 开场白
+                    if let opening = openingText {
+                        Text(opening)
+                            .font(.subheadline)
+                            .foregroundStyle(AppTheme.textPrimary)
+                            .lineSpacing(6)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 11)
+                            .background(bubbleColor, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                    .stroke(AppTheme.border, lineWidth: message.sender == .ai ? 1 : 0)
+                            )
+                    }
+                    
+                    // 2. 商品卡片 + 解说交替展示
+                    ForEach(productSections) { section in
+                        ProductCard(product: section.product) {
+                            onProductTap(section.product)
+                        }
+                        .transition(.opacity.combined(with: .scale).combined(with: .offset(y: 20)))
+                        
+                        if let description = section.description {
+                            Text(description)
+                                .font(.subheadline)
+                                .foregroundStyle(AppTheme.textSecondary)
+                                .lineSpacing(4)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 8)
+                                .transition(.opacity)
+                        }
+                    }
+                    
+                    // 3. 追问方向
+                    if !followUpQuestions.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(followUpQuestions, id: \.self) { question in
+                                Button(action: {
+                                    let refinedPrompt = refineFollowUpQuestion(question)
+                                    onFollowUpQuestionTap(refinedPrompt)
+                                }) {
+                                    Text(question)
+                                        .font(.subheadline)
+                                        .foregroundStyle(AppTheme.primary)
+                                        .padding(.horizontal, 14)
+                                        .padding(.vertical, 8)
+                                        .background(AppTheme.softPurple.opacity(0.5), in: Capsule())
+                                }
+                            }
+                        }
+                        .padding(.top, 8)
+                    }
+                } else if !displayText.isEmpty {
+                    loadingText
                 }
 
                 if !examples.isEmpty {
@@ -1104,9 +1266,33 @@ struct MessageRow: View {
                 }
 
                 if message.canRetry {
-                    Button("重试", action: onRetry)
-                        .buttonStyle(.borderedProminent)
-                        .tint(AppTheme.primary)
+                    VStack(spacing: 12) {
+                        Button(action: onRetry) {
+                            HStack(spacing: 8) {
+                                Image(systemName: "arrow.clockwise")
+                                    .font(.headline)
+                                Text("重新尝试")
+                                    .font(.headline.weight(.semibold))
+                            }
+                            .padding(.horizontal, 24)
+                            .padding(.vertical, 14)
+                            .background(
+                                LinearGradient(
+                                    colors: [AppTheme.primary, AppTheme.primary.opacity(0.8)],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                            .foregroundColor(.white)
+                            .cornerRadius(14)
+                            .shadow(color: AppTheme.primary.opacity(0.3), radius: 6, x: 0, y: 3)
+                        }
+                        
+                        Text("点击上方按钮重新搜索")
+                            .font(.caption)
+                            .foregroundStyle(AppTheme.textSecondary)
+                    }
+                    .padding(.top, 4)
                 }
 
                 if let spec = message.specSelection {
@@ -1115,12 +1301,6 @@ struct MessageRow: View {
 
                 if let comparison = message.comparison {
                     ComparisonCard(comparison: comparison)
-                }
-
-                ForEach(message.products) { product in
-                    ProductCard(product: product) {
-                        onProductTap(product)
-                    }
                 }
 
                 // 对话结束、推荐了 ≥2 件商品时，给个小按钮进对比页（页内下拉选商品）。
@@ -1142,13 +1322,101 @@ struct MessageRow: View {
             if message.sender == .ai { Spacer(minLength: 44) }
         }
     }
+    
+    @ViewBuilder
+    private var loadingText: some View {
+        switch message.state {
+        case .ready, .failed:
+            if message.state == .failed {
+                VStack(spacing: 12) {
+                    HStack(spacing: 10) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.title2)
+                            .foregroundColor(AppTheme.error)
+                        Text("出错了")
+                            .font(.headline)
+                            .foregroundColor(AppTheme.error)
+                    }
+                    .padding(.top, 4)
+                    
+                    Text(message.text)
+                        .font(.subheadline)
+                        .foregroundStyle(AppTheme.textPrimary)
+                        .lineSpacing(6)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 14)
+                .background(bubbleColor, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .stroke(AppTheme.error.opacity(0.3), lineWidth: 2)
+                )
+            } else {
+                // 首字符优化：文本很短时继续显示加载动画，避免闪烁
+                if message.text.count < 10 {
+                    HStack(spacing: 2) {
+                        Text(message.state.rawValue)
+                            .font(.subheadline)
+                            .foregroundStyle(AppTheme.textPrimary)
+                        Text(String(repeating: ".", count: dotCount))
+                            .font(.subheadline)
+                            .foregroundStyle(AppTheme.textPrimary)
+                            .monospacedDigit()
+                    }
+                    .padding(.horizontal, 4)
+                    .onAppear {
+                        startLoadingAnimation()
+                    }
+                } else {
+                    Text(message.text)
+                        .font(.subheadline)
+                        .foregroundStyle(AppTheme.textPrimary)
+                        .lineSpacing(6)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 11)
+                        .background(bubbleColor, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .stroke(AppTheme.border, lineWidth: message.sender == .ai ? 1 : 0)
+                        )
+                }
+            }
+        case .understanding, .retrieving, .generating:
+            HStack(spacing: 2) {
+                Text(message.state.rawValue)
+                    .font(.subheadline)
+                    .foregroundStyle(AppTheme.textPrimary)
+                Text(String(repeating: ".", count: dotCount))
+                    .font(.subheadline)
+                    .foregroundStyle(AppTheme.textPrimary)
+                    .monospacedDigit()
+            }
+            .padding(.horizontal, 4)
+            .onAppear {
+                startLoadingAnimation()
+            }
+        }
+    }
+    
+    private func startLoadingAnimation() {
+        dotCount = 0
+        Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { timer in
+            if message.state == .ready || message.state == .failed {
+                timer.invalidate()
+                return
+            }
+            withAnimation(.easeInOut(duration: 0.2)) {
+                dotCount = (dotCount + 1) % 4
+            }
+        }
+    }
 
     private var displayText: String {
         switch message.state {
         case .ready, .failed:
             return message.text
         default:
-            return "\(message.state.rawValue)：\(message.text)"
+            return message.text
         }
     }
 
@@ -1357,6 +1625,21 @@ struct ProductCard: View {
             Text(product.priceDisplay(for: product.defaultSpecificationSelection))
                 .font(.title3.bold())
                 .foregroundStyle(AppTheme.error)
+            
+            if !product.reason.isEmpty {
+                HStack(alignment: .top, spacing: 6) {
+                    Text("AI推荐：")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(AppTheme.primary)
+                    Text(product.reason)
+                        .font(.caption)
+                        .foregroundStyle(AppTheme.textSecondary)
+                        .lineLimit(2)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(AppTheme.softPurple.opacity(0.5), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
 
             Button(action: onDetail) {
                 Text("查看详情")
