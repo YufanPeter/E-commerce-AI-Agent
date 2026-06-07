@@ -1,5 +1,11 @@
 import Foundation
 
+/// 空态首页推荐：分类入口 + 动态热门搜索，均源自后端 /suggestions（真实库存）。
+struct HomeSuggestions: Equatable {
+    let categories: [String]
+    let hotSearches: [String]
+}
+
 struct APIErrorPayload: Codable, Hashable {
     let code: String
     let message: String

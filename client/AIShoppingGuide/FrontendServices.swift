@@ -390,6 +390,22 @@ final class RESTProductService: ProductServicing {
         return title
     }
 
+    /// 拉取空态首页推荐（GET /suggestions）：分类入口 + 动态热门搜索，均源自真实库存。
+    func fetchSuggestions() async -> HomeSuggestions? {
+        let url = baseURL.appendingPathComponent("suggestions")
+        guard
+            let (data, response) = try? await session.data(from: url),
+            let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            return nil
+        }
+        let categories = obj["categories"] as? [String] ?? []
+        let hot = obj["hot_searches"] as? [String] ?? []
+        guard !categories.isEmpty || !hot.isEmpty else { return nil }
+        return HomeSuggestions(categories: categories, hotSearches: hot)
+    }
+
     private func request<T: Decodable>(_ type: T.Type, url: URL) async throws -> T {
         let data: Data
         let response: URLResponse

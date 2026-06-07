@@ -34,6 +34,8 @@ struct GuideView: View {
     @State private var currentSessionID = UUID().uuidString
     @State private var currentTitle = GuideView.newConversationTitle
     @State private var examples: [String] = GuideView.freshExamples()
+    @State private var suggestions: HomeSuggestions?
+    @State private var isRefreshingHot = false
     @State private var keyboardHeight: CGFloat = 0
     @State private var composerHeight: CGFloat = 56
     @State private var isAutoFollowEnabled = true
@@ -143,6 +145,11 @@ struct GuideView: View {
                     }
                 }
                 .ignoresSafeArea()
+            }
+            .task {
+                if suggestions == nil {
+                    await loadSuggestions()
+                }
             }
         }
     }
@@ -311,34 +318,126 @@ struct GuideView: View {
         .buttonStyle(.plain)
     }
 
-    /// 空态：欢迎语 + 随机示例气泡。仅在当前会话还没有任何消息时显示，
-    /// 用户发起检索后随消息出现而隐去；开新对话会重新出现并换一批示例。
+    /// 空态：分类入口色块 + 动态热门搜索。仅在当前会话还没有任何消息时显示，
+    /// 数据来自后端 /suggestions（真实库存），点哪条都一定有结果；用户发起检索后随消息出现而隐去。
     private var emptyState: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("你可以问")
-                .font(.subheadline)
-                .foregroundStyle(AppTheme.textPrimary)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 11)
-                .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .stroke(AppTheme.border, lineWidth: 1)
-                )
+        VStack(alignment: .leading, spacing: 22) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("想买点什么？")
+                    .font(.title3.bold())
+                    .foregroundStyle(AppTheme.textPrimary)
+                Text("挑个分类逛逛，或直接说说你的需求")
+                    .font(.subheadline)
+                    .foregroundStyle(AppTheme.textSecondary)
+            }
 
-            VStack(alignment: .leading, spacing: 8) {
-                ForEach(examples, id: \.self) { example in
-                    Button(example) { send(example) }
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(AppTheme.primary)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
-                        .frame(maxWidth: 220, alignment: .leading)
-                        .background(AppTheme.softPurple, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            LazyVGrid(
+                columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)],
+                spacing: 12
+            ) {
+                ForEach(displayedCategories) { category in
+                    Button {
+                        send(category.query)
+                    } label: {
+                        categoryCard(category)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            if !displayedHotSearches.isEmpty {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Label("大家都在搜", systemImage: "flame.fill")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(AppTheme.textPrimary)
+                            .labelStyle(.titleAndIcon)
+                            .symbolRenderingMode(.multicolor)
+                        Spacer()
+                        Button {
+                            Task { await refreshHotSearches() }
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "arrow.triangle.2.circlepath")
+                                    .rotationEffect(.degrees(isRefreshingHot ? 360 : 0))
+                                    .animation(isRefreshingHot ? .linear(duration: 0.6) : .default, value: isRefreshingHot)
+                                Text("换一批")
+                            }
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(AppTheme.textSecondary)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(isRefreshingHot)
+                    }
+
+                    FlowLayout(spacing: 8) {
+                        ForEach(displayedHotSearches, id: \.self) { term in
+                            Button {
+                                send(term)
+                            } label: {
+                                Text(term)
+                                    .font(.subheadline.weight(.medium))
+                                    .foregroundStyle(AppTheme.textPrimary)
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 9)
+                                    .background(AppTheme.surface, in: Capsule())
+                                    .overlay(Capsule().stroke(AppTheme.border, lineWidth: 1))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// 单个分类色块：图标 + 名称 + 渐变底色。
+    private func categoryCard(_ category: CategoryEntry) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: category.icon)
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 40, height: 40)
+                .background(category.tint, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(category.name)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(AppTheme.textPrimary)
+                Text("逛一逛")
+                    .font(.caption2)
+                    .foregroundStyle(AppTheme.textSecondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            LinearGradient(
+                colors: [category.tint.opacity(0.14), category.tint.opacity(0.04)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            ),
+            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(category.tint.opacity(0.18), lineWidth: 1)
+        )
+    }
+
+    /// 展示用分类：优先用后端返回，未就绪时退回默认四类，保证空态永不空白。
+    private var displayedCategories: [CategoryEntry] {
+        let names = suggestions?.categories.isEmpty == false
+            ? suggestions!.categories
+            : ["数码电子", "服饰运动", "美妆护肤", "食品饮料"]
+        return names.map { CategoryEntry(name: $0) }
+    }
+
+    /// 展示用热门搜索：优先用后端动态词，未就绪时退回本地示例池。
+    private var displayedHotSearches: [String] {
+        if let hot = suggestions?.hotSearches, !hot.isEmpty { return hot }
+        return examples
     }
 
     private var composerStack: some View {
@@ -749,6 +848,27 @@ struct GuideView: View {
         currentTitle = GuideView.newConversationTitle
         lastQuery = ""
         showHistory = false
+        // 回到空态时换一批热门搜索，保持「动态」观感。
+        Task { await loadSuggestions() }
+    }
+
+    /// 拉取空态首页推荐（分类入口 + 动态热门搜索，均源自真实库存）。
+    @MainActor
+    private func loadSuggestions() async {
+        if let fresh = await productService.fetchSuggestions() {
+            withAnimation(.easeInOut(duration: 0.25)) {
+                suggestions = fresh
+            }
+        }
+    }
+
+    /// 「换一批」：手动刷新热门搜索词。
+    @MainActor
+    private func refreshHotSearches() async {
+        guard !isRefreshingHot else { return }
+        isRefreshingHot = true
+        defer { isRefreshingHot = false }
+        await loadSuggestions()
     }
 
     /// 重开历史对话：存档当前 → 载入选中会话（含其 session_id，可继续追问）。
@@ -1329,10 +1449,38 @@ struct SpecSelectionCard: View {
     }
 }
 
+/// 空态分类入口的展示模型：按分类名映射图标、主题色与点击后发送的 query。
+struct CategoryEntry: Identifiable {
+    let name: String
+    var id: String { name }
+
+    /// 点击后发送给 Agent 的检索语：自然口吻，落到对应分类。
+    var query: String { "推荐\(name)" }
+
+    var icon: String {
+        switch name {
+        case "数码电子": return "laptopcomputer"
+        case "服饰运动": return "tshirt.fill"
+        case "美妆护肤": return "sparkles"
+        case "食品饮料", "食品生活": return "cup.and.saucer.fill"
+        default: return "bag.fill"
+        }
+    }
+
+    var tint: Color {
+        switch name {
+        case "数码电子": return Color(hex: "3B82F6")
+        case "服饰运动": return Color(hex: "10B981")
+        case "美妆护肤": return Color(hex: "EC4899")
+        case "食品饮料", "食品生活": return Color(hex: "F59E0B")
+        default: return AppTheme.primary
+        }
+    }
+}
+
 /// 轻量流式布局：子视图按行从左到右排列，超出宽度自动换行（用于规格 chip）。
 struct FlowLayout: Layout {
     var spacing: CGFloat = 8
-
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         let maxWidth = proposal.width ?? .infinity
         var x: CGFloat = 0

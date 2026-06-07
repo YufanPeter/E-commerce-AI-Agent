@@ -340,3 +340,57 @@ def generate_title(req: TitleRequest) -> dict[str, str]:
     if not title:
         title = user_text[:12]
     return {"title": title}
+
+
+@app.get("/suggestions")
+def get_suggestions() -> dict[str, Any]:
+    """空态首页推荐：分类入口 + 动态热门搜索，全部源自真实商品库。
+
+    热门词由「品牌+子类目」「子类目」从库里随机取，保证每条点了都有商品命中
+    （解决手写示例答不上的问题）；每次请求随机轮换，呈现动态感。
+    """
+    import random
+
+    from store.product_store import ProductStore
+
+    store = ProductStore()
+    with store.connect() as conn:
+        cats = [
+            r["category"]
+            for r in conn.execute(
+                "SELECT category, COUNT(*) n FROM products WHERE status='active' "
+                "GROUP BY category ORDER BY n DESC"
+            ).fetchall()
+        ]
+        # 真实 (品牌, 子类目) 组合 —— 一定对应到具体商品
+        pairs = [
+            (r["brand"], r["sub_category"])
+            for r in conn.execute(
+                "SELECT DISTINCT brand, sub_category FROM products "
+                "WHERE status='active' AND brand <> '' AND sub_category <> ''"
+            ).fetchall()
+        ]
+        subcats = [
+            r["sub_category"]
+            for r in conn.execute(
+                "SELECT DISTINCT sub_category FROM products "
+                "WHERE status='active' AND sub_category <> ''"
+            ).fetchall()
+        ]
+
+    random.shuffle(pairs)
+    random.shuffle(subcats)
+    # 混合：一半「品牌+子类目」（如 Nike 跑步鞋），一半裸子类目（如 降噪真无线耳机），
+    # 都来自真实库存，点击必有结果。
+    hot: list[str] = []
+    for brand, sub in pairs[:5]:
+        # 品牌名可能带中英混排（"Apple 苹果"），取首段更自然
+        brand_short = brand.split()[0]
+        hot.append(f"{brand_short}{sub}")
+    hot += subcats[:5]
+    random.shuffle(hot)
+
+    return {
+        "categories": cats,
+        "hot_searches": hot[:8],
+    }
