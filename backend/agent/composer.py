@@ -33,6 +33,7 @@ SYSTEM_PROMPT = """你是一位友好、专业的电商导购助手，说话像�
 - 直接基于提供的 payload 中的真实商品信息说话，绝不编造任何不存在的字段或商品。
 - 开场先用一句话总括这次推荐（如"给你挑了几款 X，覆盖不同预算"），再展开。
 - 善用归并表达：同价位、同定位的商品放一起说（如"3299 元档的 A 和 B 都是…"），不要机械地一条条罗列。
+- 报价格时一律使用 payload.hits 里的 price_display 字段（它已是「¥X 起」或「¥X」的正确形式），原样引用；不要自己拼价格、不要去掉「起」字，更不要给多规格商品报一个单一最高价。若某商品没有 price_display 则可不提价格。
 - 介绍每款时落到使用场景和人群（通勤、学习、送礼…），而不是只报价格和参数。
 - 适度点出关键差异帮用户决策（价格梯度、核心卖点、适合谁）。
 - 若 payload.hits 为空，坦诚告知未找到，并给出具体的放宽建议（提高预算到 X、放宽品牌等）。
@@ -85,7 +86,7 @@ _FEW_SHOT: list[dict[str, str]] = [
 
 # payload 里塞 LLM 不需要的字段（如 evidence chunk）只会浪费 token。
 # 这里裁剪只保留对话术有用的精简字段。
-_HIT_KEEP_KEYS = ("title", "brand", "category", "sub_category", "price", "base_price", "score")
+_HIT_KEEP_KEYS = ("title", "brand", "category", "sub_category", "price_display", "price", "base_price", "score")
 
 
 def _trim_payload_for_llm(payload: dict[str, Any]) -> dict[str, Any]:

@@ -48,6 +48,7 @@ class RecommendTool:
         self,
         search_service: SearchService | None = None,
         decomposer: Callable[[str], list[SubRequest]] | None = None,
+        product_store: Any | None = None,
     ) -> None:
         # 懒加载：首次 run() 时才实例化 SearchService。
         # SearchService 构造会加载 embedding 模型 + 打开 Chroma（~10s），
@@ -55,12 +56,44 @@ class RecommendTool:
         self._service = search_service
         # 多需求拆解器：默认用 LLM 版 decompose_query；测试可注入 stub 避免网络调用。
         self._decompose = decomposer or decompose_query
+        # 商品事实库：用于取价格区间，给卡片/composer 生成「¥X 起」的价格展示。
+        self._products = product_store
 
     def _get_service(self) -> SearchService:
         if self._service is None:
             from search.search_service import get_search_service
             self._service = get_search_service()
         return self._service
+
+    def _get_products(self) -> Any:
+        if self._products is None:
+            from store.product_store import ProductStore
+            self._products = ProductStore()
+        return self._products
+
+    def _attach_price_displays(self, cards: list[dict[str, Any]]) -> None:
+        """给商品卡补上预格式化的价格展示「price_display」（多规格→¥X 起）。
+
+        composer 拿着裸数字 base_price 容易把多规格商品报成单一价（甚至说成某个
+        偏高的 SKU 价）；这里用真实价格区间统一生成「起价」字符串，让价格语义由
+        代码确定。取价失败时退回单价显示，不中断推荐。"""
+        if not cards:
+            return
+        from store.product_store import price_display
+
+        ids = [c["product_id"] for c in cards if c.get("product_id")]
+        try:
+            candidates = self._get_products().get_products_by_ids(ids)
+            by_id = {c.product_id: c for c in candidates}
+        except Exception as exc:  # noqa: BLE001 - 价格展示是增强项，失败不应中断推荐
+            logger.warning("取价格区间失败，价格展示退回单价：%r", exc)
+            by_id = {}
+        for card in cards:
+            cand = by_id.get(card.get("product_id"))
+            if cand is not None:
+                card["price_display"] = price_display(cand.price_range)
+            else:
+                card["price_display"] = f"¥{card.get('price', 0):g}"
 
     def run(
         self,
@@ -112,6 +145,7 @@ class RecommendTool:
         )
 
         products = [_to_product_card(h) for h in hits]
+        self._attach_price_displays(products)
         payload = {
             "query": query,
             "products": products,
@@ -199,6 +233,7 @@ class RecommendTool:
         )
 
         products = [_to_product_card(h) for h in result.hits]
+        self._attach_price_displays(products)
 
         summary = {
             "hit_count": len(result.hits),
@@ -281,6 +316,9 @@ class RecommendTool:
         # last_parsed_query 退而存第一个子需求的解析——多组结果对 refine 本就语义模糊，
         # 这里给一个合理基线即可，不追求无损。
         session.remember_search(first_parsed or {}, flat_hit_refs)
+
+        # 价格展示：flat_products 与各 group 的 card 是同一批 dict 对象，补一次即可全覆盖。
+        self._attach_price_displays(flat_products)
 
         non_empty_groups = [g for g in groups if g["products"]]
         summary = {
