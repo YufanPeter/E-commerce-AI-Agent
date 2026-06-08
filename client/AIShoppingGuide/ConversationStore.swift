@@ -47,23 +47,23 @@ final class ConversationStore: ObservableObject {
         persist()
     }
 
-    func delete(at offsets: IndexSet) {
-        conversations.remove(atOffsets: offsets)
-        persist()
+    func rename(_ conversation: Conversation, to title: String) {
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedTitle.isEmpty,
+              let index = conversations.firstIndex(where: { $0.id == conversation.id })
+        else { return }
+        conversations[index].title = trimmedTitle
+        conversations[index].updatedAt = Date()
+        sortAndPersist()
     }
 
-    /// 清空全部历史对话。
     func clearAll() {
         conversations.removeAll()
         persist()
     }
 
-    /// 手动重命名一段对话；空标题忽略。
-    func rename(_ conversation: Conversation, to newTitle: String) {
-        let trimmed = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty,
-              let index = conversations.firstIndex(where: { $0.id == conversation.id }) else { return }
-        conversations[index].title = trimmed
+    func delete(at offsets: IndexSet) {
+        conversations.remove(atOffsets: offsets)
         persist()
     }
 

@@ -160,13 +160,7 @@ struct RootView: View {
     private func loadBackendCartOnLaunch() async {
         let service = RESTProductService()
         guard let snapshot = try? await service.fetchAgentCart() else { return }
-        cartItems = snapshot.items.map { item in
-            CartItem(
-                product: Product(payload: item.product),
-                selectedOptions: item.selectedOptions,
-                quantity: item.quantity
-            )
-        }
+        cartItems = snapshot.items.map(CartItem.init(payload:))
     }
 
     private func updateKeyboardOffset(from notification: Notification) {

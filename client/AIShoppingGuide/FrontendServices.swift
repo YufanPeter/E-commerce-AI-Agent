@@ -229,7 +229,7 @@ final class RESTProductService: ProductServicing {
         try await get(ProductPayload.self, path: "products/\(productID)")
     }
 
-    /// 单品 AI 推荐理由（与导购 composer 同逻辑）；失败返回 nil。
+    /// 单品详情补充文案（与导购 composer 同逻辑）；失败返回 nil。
     func fetchProductPitch(productID: String) async -> String? {
         var request = URLRequest(url: baseURL.appendingPathComponent("products/\(productID)/pitch"))
         request.httpMethod = "POST"
@@ -325,6 +325,41 @@ final class RESTProductService: ProductServicing {
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             throw RESTServiceError.invalidResponse
         }
+        return await agentCartSnapshot(from: data)
+    }
+
+    func mutateAgentCart(_ mutation: CartMutationRequest) async throws -> CartSnapshotPayload {
+        var urlRequest = URLRequest(url: baseURL.appendingPathComponent("cart/mutate"))
+        urlRequest.httpMethod = "POST"
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        do {
+            urlRequest.httpBody = try JSONEncoder().encode(mutation)
+        } catch {
+            throw RESTServiceError.invalidResponse
+        }
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: urlRequest)
+        } catch {
+            throw RESTServiceError.connectionFailed
+        }
+        guard let http = response as? HTTPURLResponse else {
+            throw RESTServiceError.invalidResponse
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            let payload = decodeErrorPayload(from: data)
+            throw RESTServiceError.requestFailed(
+                statusCode: http.statusCode,
+                code: payload?.code ?? "API_HTTP_\(http.statusCode)",
+                message: payload?.message ?? "购物车更新失败。"
+            )
+        }
+        return await agentCartSnapshot(from: data)
+    }
+
+    private func agentCartSnapshot(from data: Data) async -> CartSnapshotPayload {
         guard
             let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             let cart = obj["cart"] as? [String: Any],
@@ -333,7 +368,6 @@ final class RESTProductService: ProductServicing {
         else {
             return Self.emptyAgentCart()
         }
-
         let productIDs = lines.compactMap { $0["product_id"] as? String }
         let productPayloads = (try? await fetchProducts(productIDs: productIDs)) ?? []
         let productsByID = productPayloads.reduce(into: [String: ProductPayload]()) { acc, p in
@@ -949,6 +983,9 @@ private final class SSEDelegate: NSObject, URLSessionDataDelegate {
 
 extension Product {
     init(payload: ProductPayload) {
+        let evidence = payload.evidence ?? []
+        let detailEvidence = evidence.first { $0.sourceType == .productDetail }
+        let reviews = ProductReview.reviews(payloads: payload.reviews, fallbackEvidence: evidence)
         let specifications = payload.specifications.map { specification in
             ProductSpecification(
                 name: specification.name,
@@ -969,12 +1006,50 @@ extension Product {
             id: payload.productID,
             title: payload.title,
             price: payload.price.display,
-            reason: payload.summary ?? "这款商品值得推荐",
-            details: "",
+            reason: payload.summary ?? detailEvidence?.snippet ?? "",
+            details: detailEvidence?.snippet ?? payload.summary ?? "",
             tags: payload.tags,
             specifications: specifications,
             imageURL: payload.imageURL,
-            skus: skus
+            skus: skus,
+            reviews: reviews
+        )
+    }
+}
+
+private extension ProductReview {
+    static func reviews(payloads: [ReviewPayload]?, fallbackEvidence: [EvidencePayload]) -> [ProductReview] {
+        if let payloads, !payloads.isEmpty {
+            return payloads.map(ProductReview.init(payload:))
+        }
+        return fallbackEvidence
+            .filter { $0.sourceType == .userReview }
+            .map(ProductReview.init(evidence:))
+    }
+
+    init(payload: ReviewPayload) {
+        self.init(
+            id: payload.id,
+            nickname: payload.nickname,
+            rating: min(5, max(0, payload.rating)),
+            content: payload.content,
+            polarity: payload.polarity
+        )
+    }
+
+    init(evidence: EvidencePayload) {
+        let parts = evidence.title
+            .split(separator: "·", maxSplits: 1)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        let nickname = parts.first?.replacingOccurrences(of: "用户", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let ratingText = parts.dropFirst().first ?? ""
+        let rating = Int(String(ratingText.filter(\.isNumber))) ?? 0
+        self.init(
+            id: evidence.id,
+            nickname: (nickname?.isEmpty == false ? nickname : "匿名用户") ?? "匿名用户",
+            rating: min(5, max(0, rating)),
+            content: evidence.snippet,
+            polarity: nil
         )
     }
 }

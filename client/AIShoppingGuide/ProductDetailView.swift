@@ -2,7 +2,6 @@ import SwiftUI
 
 struct ProductDetailView: View {
     let product: Product
-    let recommendationText: String?
     let onAddToCart: (Product, [String: String], Int) -> Void
 
     @State private var selectedOptions: [String: String]
@@ -13,22 +12,24 @@ struct ProductDetailView: View {
     @State private var toastID = UUID()
     @State private var successQuantity = 1
     @State private var successSummary = ""
-    @State private var displayedRecommendation = ""
-    @State private var isLoadingRecommendation = false
-
-    private let productService = RESTProductService()
 
     private var toastBottomPadding: CGFloat {
-        AppTheme.bottomTabBarHeight + AppTheme.bottomTabBarBottomPadding + 40
+        stickyButtonBottomPadding + 74
+    }
+
+    private var stickyButtonBottomPadding: CGFloat {
+        AppTheme.bottomTabBarHeight + AppTheme.bottomTabBarBottomPadding + AppTheme.guideComposerTabGap
+    }
+
+    private var bottomOverlayHeight: CGFloat {
+        stickyButtonBottomPadding + 84
     }
 
     init(
         product: Product,
-        recommendationText: String? = nil,
         onAddToCart: @escaping (Product, [String: String], Int) -> Void
     ) {
         self.product = product
-        self.recommendationText = recommendationText
         self.onAddToCart = onAddToCart
         _selectedOptions = State(initialValue: product.defaultSpecificationSelection)
     }
@@ -36,48 +37,32 @@ struct ProductDetailView: View {
     var body: some View {
         ZStack(alignment: .bottom) {
             ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    productImageSection
+                VStack(alignment: .leading, spacing: 18) {
+                    productHeroImage
+                    productInfo
 
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(product.priceDisplay(for: selectedOptions))
-                            .font(.title.bold())
-                            .foregroundStyle(AppTheme.error)
-                        Text(product.title)
-                            .font(.title3.bold())
-                            .foregroundStyle(AppTheme.textPrimary)
-                            .fixedSize(horizontal: false, vertical: true)
+                    if !product.reviews.isEmpty {
+                        ProductReviewsSection(reviews: product.reviews)
                     }
 
-                    recommendationSection
-
                     if !product.tags.isEmpty {
-                        HStack {
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 82), spacing: 8, alignment: .leading)], alignment: .leading, spacing: 8) {
                             ForEach(product.tags, id: \.self) { tag in
                                 Text(tag)
                                     .font(.caption.weight(.medium))
                                     .foregroundStyle(AppTheme.primary)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.82)
                                     .padding(.horizontal, 10)
                                     .padding(.vertical, 7)
                                     .background(AppTheme.softPurple, in: Capsule())
                             }
                         }
                     }
-
-                    Button {
-                        openSpecificationSheet()
-                    } label: {
-                        Text("加入购物车")
-                            .font(.headline)
-                            .foregroundStyle(.white)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 15)
-                            .background(AppTheme.primary, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                    }
-                    .padding(.top, 4)
                 }
                 .padding(20)
-                .padding(.bottom, 112)
+                .padding(.top, 24)
+                .padding(.bottom, bottomOverlayHeight + 20)
             }
 
             if showSuccessToast {
@@ -86,6 +71,9 @@ struct ProductDetailView: View {
                     .padding(.bottom, toastBottomPadding)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
+
+            detailBottomScrim
+            stickyAddToCartButton
         }
         .sheet(isPresented: $showSpecificationSheet) {
             AddToCartSheet(
@@ -101,74 +89,69 @@ struct ProductDetailView: View {
         .background(AppTheme.background)
         .navigationTitle("商品详情")
         .navigationBarTitleDisplayMode(.inline)
-        .task(id: product.id) {
-            await loadRecommendation()
-        }
+        .toolbarBackground(AppTheme.background, for: .navigationBar)
+        .toolbarBackground(.visible, for: .navigationBar)
     }
 
-    private var productImageSection: some View {
-        ProductRemoteImage(
-            url: product.imageURL,
-            cornerRadius: 20,
-            placeholderIcon: "bag",
-            contentMode: .fit
-        )
-        .frame(maxWidth: .infinity)
-        .frame(height: 300)
-        .background(Color.white, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(AppTheme.border, lineWidth: 1)
-        )
-    }
-
-    private var recommendationSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("AI 推荐理由")
+    private var stickyAddToCartButton: some View {
+        Button {
+            openSpecificationSheet()
+        } label: {
+            Text("加入购物车")
                 .font(.headline)
-                .foregroundStyle(AppTheme.textPrimary)
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 15)
+                .background(AppTheme.primary, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 20)
+        .padding(.bottom, stickyButtonBottomPadding)
+    }
 
-            if isLoadingRecommendation {
-                HStack(spacing: 8) {
-                    ProgressView()
-                        .controlSize(.small)
-                    Text("正在生成推荐理由…")
-                        .font(.subheadline)
-                        .foregroundStyle(AppTheme.textSecondary)
-                }
-            } else if displayedRecommendation.isEmpty {
-                Text("暂时空缺")
-                    .font(.subheadline)
-                    .foregroundStyle(AppTheme.textSecondary.opacity(0.72))
-            } else {
-                Text(displayedRecommendation)
-                    .font(.subheadline)
-                    .foregroundStyle(AppTheme.textSecondary)
-                    .lineSpacing(5)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+    private var detailBottomScrim: some View {
+        Rectangle()
+            .fill(.ultraThinMaterial)
+            .frame(height: bottomOverlayHeight)
+            .mask(
+                LinearGradient(
+                    colors: [.clear, .black.opacity(0.42), .black.opacity(0.82)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+            .allowsHitTesting(false)
+            .ignoresSafeArea(edges: .bottom)
+    }
+
+    private var productHeroImage: some View {
+        GeometryReader { geometry in
+            ProductRemoteImage(url: product.imageURL, cornerRadius: 24, placeholderIcon: "bag", contentMode: .fit)
+                .frame(width: geometry.size.width, height: geometry.size.width)
+                .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .stroke(AppTheme.border, lineWidth: 1)
+                )
+        }
+        .aspectRatio(1, contentMode: .fit)
+    }
+
+    private var productInfo: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(product.priceDisplay(for: selectedOptions))
+                .font(.system(size: 32, weight: .bold))
+                .foregroundStyle(AppTheme.error)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+            Text(product.title)
+                .font(.title2.bold())
+                .foregroundStyle(AppTheme.textPrimary)
+                .lineLimit(4)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(16)
-        .floatingLiquidPanel(cornerRadius: 20)
-    }
-
-    @MainActor
-    private func loadRecommendation() async {
-        if let passed = recommendationText.flatMap({ RecommendationCopy.sanitized($0) }),
-           !passed.isEmpty {
-            displayedRecommendation = passed
-            return
-        }
-
-        isLoadingRecommendation = true
-        defer { isLoadingRecommendation = false }
-
-        if let fetched = await productService.fetchProductPitch(productID: product.id) {
-            displayedRecommendation = fetched
-        } else {
-            displayedRecommendation = ""
-        }
     }
 
     private var selectedSpecificationSummary: String {
@@ -203,6 +186,103 @@ struct ProductDetailView: View {
                 showSuccessToast = false
             }
         }
+    }
+}
+
+private struct ProductReviewsSection: View {
+    let reviews: [ProductReview]
+    @State private var isExpanded = false
+
+    private var visibleReviews: [ProductReview] {
+        isExpanded ? reviews : Array(reviews.prefix(3))
+    }
+
+    private var hiddenReviewCount: Int {
+        max(0, reviews.count - 3)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("用户评价")
+                    .font(.headline)
+                    .foregroundStyle(AppTheme.textPrimary)
+                Text("\(reviews.count) 条")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(AppTheme.textSecondary)
+            }
+
+            VStack(alignment: .leading, spacing: 12) {
+                ForEach(visibleReviews) { review in
+                    ProductReviewRow(review: review)
+                    if review.id != visibleReviews.last?.id {
+                        Divider().overlay(AppTheme.border)
+                    }
+                }
+            }
+
+            if hiddenReviewCount > 0 {
+                Button {
+                    withAnimation(.easeOut(duration: 0.18)) {
+                        isExpanded.toggle()
+                    }
+                } label: {
+                    HStack(spacing: 5) {
+                        Text(isExpanded ? "收起评价" : "查看更多 \(hiddenReviewCount) 条")
+                        Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(AppTheme.primary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 9)
+                    .background(AppTheme.softPurple.opacity(0.55), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .floatingLiquidPanel(cornerRadius: 20)
+    }
+}
+
+private struct ProductReviewRow: View {
+    let review: ProductReview
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center, spacing: 10) {
+                Text(review.nickname)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(AppTheme.textPrimary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
+                Spacer(minLength: 8)
+                RatingStars(rating: review.rating)
+            }
+
+            Text(review.content)
+                .font(.subheadline)
+                .foregroundStyle(AppTheme.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct RatingStars: View {
+    let rating: Int
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(1...5, id: \.self) { index in
+                Image(systemName: index <= rating ? "star.fill" : "star")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(index <= rating ? AppTheme.primary : AppTheme.textSecondary.opacity(0.45))
+            }
+        }
+        .accessibilityLabel("\(rating) 星")
     }
 }
 

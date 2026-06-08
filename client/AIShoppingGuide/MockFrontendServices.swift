@@ -425,6 +425,29 @@ private enum MockProductCatalog {
     private static func makePayload(from product: Product, index: Int) -> ProductPayload {
         let productID = "mock_product_\(index + 1)"
         let price = money(from: product.price)
+        let reviews = [
+            ReviewPayload(
+                id: "\(productID)_review_1",
+                nickname: "青柠",
+                rating: 5,
+                content: "到手质感比预期好，日常使用很顺手，包装也完整。",
+                polarity: "positive"
+            ),
+            ReviewPayload(
+                id: "\(productID)_review_2",
+                nickname: "小舟",
+                rating: 4,
+                content: "核心功能满意，细节做工稳，适合对性价比有要求的人。",
+                polarity: "positive"
+            ),
+            ReviewPayload(
+                id: "\(productID)_review_3",
+                nickname: "北山",
+                rating: 4,
+                content: "尺码和描述一致，物流很快，后续会再观察耐用度。",
+                polarity: "neutral"
+            )
+        ]
         let specs = product.specifications.map { spec in
             ProductSpecificationPayload(
                 id: spec.name,
@@ -456,6 +479,7 @@ private enum MockProductCatalog {
                     stockCount: nil
                 )
             ],
+            reviews: reviews,
             evidence: [
                 EvidencePayload(
                     id: "\(productID)_detail",
@@ -465,7 +489,16 @@ private enum MockProductCatalog {
                     score: 1,
                     updatedAt: Date()
                 )
-            ],
+            ] + reviews.map { review in
+                EvidencePayload(
+                    id: review.id,
+                    sourceType: .userReview,
+                    title: "用户\(review.nickname) · \(review.rating) 星",
+                    snippet: review.content,
+                    score: nil,
+                    updatedAt: Date()
+                )
+            },
             updatedAt: Date()
         )
     }

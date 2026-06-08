@@ -9,6 +9,8 @@ struct CartView: View {
     @State private var selectedItemIDs: Set<String> = []
     @State private var knownItemIDs: Set<String> = []
 
+    private let cartService = RESTProductService()
+
     private var itemCount: Int {
         items.reduce(0) { $0 + $1.quantity }
     }
@@ -43,6 +45,10 @@ struct CartView: View {
         !selectedItemIDs.intersection(currentItemIDs).isEmpty && !allItemsSelected
     }
 
+    private var bottomOverlayHeight: CGFloat {
+        AppTheme.cartCheckoutBottomPadding + 126
+    }
+
     private func formattedPrice(_ value: Double) -> String {
         if value.rounded(.towardZero) == value {
             return "¥\(Int(value))"
@@ -52,52 +58,44 @@ struct CartView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                if items.isEmpty {
-                    ContentUnavailableView("购物车为空", systemImage: "cart", description: Text("从导购推荐里加入商品后会显示在这里。"))
-                        .padding(.bottom, 90)
-                } else {
-                    ScrollView(showsIndicators: false) {
-                        VStack(spacing: 12) {
-                            ForEach($items) { $item in
-                                CartRow(
-                                    item: $item,
-                                    isSelected: selectedItemIDs.contains(item.id),
-                                    onToggleSelection: {
-                                        toggleSelection(for: item.id)
-                                    },
-                                    onShowDetail: {
-                                        selectedProduct = item.product
-                                    },
-                                    onEditSpecifications: {
-                                        openSpecificationEditor(for: item)
-                                    },
-                                    onRemove: {
-                                        removeItem(id: item.id)
-                                    }
-                                )
+            ZStack(alignment: .bottom) {
+                VStack(spacing: 0) {
+                    if items.isEmpty {
+                        ContentUnavailableView("购物车为空", systemImage: "cart", description: Text("从导购推荐里加入商品后会显示在这里。"))
+                            .padding(.bottom, 90)
+                    } else {
+                        ScrollView(showsIndicators: false) {
+                            VStack(spacing: 12) {
+                                ForEach($items) { $item in
+                                    CartRow(
+                                        item: $item,
+                                        isSelected: selectedItemIDs.contains(item.id),
+                                        onToggleSelection: {
+                                            toggleSelection(for: item.id)
+                                        },
+                                        onShowDetail: {
+                                            selectedProduct = item.product
+                                        },
+                                        onEditSpecifications: {
+                                            openSpecificationEditor(for: item)
+                                        },
+                                        onQuantityChange: { quantity in
+                                            updateQuantity(id: item.id, quantity: quantity)
+                                        },
+                                        onRemove: {
+                                            removeItem(id: item.id)
+                                        }
+                                    )
+                                }
                             }
+                            .padding(18)
+                            .padding(.bottom, bottomOverlayHeight + 24)
                         }
-                        .padding(18)
-                        .padding(.bottom, AppTheme.cartCheckoutBottomPadding + 92)
                     }
                 }
-            }
-            .safeAreaInset(edge: .bottom) {
+
                 if !items.isEmpty {
-                    CartCheckoutBar(
-                        selectedCount: selectedItemCount,
-                        totalText: selectedTotalText,
-                        isAllSelected: allItemsSelected,
-                        isPartiallySelected: isPartiallySelected,
-                        onToggleAll: toggleSelectAll
-                    )
-                    .padding(.horizontal, 20)
-                    .padding(.top, 12)
-                    .padding(.bottom, 12)
-                    .floatingLiquidPanel(cornerRadius: 26)
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, AppTheme.cartCheckoutBottomPadding)
+                    checkoutOverlay
                 }
             }
             .sheet(item: $editingSpecificationItem) { editingItem in
@@ -124,6 +122,22 @@ struct CartView: View {
                 syncSelectionWithItems()
             }
         }
+    }
+
+    private var checkoutOverlay: some View {
+        CartCheckoutBar(
+            selectedCount: selectedItemCount,
+            totalText: selectedTotalText,
+            isAllSelected: allItemsSelected,
+            isPartiallySelected: isPartiallySelected,
+            onToggleAll: toggleSelectAll
+        )
+        .padding(.horizontal, 20)
+        .padding(.top, 12)
+        .padding(.bottom, 12)
+        .floatingLiquidPanel(cornerRadius: 26)
+        .padding(.horizontal, 16)
+        .padding(.bottom, AppTheme.cartCheckoutBottomPadding)
     }
 
     private func openSpecificationEditor(for item: CartItem) {
@@ -155,7 +169,9 @@ struct CartView: View {
         let updatedItem = CartItem(
             product: sourceItem.product,
             selectedOptions: updatedOptions,
-            quantity: sourceItem.quantity
+            quantity: sourceItem.quantity,
+            backendCartItemID: sourceItem.backendCartItemID,
+            skuID: sourceItem.product.matchingSKU(for: updatedOptions)?.id ?? sourceItem.product.displaySKU(for: updatedOptions)?.id
         )
         let sourceWasSelected = selectedItemIDs.contains(sourceItem.id)
         let targetWasSelected = selectedItemIDs.contains(updatedItem.id)
@@ -176,6 +192,19 @@ struct CartView: View {
                 }
             }
             knownItemIDs = currentItemIDs
+            if let cartItemID = sourceItem.backendCartItemID,
+               let skuID = updatedItem.skuID {
+                syncBackendCart(
+                    CartMutationRequest(
+                        action: .updateSpecification,
+                        productID: sourceItem.product.id,
+                        skuID: skuID,
+                        cartItemID: cartItemID,
+                        selectedOptions: updatedOptions,
+                        quantity: sourceItem.quantity
+                    )
+                )
+            }
         }
 
         closeSpecificationEditor()
@@ -198,7 +227,8 @@ struct CartView: View {
         let item = CartItem(
             product: product,
             selectedOptions: normalizedSelectedOptions,
-            quantity: quantity
+            quantity: quantity,
+            skuID: product.matchingSKU(for: normalizedSelectedOptions)?.id ?? product.displaySKU(for: normalizedSelectedOptions)?.id
         )
         if let index = items.firstIndex(where: { $0.id == item.id }) {
             items[index].quantity += quantity
@@ -206,6 +236,15 @@ struct CartView: View {
             items.append(item)
         }
         selectedItemIDs.insert(item.id)
+        syncBackendCart(
+            CartMutationRequest(
+                action: .add,
+                productID: product.id,
+                skuID: item.skuID,
+                selectedOptions: normalizedSelectedOptions,
+                quantity: quantity
+            )
+        )
     }
 
     private func toggleSelection(for id: String) {
@@ -225,9 +264,56 @@ struct CartView: View {
     }
 
     private func removeItem(id: String) {
+        guard let item = items.first(where: { $0.id == id }) else { return }
         items.removeAll { $0.id == id }
         selectedItemIDs.remove(id)
         knownItemIDs.remove(id)
+        if let cartItemID = item.backendCartItemID {
+            syncBackendCart(
+                CartMutationRequest(action: .remove, cartItemID: cartItemID),
+                restoreOnFailure: item
+            )
+        }
+    }
+
+    private func updateQuantity(id: String, quantity: Int) {
+        guard let item = items.first(where: { $0.id == id }),
+              let cartItemID = item.backendCartItemID
+        else { return }
+        syncBackendCart(
+            CartMutationRequest(
+                action: .updateQuantity,
+                cartItemID: cartItemID,
+                quantity: quantity
+            )
+        )
+    }
+
+    private func syncBackendCart(
+        _ mutation: CartMutationRequest,
+        restoreOnFailure: CartItem? = nil
+    ) {
+        Task {
+            do {
+                let snapshot = try await cartService.mutateAgentCart(mutation)
+                await MainActor.run {
+                    applyCartSnapshot(snapshot)
+                }
+            } catch {
+                guard let restoreOnFailure else { return }
+                await MainActor.run {
+                    if !items.contains(where: { $0.id == restoreOnFailure.id }) {
+                        items.append(restoreOnFailure)
+                    }
+                    syncSelectionWithItems()
+                }
+            }
+        }
+    }
+
+    private func applyCartSnapshot(_ snapshot: CartSnapshotPayload) {
+        items = snapshot.items.map(CartItem.init(payload:))
+        syncSelectionWithItems()
     }
 
     private func syncSelectionWithItems() {
@@ -262,6 +348,7 @@ struct CartRow: View {
     let onToggleSelection: () -> Void
     let onShowDetail: () -> Void
     let onEditSpecifications: () -> Void
+    let onQuantityChange: (Int) -> Void
     let onRemove: () -> Void
 
     var body: some View {
@@ -334,7 +421,15 @@ struct CartRow: View {
                         .onTapGesture(perform: onShowDetail)
                         .accessibilityAddTraits(.isButton)
 
-                    QuantityControl(quantity: $item.quantity)
+                    QuantityControl(
+                        quantity: Binding(
+                            get: { item.quantity },
+                            set: { quantity in
+                                item.quantity = quantity
+                                onQuantityChange(quantity)
+                            }
+                        )
+                    )
                         .contentShape(Rectangle())
                         .onTapGesture {}
                 }

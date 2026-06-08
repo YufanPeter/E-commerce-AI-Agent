@@ -96,6 +96,14 @@ struct EvidencePayload: Identifiable, Codable, Hashable {
     let updatedAt: Date?
 }
 
+struct ReviewPayload: Identifiable, Codable, Hashable {
+    let id: String
+    let nickname: String
+    let rating: Int
+    let content: String
+    let polarity: String?
+}
+
 struct ProductPayload: Identifiable, Codable, Hashable {
     var id: String { productID }
 
@@ -112,6 +120,7 @@ struct ProductPayload: Identifiable, Codable, Hashable {
     let tags: [String]
     let specifications: [ProductSpecificationPayload]
     let skus: [SKUPayload]
+    let reviews: [ReviewPayload]?
     let evidence: [EvidencePayload]?
     let updatedAt: Date?
 }
@@ -360,6 +369,24 @@ struct CartMutationRequest: Codable, Hashable {
     let selectedOptions: [String: String]
     let quantity: Int?
     let selectedCartItemIDs: [String]
+
+    init(
+        action: CartMutationKind,
+        productID: String? = nil,
+        skuID: String? = nil,
+        cartItemID: String? = nil,
+        selectedOptions: [String: String] = [:],
+        quantity: Int? = nil,
+        selectedCartItemIDs: [String] = []
+    ) {
+        self.action = action
+        self.productID = productID
+        self.skuID = skuID
+        self.cartItemID = cartItemID
+        self.selectedOptions = selectedOptions
+        self.quantity = quantity
+        self.selectedCartItemIDs = selectedCartItemIDs
+    }
 }
 
 struct AddressPayload: Identifiable, Codable, Hashable {

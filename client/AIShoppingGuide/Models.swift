@@ -23,6 +23,7 @@ struct Product: Identifiable, Hashable, Codable {
     let specifications: [ProductSpecification]
     let imageURL: URL?
     let skus: [ProductSKU]
+    let reviews: [ProductReview]
 
     init(
         id: String = UUID().uuidString,
@@ -33,7 +34,8 @@ struct Product: Identifiable, Hashable, Codable {
         tags: [String],
         specifications: [ProductSpecification],
         imageURL: URL? = nil,
-        skus: [ProductSKU] = []
+        skus: [ProductSKU] = [],
+        reviews: [ProductReview] = []
     ) {
         self.id = id
         self.title = title
@@ -44,6 +46,7 @@ struct Product: Identifiable, Hashable, Codable {
         self.specifications = specifications
         self.imageURL = imageURL
         self.skus = skus
+        self.reviews = reviews
     }
 
     var defaultSpecificationSelection: [String: String] {
@@ -151,15 +154,43 @@ struct ProductSKU: Identifiable, Hashable, Codable {
     let priceDisplay: String
 }
 
+struct ProductReview: Identifiable, Hashable, Codable {
+    let id: String
+    let nickname: String
+    let rating: Int
+    let content: String
+    let polarity: String?
+}
+
 struct CartItem: Identifiable, Hashable {
     let product: Product
     let selectedOptions: [String: String]
     var quantity: Int
+    let backendCartItemID: String?
+    let skuID: String?
 
-    init(product: Product, selectedOptions: [String: String] = [:], quantity: Int = 1) {
+    init(
+        product: Product,
+        selectedOptions: [String: String] = [:],
+        quantity: Int = 1,
+        backendCartItemID: String? = nil,
+        skuID: String? = nil
+    ) {
         self.product = product
         self.selectedOptions = selectedOptions
         self.quantity = quantity
+        self.backendCartItemID = backendCartItemID
+        self.skuID = skuID
+    }
+
+    init(payload: CartItemPayload) {
+        self.init(
+            product: Product(payload: payload.product),
+            selectedOptions: payload.selectedOptions,
+            quantity: payload.quantity,
+            backendCartItemID: payload.id,
+            skuID: payload.skuID
+        )
     }
 
     var id: String {
@@ -221,13 +252,47 @@ struct StructuredItem: Codable {
 extension StructuredContent {
     /// 从 composer 返回的 narrative JSON 解析结构化内容。
     static func parse(from text: String) -> StructuredContent? {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.hasPrefix("{"), trimmed.hasSuffix("}") else { return nil }
-        let open = trimmed.filter { $0 == "{" }.count
-        let close = trimmed.filter { $0 == "}" }.count
-        guard open == close else { return nil }
-        guard let data = trimmed.data(using: .utf8) else { return nil }
+        guard let json = firstJSONObject(in: text),
+              let data = json.data(using: .utf8)
+        else { return nil }
         return try? JSONDecoder().decode(StructuredContent.self, from: data)
+    }
+
+    private static func firstJSONObject(in text: String) -> String? {
+        var startIndex: String.Index?
+        var depth = 0
+        var isInString = false
+        var isEscaped = false
+
+        for index in text.indices {
+            let character = text[index]
+
+            if isInString {
+                if isEscaped {
+                    isEscaped = false
+                } else if character == "\\" {
+                    isEscaped = true
+                } else if character == "\"" {
+                    isInString = false
+                }
+                continue
+            }
+
+            if character == "\"" {
+                isInString = true
+            } else if character == "{" {
+                if depth == 0 {
+                    startIndex = index
+                }
+                depth += 1
+            } else if character == "}", depth > 0 {
+                depth -= 1
+                if depth == 0, let startIndex {
+                    return String(text[startIndex...index])
+                }
+            }
+        }
+        return nil
     }
 }
 
@@ -256,6 +321,7 @@ enum RecommendationCopy {
             .trimmingCharacters(in: CharacterSet(charactersIn: "，,、：: "))
         return text
     }
+
 }
 
 extension ChatMessage {
@@ -276,7 +342,6 @@ extension ChatMessage {
 
 struct ProductDetailContext: Identifiable, Hashable {
     let product: Product
-    let recommendationText: String?
 
     var id: String { product.id }
 }

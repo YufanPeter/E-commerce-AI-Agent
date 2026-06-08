@@ -48,6 +48,7 @@ struct GuideView: View {
     @State private var photoPickerItem: PhotosPickerItem?
     @State private var showPhotoPicker = false
     @State private var showCamera = false
+    @State private var chatListIdentity = UUID()
     /// 待发送的图片草稿：选/拍图后先挂在输入区，待用户配上文字一起发送；nil 表示无附件。
     @State private var pendingImageData: Data?
     @StateObject private var speechInput = SpeechInputController()
@@ -73,6 +74,7 @@ struct GuideView: View {
     }
 
     private static let newConversationTitle = "新对话"
+    private static let emptyStateAnchorID = "guide-empty-state-anchor"
 
     var body: some View {
         NavigationStack {
@@ -115,10 +117,7 @@ struct GuideView: View {
                 .presentationDragIndicator(.visible)
             }
             .navigationDestination(item: $productDetailContext) { context in
-                ProductDetailView(
-                    product: context.product,
-                    recommendationText: context.recommendationText
-                ) { product, selectedOptions, quantity in
+                ProductDetailView(product: context.product) { product, selectedOptions, quantity in
                     addToCart(product, selectedOptions: selectedOptions, quantity: quantity)
                 }
             }
@@ -196,6 +195,10 @@ struct GuideView: View {
         ScrollViewReader { proxy in
             ZStack(alignment: .bottomTrailing) {
                 trackedChatScrollView
+                    .id(chatListIdentity)
+                    .onChange(of: currentConversationID) { _, _ in
+                        scrollToEmptyState(proxy)
+                    }
 
                 if shouldShowJumpToLatest {
                     jumpToLatestButton {
@@ -229,6 +232,7 @@ struct GuideView: View {
             LazyVStack(alignment: .leading, spacing: 16) {
                 if messages.isEmpty {
                     emptyState
+                        .id(Self.emptyStateAnchorID)
                 }
                 ForEach(messages) { message in
                     MessageRow(
@@ -832,6 +836,7 @@ struct GuideView: View {
         currentTitle = GuideView.newConversationTitle
         lastQuery = ""
         showHistory = false
+        chatListIdentity = UUID()
         // 回到空态时换一批热门搜索，保持「动态」观感。
         Task { await loadSuggestions() }
     }
@@ -865,16 +870,11 @@ struct GuideView: View {
         currentTitle = conversation.title
         lastQuery = conversation.messages.last { $0.sender == .user }?.text ?? ""
         showHistory = false
+        chatListIdentity = UUID()
     }
 
     private func syncCartItems(from snapshot: CartSnapshotPayload) {
-        cartItems = snapshot.items.map { item in
-            CartItem(
-                product: Product(payload: item.product),
-                selectedOptions: item.selectedOptions,
-                quantity: item.quantity
-            )
-        }
+        cartItems = snapshot.items.map(CartItem.init(payload:))
     }
 
     private func errorMessage(_ error: Error) -> String {
@@ -886,7 +886,6 @@ struct GuideView: View {
     
     private func detailedErrorMessage(for error: RESTServiceError) -> String {
         var message = ""
-        var statusCode: Int? = nil
         var errorMessage = ""
         
         switch error {
@@ -897,7 +896,6 @@ struct GuideView: View {
             message += "服务响应无效\n\n"
             errorMessage = "商品服务返回了无效响应。"
         case .requestFailed(let code, _, let msg):
-            statusCode = code
             errorMessage = msg
             switch code {
             case 400:
@@ -1013,6 +1011,13 @@ struct GuideView: View {
         scheduleAutoFollowScroll(proxy, animated: true, delay: 0)
     }
 
+    private func scrollToEmptyState(_ proxy: ScrollViewProxy) {
+        guard messages.isEmpty else { return }
+        DispatchQueue.main.async {
+            proxy.scrollTo(Self.emptyStateAnchorID, anchor: .top)
+        }
+    }
+
     private func scheduleAutoFollowScroll(
         _ proxy: ScrollViewProxy,
         animated: Bool,
@@ -1077,20 +1082,7 @@ struct GuideView: View {
     }
 
     private func openProductDetail(_ product: Product) {
-        productDetailContext = ProductDetailContext(
-            product: product,
-            recommendationText: recommendationDescription(for: product)
-        )
-    }
-
-    /// 从最近一条已完成的 AI 回复里取该商品的专属解说。
-    private func recommendationDescription(for product: Product) -> String? {
-        for message in messages.reversed() {
-            if let text = message.recommendationDescription(for: product.id) {
-                return text
-            }
-        }
-        return nil
+        productDetailContext = ProductDetailContext(product: product)
     }
 
     private func addToCart(
@@ -1103,6 +1095,19 @@ struct GuideView: View {
             cartItems[index].quantity += quantity
         } else {
             cartItems.append(item)
+        }
+        Task {
+            if let snapshot = try? await productService.mutateAgentCart(
+                CartMutationRequest(
+                    action: .add,
+                    productID: product.id,
+                    skuID: product.matchingSKU(for: selectedOptions)?.id ?? product.displaySKU(for: selectedOptions)?.id,
+                    selectedOptions: selectedOptions,
+                    quantity: quantity
+                )
+            ) {
+                await MainActor.run { syncCartItems(from: snapshot) }
+            }
         }
     }
 }
@@ -1145,33 +1150,7 @@ struct MessageRow: View {
     }
     
     private func tryParseStructuredContent(from text: String) -> StructuredContent? {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.hasPrefix("{") && trimmed.hasSuffix("}") else { 
-            print("JSON 解析失败：不以 { 开头或 } 结尾")
-            return nil 
-        }
-        
-        let openBraceCount = trimmed.filter { $0 == "{" }.count
-        let closeBraceCount = trimmed.filter { $0 == "}" }.count
-        guard openBraceCount == closeBraceCount else {
-            print("JSON 解析失败：大括号不匹配 \(openBraceCount):\(closeBraceCount)")
-            return nil
-        }
-        
-        if let data = trimmed.data(using: .utf8) {
-            do {
-                let decoder = JSONDecoder()
-                decoder.keyDecodingStrategy = .useDefaultKeys
-                let content = try decoder.decode(StructuredContent.self, from: data)
-                print("JSON 解析成功: opening=\(content.opening), items.count=\(content.items.count), questions.count=\(content.questions.count)")
-                return content
-            } catch {
-                print("JSON 解析失败: \(error)")
-                print("原始文本: \(text.prefix(200))")
-                return nil
-            }
-        }
-        return nil
+        StructuredContent.parse(from: text)
     }
     
     private var textParagraphs: [String] {
@@ -1189,6 +1168,7 @@ struct MessageRow: View {
     }
     
     private var followUpQuestions: [String] {
+        guard message.sender == .ai else { return [] }
         // 优先使用结构化内容
         if let content = parsedStructuredContent {
             return content.questions
@@ -1285,6 +1265,15 @@ struct MessageRow: View {
                 }
 
                 if message.state == .ready {
+                    if message.sender == .user {
+                        Text(message.text)
+                            .font(.subheadline)
+                            .foregroundStyle(AppTheme.textPrimary)
+                            .lineSpacing(6)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 11)
+                            .background(bubbleColor, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    } else {
                     // 1. 开场白
                     if let opening = openingText {
                         Text(opening)
@@ -1306,7 +1295,7 @@ struct MessageRow: View {
                             onProductTap(section.product)
                         }
                         .transition(.opacity.combined(with: .scale).combined(with: .offset(y: 20)))
-                        
+
                         if let description = section.description {
                             Text(description)
                                 .font(.subheadline)
@@ -1336,6 +1325,7 @@ struct MessageRow: View {
                             }
                         }
                         .padding(.top, 8)
+                    }
                     }
                 } else if !displayText.isEmpty {
                     loadingText
@@ -1935,13 +1925,15 @@ struct ProductRemoteImage: View {
                     image
                         .resizable()
                         .scaledToFit()
-                        .frame(maxWidth: .infinity)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .background(Color.white)
                         .transition(.opacity)
                 } else {
                     image
                         .resizable()
                         .scaledToFill()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .clipped()
                         .transition(.opacity)
                 }
             case .empty:
