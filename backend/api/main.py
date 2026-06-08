@@ -72,6 +72,16 @@ class TitleRequest(BaseModel):
     assistant_text: str | None = Field(None, description="AI 首条回复（可空）")
 
 
+class CartMutationRequest(BaseModel):
+    action: str = Field(..., description="add/updateQuantity/updateSpecification/remove")
+    productID: str | None = None
+    skuID: str | None = None
+    cartItemID: str | None = None
+    selectedOptions: dict[str, str] = Field(default_factory=dict)
+    quantity: int | None = None
+    selectedCartItemIDs: list[str] = Field(default_factory=list)
+
+
 # ---------------------------------------------------------------------------
 # 应用 & 会话管理
 # ---------------------------------------------------------------------------
@@ -250,15 +260,7 @@ def reset_cart() -> dict[str, Any]:
     return {"status": "cleared", "removed": removed}
 
 
-@app.get("/cart")
-def get_cart() -> dict[str, Any]:
-    """读取当前购物车快照（演示单用户 demo_user）。
-
-    购物车持久化在 SQLite，App 冷启动调用本端点恢复购物车，避免"启动即空车"
-    与后端真实状态不一致（首次加购时回灌历史、算错总价）。返回结构与 cart
-    工具 SSE 里的快照一致：{cart: {lines, item_count, total}}，前端可统一解析。
-    """
-    store = CartStore()
+def _cart_response(store: CartStore) -> dict[str, Any]:
     lines = store.list_items()
     return {
         "cart": {
@@ -267,6 +269,65 @@ def get_cart() -> dict[str, Any]:
             "total": round(sum(line.subtotal for line in lines), 2),
         }
     }
+
+
+def _cart_item_id(value: str | None) -> int:
+    try:
+        return int(str(value or ""))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="cartItemID 无效") from exc
+
+
+@app.post("/cart/mutate")
+def mutate_cart(req: CartMutationRequest) -> dict[str, Any]:
+    """确定性修改购物车并返回最新快照，供前端购物车页同步持久化状态。"""
+    store = CartStore()
+    action = req.action
+
+    if action == "add":
+        if not req.productID:
+            raise HTTPException(status_code=400, detail="productID 不能为空")
+        store.add_product(
+            req.productID,
+            sku_id=req.skuID,
+            quantity=req.quantity or 1,
+        )
+    elif action == "remove":
+        removed = store.remove_item(_cart_item_id(req.cartItemID))
+        if not removed:
+            raise HTTPException(status_code=404, detail="购物车商品不存在")
+    elif action == "updateQuantity":
+        if req.quantity is None:
+            raise HTTPException(status_code=400, detail="quantity 不能为空")
+        store.set_quantity(_cart_item_id(req.cartItemID), req.quantity)
+    elif action == "updateSpecification":
+        if not req.productID or not req.skuID:
+            raise HTTPException(status_code=400, detail="productID 和 skuID 不能为空")
+        old_id = _cart_item_id(req.cartItemID)
+        current = next(
+            (line for line in store.list_items() if line.cart_item_id == old_id),
+            None,
+        )
+        if current is None:
+            raise HTTPException(status_code=404, detail="购物车商品不存在")
+        quantity = req.quantity or current.quantity
+        store.remove_item(old_id)
+        store.add_product(req.productID, sku_id=req.skuID, quantity=quantity)
+    else:
+        raise HTTPException(status_code=400, detail="不支持的购物车操作")
+
+    return _cart_response(store)
+
+
+@app.get("/cart")
+def get_cart() -> dict[str, Any]:
+    """读取当前购物车快照（演示单用户 demo_user）。
+
+    购物车持久化在 SQLite，App 冷启动调用本端点恢复购物车，避免"启动即空车"
+    与后端真实状态不一致（首次加购时回灌历史、算错总价）。返回结构与 cart
+    工具 SSE 里的快照一致：{cart: {lines, item_count, total}}，前端可统一解析。
+    """
+    return _cart_response(CartStore())
 
 
 @app.post("/compare")

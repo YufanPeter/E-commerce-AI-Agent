@@ -300,6 +300,30 @@ class TestGetCart:
         assert body["cart"]["lines"][0]["product_id"] == "p1"
 
 
+class TestCartMutate:
+    def test_remove_deletes_line_and_returns_snapshot(self, client):
+        c, _ = client
+
+        with patch("api.main.CartStore") as MockStore:
+            store = MockStore.return_value
+            store.remove_item.return_value = True
+            store.list_items.return_value = []
+            r = c.post("/cart/mutate", json={"action": "remove", "cartItemID": "12"})
+
+        assert r.status_code == 200
+        assert r.json()["cart"]["lines"] == []
+        store.remove_item.assert_called_once_with(12)
+
+    def test_remove_missing_line_returns_404(self, client):
+        c, _ = client
+
+        with patch("api.main.CartStore") as MockStore:
+            MockStore.return_value.remove_item.return_value = False
+            r = c.post("/cart/mutate", json={"action": "remove", "cartItemID": "12"})
+
+        assert r.status_code == 404
+
+
 class TestTitleEndpoint:
     def test_empty_user_text_rejected(self, client):
         c, _ = client

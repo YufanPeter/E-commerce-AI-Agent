@@ -21,6 +21,7 @@ from fastapi import APIRouter, HTTPException, Query
 from store.product_store import (
     DEFAULT_DB_PATH,
     ProductDetail,
+    ProductReview,
     ProductSku,
     ProductStore,
     price_display,
@@ -159,9 +160,12 @@ def product_payload(detail: ProductDetail) -> dict[str, Any]:
         "price": money(detail.price_range.min_price, price_display(detail.price_range)),
         "originalPrice": None,
         "availability": availability(detail.skus),
+        "summary": detail.marketing_description or None,
         "tags": [value for value in [detail.category, detail.sub_category, detail.brand] if value],
         "specifications": specs,
         "skus": [sku_payload(sku) for sku in detail.skus],
+        "reviews": [review_payload(review) for review in detail.reviews],
+        "evidence": evidence_payload(detail),
         "updatedAt": None,
     }
 
@@ -195,6 +199,16 @@ def sku_payload(sku: ProductSku) -> dict[str, Any]:
     }
 
 
+def review_payload(review: ProductReview) -> dict[str, Any]:
+    return {
+        "id": f"review_{review.source_index}",
+        "nickname": review.nickname,
+        "rating": review.rating,
+        "content": review.content,
+        "polarity": review.polarity,
+    }
+
+
 def evidence_payload(detail: ProductDetail) -> list[dict[str, Any]]:
     evidence: list[dict[str, Any]] = []
     if detail.marketing_description:
@@ -221,7 +235,7 @@ def evidence_payload(detail: ProductDetail) -> list[dict[str, Any]]:
             }
         )
 
-    for review in detail.reviews[:2]:
+    for review in detail.reviews:
         evidence.append(
             {
                 "id": f"{detail.product_id}_review_{review.source_index}",
