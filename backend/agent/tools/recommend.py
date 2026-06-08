@@ -16,9 +16,11 @@ import logging
 import os
 from typing import Any, Callable
 
+from agent.contextual_search import ContextualSearchPlan, detect_contextual_plan
 from agent.session import AgentSession
 from agent.tools.base import ToolResult
 from search.query_decomposer import SubRequest, decompose_query
+from search.query_understanding import ParsedQuery
 from search.search_service import ProductHit, SearchResult, SearchService
 
 
@@ -168,6 +170,13 @@ class RecommendTool:
         # 上一轮结构化意图上（见 SearchService.search / ParsedQuery.merge_base）。
         base = slots.get("base_parsed")
 
+        # complement / pivot：本轮目标已经变成“搭配上衣/看看运动鞋”等新目标，
+        # 上一轮品类只能当语境，不能进入检索词或硬过滤。
+        context_base = base if isinstance(base, ParsedQuery) else self._base_from_session(session)
+        plan = detect_contextual_plan(query, context_base)
+        if plan is not None:
+            return self._run_contextual(query, plan, session, top_k=top_k)
+
         # 细化（refine）路径绝不拆解：细化是承接上一轮的【单一意图】，
         # 把它拆成多需求会打乱 merge_base 的上下文叠加。直接走单路检索。
         if base is not None:
@@ -179,6 +188,16 @@ class RecommendTool:
         if len(subs) <= 1:
             return self._run_single(query, session, top_k=top_k, base=None)
         return self._run_multi(query, subs, session)
+
+    @staticmethod
+    def _base_from_session(session: AgentSession) -> ParsedQuery | None:
+        last = session.recall_parsed()
+        if not isinstance(last, dict):
+            return None
+        try:
+            return ParsedQuery.from_dict(last)
+        except TypeError:
+            return None
 
     # ------------------------------------------------------------------
     # 图搜路径（拍照找货）：VLM 已抽好的 query 走文本 RAG 召回，再用视觉相似度重排
@@ -278,6 +297,80 @@ class RecommendTool:
     # ------------------------------------------------------------------
     # 单需求路径（原逻辑，保持不变）
     # ------------------------------------------------------------------
+    def _run_contextual(
+        self,
+        query: str,
+        plan: ContextualSearchPlan,
+        session: AgentSession,
+        top_k: int,
+    ) -> ToolResult:
+        """运行 complement / pivot 检索：只搜目标，不让旧品类污染召回。"""
+        pool_k = max(top_k * _DIVERSITY_POOL_MULTIPLIER, 20)
+        result = self._get_service().search(plan.target_query, top_k_products=pool_k, base=None)
+
+        hits: list[ProductHit] = []
+        for h in result.hits:
+            if h.sub_category in plan.exclude_sub_categories:
+                continue
+            if plan.target_sub_categories and h.sub_category not in plan.target_sub_categories:
+                continue
+            hits.append(h)
+            if len(hits) >= top_k:
+                break
+
+        session.remember_search(
+            result.parsed.to_dict(),
+            [{"product_id": h.product_id, "title": h.title} for h in hits],
+        )
+
+        products = [_to_product_card(h) for h in hits]
+        self._attach_price_displays(products)
+
+        summary = {
+            "hit_count": len(hits),
+            "needs_clarification": False,
+            "category": result.parsed.category,
+            "max_price": result.parsed.max_price,
+            "mode": plan.mode,
+        }
+        payload = {
+            "query": query,
+            "products": products,
+            "summary": summary,
+            "contextual_search": plan.to_dict(),
+            "debug": {
+                "parsed": result.parsed.to_dict(),
+                "raw_chunk_count": result.raw_chunk_count,
+                "filtered_chunk_count": result.filtered_chunk_count,
+                "target_query": plan.target_query,
+                "excluded_sub_categories": plan.exclude_sub_categories,
+                "target_sub_categories": plan.target_sub_categories,
+                "hits_full": [h.to_dict() for h in hits],
+            },
+        }
+
+        if not hits:
+            if plan.mode == "complement":
+                hint = (
+                    f"用户想找可搭配「{plan.anchor_sub_category or plan.anchor_query or '上一轮商品'}」"
+                    f"的「{plan.target_query}」，但目标品类未命中。请坦诚说明没有找到，"
+                    "不要回退推荐上一轮品类，并建议换一个搭配方向。"
+                )
+            else:
+                hint = (
+                    f"用户想从上一轮切换到「{plan.target_query}」，但未命中。"
+                    "请坦诚说明没有找到，不要回退推荐上一轮品类。"
+                )
+        elif plan.mode == "complement":
+            hint = (
+                f"这是搭配推荐：用户想找可搭配「{plan.anchor_sub_category or plan.anchor_query or '上一轮商品'}」"
+                f"的「{plan.target_query}」。请只介绍命中的目标商品，不要把锚点当作推荐商品。"
+            )
+        else:
+            hint = f"用户从上一轮切换到「{plan.target_query}」。请按新目标介绍命中商品，不要沿用旧品类。"
+
+        return ToolResult(tool_name=self.name, payload=payload, composer_hint=hint)
+
     def _run_single(
         self,
         query: str,

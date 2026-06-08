@@ -21,6 +21,7 @@ from __future__ import annotations
 """
 
 import logging
+import re
 from typing import Any
 
 from agent.comparison import build_comparison
@@ -34,6 +35,13 @@ logger = logging.getLogger(__name__)
 
 # 固定对比 2 个商品（对比表两列最清晰，也是用户预期）。
 _MAX_COMPARE = 2
+
+_NAME_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9]+|[\u4e00-\u9fff]{2,}")
+_GENERIC_NAME_TOKENS = {
+    "pro", "max", "plus", "ultra", "mini", "air", "gb", "tb", "手机", "商品",
+    "旗舰", "推荐", "列表", "差异", "区别", "对比", "比较", "两个", "两款",
+    "这两个", "这两款", "哪款", "哪个",
+}
 
 
 class CompareTool:
@@ -108,15 +116,23 @@ class CompareTool:
     ) -> list[str]:
         """把用户这句话定位到要对比的商品 id 列表（保序去重，最多 _MAX_COMPARE）。
 
-        优先级：显式序号（"第一个和第三个"）→ 品牌/名称（"华为和小米"）→
-        都没说时默认前两个。"""
-        indices = resolve_indices(query, len(last_hits))
-        if len(indices) < 2:
-            named = resolve_by_name(query, last_hits)
-            for i in named:  # 合并序号与名称命中，保序去重
-                if i not in indices:
-                    indices.append(i)
-        if len(indices) < 2:
+        优先级：品牌/名称点名（"华为和小米这两款"）优先于泛指"这两款"；
+        否则再按显式序号（"第一个和第三个"）解析；都没说时默认前两个。"""
+        strict_named = _resolve_context_names(query, last_hits)
+        if len(strict_named) >= 2:
+            indices = strict_named
+        else:
+            named = strict_named or resolve_by_name(query, last_hits)
+            # 若用户已经点名了某些商品，"这两款/两个"只是语气里的泛指，不能再把
+            # 目标兜底成前两个；否则 "小米和华为这两款" 在小米不在 last_hits 时
+            # 会错误对比前两个 Apple。先剥掉泛指词，只保留真正的序号解析。
+            index_query = _strip_generic_pair_words(query) if named else query
+            indices = resolve_indices(index_query, len(last_hits))
+            if len(indices) < 2:
+                for i in named:  # 合并序号与名称命中，保序去重
+                    if i not in indices:
+                        indices.append(i)
+        if len(indices) < 2 and not (strict_named or resolve_by_name(query, last_hits)):
             indices = list(range(min(2, len(last_hits))))  # 没点名 → 默认前两个
 
         ordered: list[str] = []
@@ -133,4 +149,53 @@ class CompareTool:
             narrative_override=text,
             needs_composer=False,
         )
+
+
+def _resolve_context_names(query: str, hits: list[dict[str, Any]]) -> list[int]:
+    """在上一轮 hits 内按“明确品牌/型号词”匹配用户点名的两款。
+
+    ``reference.resolve_by_name`` 偏召回，会把 ``Pro`` 这类通用型号词命中到
+    iPhone Pro。对 compare 来说，用户说“小米和华为这两款”时，我们更需要
+    保守地按上下文标题里的品牌/型号词定位，并忽略泛词。"""
+    text = query or ""
+    lowered = text.lower()
+    mentions: list[tuple[int, int, int]] = []  # (出现位置, -词长度, hit index)
+
+    for i, hit in enumerate(hits):
+        tokens = _significant_tokens(hit.get("title", ""))
+        tokens.extend(_significant_tokens(hit.get("brand", "")))
+        seen: set[str] = set()
+        for token in tokens:
+            key = token.lower() if token.isascii() else token
+            if key in seen:
+                continue
+            seen.add(key)
+            pos = lowered.find(key) if token.isascii() else text.find(token)
+            if pos >= 0:
+                mentions.append((pos, -len(token), i))
+                break
+
+    mentions.sort()
+    indices: list[int] = []
+    for _, _, i in mentions:
+        if i not in indices:
+            indices.append(i)
+    return indices
+
+
+def _significant_tokens(text: str) -> list[str]:
+    tokens: list[str] = []
+    for token in _NAME_TOKEN_RE.findall(text or ""):
+        key = token.lower() if token.isascii() else token
+        if key in _GENERIC_NAME_TOKENS:
+            continue
+        tokens.append(token)
+    return tokens
+
+
+def _strip_generic_pair_words(query: str) -> str:
+    text = query or ""
+    for word in ("这两款", "这两个", "那两款", "那两个", "两款", "两个", "这俩", "俩", "二者"):
+        text = text.replace(word, " ")
+    return text
 

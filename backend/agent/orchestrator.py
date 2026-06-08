@@ -149,7 +149,7 @@ class Agent:
         session.add_user(query)
 
         decision = self._safe_route(query, session, trace)
-        tool_result = self._safe_run_tool(decision, session, trace)
+        tool_result = self._safe_run_tool(decision, session, trace, raw_query=query)
 
         t2 = time.perf_counter()
         try:
@@ -209,7 +209,7 @@ class Agent:
             "tool": decision.tool,
             "message": _TOOL_WORKING_HINT.get(decision.tool, "处理中…"),
         }}
-        tool_result = self._safe_run_tool(decision, session, trace)
+        tool_result = self._safe_run_tool(decision, session, trace, raw_query=query)
         yield {"type": "tool_result", "data": tool_result.to_dict()}
 
         # ③ Composer：流式
@@ -395,11 +395,26 @@ class Agent:
                 reasoning=f"router failure, keyword fallback to {fallback_tool}",
             )
         trace["timings"]["router_ms"] = int((time.perf_counter() - t0) * 1000)
+        decision = self._apply_post_route_guards(query, decision)
         trace["decision"] = decision.to_dict()
         logger.info(
             "router done in %dms → tool=%s",
             trace["timings"]["router_ms"], decision.tool,
         )
+        return decision
+
+    @staticmethod
+    def _apply_post_route_guards(query: str, decision: IntentDecision) -> IntentDecision:
+        """对少数高确定性意图做路由后保护，压住 LLM 抖动。"""
+        text = f"{query or ''} {decision.rewritten_query or ''}"
+        compare_words = ("对比", "比较", "区别", "哪个好", "哪款好", "哪个更", "哪款更")
+        if decision.tool == "recommend" and any(w in text for w in compare_words):
+            return IntentDecision(
+                tool="compare",
+                rewritten_query=decision.rewritten_query or query,
+                confidence="high",
+                reasoning=f"post-route guard: compare intent detected; original={decision.tool}",
+            )
         return decision
 
     @staticmethod
@@ -423,11 +438,16 @@ class Agent:
         decision: IntentDecision,
         session: AgentSession,
         trace: dict[str, Any],
+        raw_query: str = "",
     ) -> ToolResult:
         tool = self._tools[decision.tool]
         t1 = time.perf_counter()
         try:
-            tool_result = tool.run(decision.rewritten_query, session, slots={})
+            # compare/product_detail 这类强依赖“第一个/最后一个/这款”的工具，
+            # 不能让 router 的 rewritten_query 改写掉用户原始指代；否则 LLM 一旦
+            # 把“第一个”误补成错误商品名，工具就会对比错对象。
+            tool_query = raw_query if decision.tool == "compare" else decision.rewritten_query
+            tool_result = tool.run(tool_query, session, slots={})
         except Exception as exc:  # noqa: BLE001
             logger.exception("Tool %s failed", decision.tool)
             trace["tool_error"] = repr(exc)

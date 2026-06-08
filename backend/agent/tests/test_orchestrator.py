@@ -31,6 +31,8 @@ from agent.tools.product_detail import ProductDetailTool
 from agent.tools.recommend import RecommendTool
 from agent.tools.refine import RefineTool
 from search.query_decomposer import SubRequest
+from search.query_understanding import ParsedQuery
+from store.product_store import PriceRange, ProductDetail
 
 
 # ---------- 工具：构造伪响应 ----------
@@ -63,18 +65,66 @@ def _fake_stream_chunks(pieces: list[str]):
         yield SimpleNamespace(choices=[choice])
 
 
+def _detail(pid: str, title: str, brand: str = "品牌") -> ProductDetail:
+    return ProductDetail(
+        product_id=pid,
+        title=title,
+        brand=brand,
+        category="数码电子",
+        sub_category="智能手机",
+        base_price=1000,
+        image_path=None,
+        image_url=None,
+        price_range=PriceRange(min_price=1000, max_price=1200, sku_count=2),
+        skus=[],
+        marketing_description="",
+        faqs=[],
+        reviews=[],
+    )
+
+
+class _FakeProductStore:
+    def __init__(self, details: list[ProductDetail]):
+        self._by_id = {d.product_id: d for d in details}
+
+    def get_product_detail(self, pid: str):
+        return self._by_id.get(pid)
+
+
+def _fake_comparison(details, focus="", timeout=None):
+    return {
+        "title": "对比",
+        "products": [
+            {"product_id": d.product_id, "title": d.title, "brand": d.brand, "image_url": d.image_url}
+            for d in details
+        ],
+        "rows": [],
+        "recommendation": "",
+    }
+
+
 class _StubSearchService:
     """模拟 SearchService，可控返回 hits 和 needs_clarification。"""
     def __init__(self, hits: list[dict] | None = None, needs_clarify: bool = False):
         self._hits = hits or []
         self._needs_clarify = needs_clarify
+        self.calls: list[dict[str, Any]] = []
 
     def search(self, query: str, top_k_chunks: int = 50, top_k_products: int = 10, base=None):
+        self.calls.append({"query": query, "top_k_products": top_k_products, "base": base})
         parsed = SimpleNamespace(
             needs_clarification=self._needs_clarify,
             category="美妆护肤",
+            sub_category=None,
             max_price=500,
-            to_dict=lambda: {"category": "美妆护肤", "max_price": 500, "needs_clarification": self._needs_clarify},
+            brand_include=[],
+            to_dict=lambda: {
+                "category": "美妆护肤",
+                "sub_category": None,
+                "max_price": 500,
+                "brand_include": [],
+                "needs_clarification": self._needs_clarify,
+            },
         )
         hit_objs = []
         for h in self._hits:
@@ -105,15 +155,95 @@ def _make_agent(
     needs_clarify: bool = False,
 ) -> Agent:
     stub = _StubSearchService(hits=tool_search_hits, needs_clarify=needs_clarify)
+    recommend = RecommendTool(search_service=stub, decomposer=_single_decomposer)
     return Agent(tools={
-        "recommend": RecommendTool(search_service=stub, decomposer=_single_decomposer),
-        "refine": RefineTool(),
+        "recommend": recommend,
+        "refine": RefineTool(recommend=recommend),
         "compare": CompareTool(),
         "product_detail": ProductDetailTool(),
         "cart": CartTool(),
         "clarify": ClarifyTool(),
         "fallback": FallbackTool(),
     })
+
+
+def _remember_base(session: AgentSession, sub_category: str, query: str | None = None) -> None:
+    parsed = ParsedQuery(
+        original_query=query or sub_category,
+        category="服饰运动",
+        sub_category=sub_category,
+        retrieval_query=query or sub_category,
+    )
+    session.remember_search(parsed.to_dict(), [{"product_id": "prev", "title": sub_category}])
+
+
+# ---------- Contextual search（refine / pivot / complement） ----------
+
+class TestContextualSearchModes:
+    def test_complement_targets_new_category_and_excludes_anchor(self):
+        service = _StubSearchService(hits=[
+            {"product_id": "old", "title": "Lululemon 瑜伽裤", "brand": "Lululemon", "sub_category": "瑜伽裤", "base_price": 800},
+            {"product_id": "tee", "title": "Nike 运动短袖", "brand": "Nike", "sub_category": "短袖T恤", "base_price": 199},
+            {"product_id": "hoodie", "title": "李宁连帽卫衣", "brand": "李宁", "sub_category": "卫衣", "base_price": 299},
+        ])
+        tool = RecommendTool(search_service=service, decomposer=_single_decomposer)
+        session = AgentSession()
+        _remember_base(session, "瑜伽裤")
+
+        result = tool.run("推荐可以搭配瑜伽裤的运动上衣", session, {})
+
+        assert service.calls[-1]["query"] == "运动上衣"
+        assert service.calls[-1]["base"] is None
+        assert result.payload["summary"]["mode"] == "complement"
+        assert [p["sub_category"] for p in result.payload["products"]] == ["短袖T恤", "卫衣"]
+        assert all(p["sub_category"] != "瑜伽裤" for p in result.payload["products"])
+        assert result.payload["contextual_search"]["exclude_sub_categories"] == ["瑜伽裤"]
+
+    def test_pivot_to_shoes_does_not_return_previous_yoga_pants(self):
+        service = _StubSearchService(hits=[
+            {"product_id": "old", "title": "Lululemon 瑜伽裤", "brand": "Lululemon", "sub_category": "瑜伽裤", "base_price": 800},
+            {"product_id": "run", "title": "HOKA 跑步鞋", "brand": "HOKA", "sub_category": "跑步鞋", "base_price": 999},
+            {"product_id": "basket", "title": "Nike 篮球鞋", "brand": "Nike", "sub_category": "篮球鞋", "base_price": 699},
+        ])
+        tool = RecommendTool(search_service=service, decomposer=_single_decomposer)
+        session = AgentSession()
+        _remember_base(session, "瑜伽裤")
+
+        result = tool.run("再看看运动鞋", session, {})
+
+        assert service.calls[-1]["query"] == "运动鞋"
+        assert result.payload["summary"]["mode"] == "pivot"
+        assert [p["sub_category"] for p in result.payload["products"]] == ["跑步鞋", "篮球鞋"]
+
+    def test_refine_keeps_base_for_same_category_adjustment(self):
+        service = _StubSearchService(hits=[
+            {"product_id": "old", "title": "平价瑜伽裤", "brand": "优衣库", "sub_category": "瑜伽裤", "base_price": 199},
+        ])
+        tool = RecommendTool(search_service=service, decomposer=_single_decomposer)
+        session = AgentSession()
+        base = ParsedQuery(original_query="瑜伽裤", category="服饰运动", sub_category="瑜伽裤", retrieval_query="瑜伽裤")
+
+        result = tool.run("再便宜点", session, {"base_parsed": base})
+
+        assert service.calls[-1]["query"] == "再便宜点"
+        assert service.calls[-1]["base"] == base
+        assert "mode" not in result.payload["summary"]
+        assert result.payload["products"][0]["sub_category"] == "瑜伽裤"
+
+    def test_complement_no_target_hits_does_not_fallback_to_anchor(self):
+        service = _StubSearchService(hits=[
+            {"product_id": "old", "title": "Lululemon 瑜伽裤", "brand": "Lululemon", "sub_category": "瑜伽裤", "base_price": 800},
+        ])
+        tool = RecommendTool(search_service=service, decomposer=_single_decomposer)
+        session = AgentSession()
+        _remember_base(session, "瑜伽裤")
+
+        result = tool.run("搭配一件运动上衣", session, {})
+
+        assert result.payload["summary"]["mode"] == "complement"
+        assert result.payload["summary"]["hit_count"] == 0
+        assert result.payload["products"] == []
+        assert "不要回退推荐上一轮品类" in (result.composer_hint or "")
 
 
 # ---------- AgentSession 测试 ----------
@@ -275,6 +405,21 @@ class TestComposerBlocking:
             out = AnswerComposer().compose(sr, AgentSession())
         assert "X 精华" in out
 
+    def test_compose_extracts_json_object_from_wrapped_text(self):
+        sr = ToolResult(
+            tool_name="recommend",
+            payload={"query": "精华", "hits": []},
+            composer_hint="正常推荐",
+        )
+        wrapped = '好的，下面是推荐：\n{"opening":"为你推荐了几款","items":[],"questions":["需要更平价的选择？"]}\n希望有帮助。'
+        fake_resp = _fake_chat_response(wrapped)
+        with patch("agent.composer.get_client") as mock_client:
+            mock_client.return_value.chat.completions.create.return_value = fake_resp
+            out = AnswerComposer().compose(sr, AgentSession())
+        assert out.startswith("{")
+        assert out.endswith("}")
+        assert "好的" not in out
+
     def test_compose_trim_drops_evidence(self):
         from agent.composer import _trim_payload_for_llm
         payload = {
@@ -418,6 +563,72 @@ class TestOrchestratorBlocking:
         assert resp.decision.tool == "fallback"
         assert "导购" in resp.narrative
 
+    def test_compare_guard_overrides_recommend_misroute(self):
+        details = [
+            _detail("p1", "Apple iPhone 17 Pro", "Apple 苹果"),
+            _detail("p2", "小米 17 Ultra", "小米"),
+        ]
+        recommend = RecommendTool(
+            search_service=_StubSearchService(hits=[
+                {"product_id": "p1", "title": "Apple iPhone 17 Pro", "brand": "Apple 苹果", "base_price": 8999},
+                {"product_id": "p2", "title": "小米 17 Ultra", "brand": "小米", "base_price": 7499},
+            ]),
+            decomposer=_single_decomposer,
+        )
+        agent = Agent(tools={
+            "recommend": recommend,
+            "refine": RefineTool(recommend=recommend),
+            "compare": CompareTool(product_store=_FakeProductStore(details)),
+            "product_detail": ProductDetailTool(),
+            "cart": CartTool(),
+            "clarify": ClarifyTool(),
+            "fallback": FallbackTool(),
+        })
+        session = AgentSession()
+        session.set("last_hits", [
+            {"product_id": "p1", "title": "Apple iPhone 17 Pro"},
+            {"product_id": "p2", "title": "小米 17 Ultra"},
+        ])
+        router_resp = _fake_tool_response("recommend", "对比 Apple 和小米这两款")
+        rc, _ = self._patch_llm(router_resp)
+        with patch("agent.intent_router.get_client", return_value=rc), \
+             patch("agent.tools.compare.build_comparison", side_effect=_fake_comparison):
+            resp = agent.handle_turn("对比 Apple 和小米这两款", session)
+        assert resp.decision.tool == "compare"
+        assert resp.tool_result.payload["comparison"] is not None
+
+    def test_compare_uses_raw_query_for_first_and_last_reference(self):
+        details = [
+            _detail("hoodie", "李宁 运动生活系列 男子连帽套头卫衣", "李宁"),
+            _detail("shorts", "优衣库 男装 DRY 速干运动短裤", "优衣库"),
+            _detail("pants", "Nike Dri-FIT 男子训练长裤", "Nike"),
+            _detail("tee", "优衣库 DRY-EX 超快干圆领短袖T恤", "优衣库"),
+        ]
+        agent = Agent(tools={
+            "recommend": RecommendTool(search_service=_StubSearchService(), decomposer=_single_decomposer),
+            "refine": RefineTool(),
+            "compare": CompareTool(product_store=_FakeProductStore(details)),
+            "product_detail": ProductDetailTool(),
+            "cart": CartTool(),
+            "clarify": ClarifyTool(),
+            "fallback": FallbackTool(),
+        })
+        session = AgentSession()
+        session.set("last_hits", [
+            {"product_id": "hoodie", "title": "李宁 运动生活系列 男子连帽套头卫衣"},
+            {"product_id": "shorts", "title": "优衣库 男装 DRY 速干运动短裤"},
+            {"product_id": "pants", "title": "Nike Dri-FIT 男子训练长裤"},
+            {"product_id": "tee", "title": "优衣库 DRY-EX 超快干圆领短袖T恤"},
+        ])
+        # 模拟 router 把“第一个”错误改写成短裤；工具仍应使用 raw query 的首尾指代。
+        router_resp = _fake_tool_response("compare", "对比优衣库短裤和优衣库T恤")
+        rc, _ = self._patch_llm(router_resp)
+        with patch("agent.intent_router.get_client", return_value=rc), \
+             patch("agent.tools.compare.build_comparison", side_effect=_fake_comparison):
+            resp = agent.handle_turn("对比一下第一个和最后一个", session)
+        ids = [p["product_id"] for p in resp.tool_result.payload["comparison"]["products"]]
+        assert ids == ["hoodie", "tee"]
+
 
 # ---------- Orchestrator: edge cases（非流式） ----------
 
@@ -497,12 +708,15 @@ class TestOrchestratorEdgeCases:
         assert "没找到" in resp.narrative
 
     def test_router_returns_unknown_tool(self):
-        agent = _make_agent()
+        agent = _make_agent(tool_search_hits=[
+            {"product_id": "p1", "title": "X", "brand": "X", "base_price": 100}
+        ])
         bad_resp = _fake_tool_response("super_recommend", "x")
         with patch("agent.intent_router.get_client") as mock_rc:
             mock_rc.return_value.chat.completions.create.return_value = bad_resp
             resp = agent.handle_turn("x", AgentSession())
-        assert resp.decision.tool == "clarify"
+        # 未知/漏填 tool 时退回 recommend（购物安全默认），不再误判成 clarify。
+        assert resp.decision.tool == "recommend"
 
     def test_router_returns_no_tool_call(self):
         agent = _make_agent(tool_search_hits=[

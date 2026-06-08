@@ -121,7 +121,9 @@ SYSTEM_PROMPT = """你是电商导购 Agent 的路由器，唯一职责是把用
    特别地：当上一轮已给出推荐，而本轮只是一个【单一约束】的短词（一个品牌名、颜色、
    价格、轻重等属性，如单独的 “Adidas”、“红色”、“便宜点”），应判为 refine 而非 recommend，
    并在 rewritten_query 里补全上一轮的品类，例如上一轮“推荐跑鞋”+本轮“Adidas”→“Adidas 跑鞋”。
-4. “对比”/“哪个好”/“区别” → compare；“第 X 个详细说说”/“这款能…吗” → product_detail。
+4. “对比”/“比较”/“哪个好”/“区别” → compare；即使用户同时点名品牌/商品
+    （如“对比小米和华为这两款”“Apple 和华为哪个好”），也必须走 compare，
+    不要因为包含商品名而改判 recommend。 “第 X 个详细说说”/“这款能…吗” → product_detail。
    “加入购物车/加进来/删掉/改数量/看看购物车/下单/结算” → cart（工具内部再细分动作）。
 5. 真正模糊到无法检索的（"随便看看"、"有啥好东西"、"今天买点啥"）才走 clarify。
 6. 与购物完全无关的（天气、新闻、闲聊、技术问题）走 fallback。
@@ -134,9 +136,12 @@ def route(query: str, session: AgentSession, timeout: float = 6.0) -> IntentDeci
     user_content = _build_user_content(query, session)
 
     client = get_client()
-    # 已强制 tool_choice，但 LLM 仍偶发返回空响应（不调用 route_to_tool）。
-    # 重试一次能把这种抖动概率显著压低；仍失败才抛给 orchestrator 兜底。
+    # 已强制 tool_choice，但 LLM 仍偶发抖动：① 完全不调用 route_to_tool；
+    # ② 调用了但 tool 字段漏填（返回 null）。两者都靠重试一次显著压低概率。
+    # 仍失败才退回 recommend——电商 70% 流量是推荐，是最安全的默认，
+    # 绝不退回 clarify（会把明确的购物意图错判成"太模糊"，反问用户品类）。
     last_exc: Exception | None = None
+    args: dict[str, Any] | None = None
     for attempt in range(2):
         response = client.chat.completions.create(
             model=get_model_id(),
@@ -150,18 +155,31 @@ def route(query: str, session: AgentSession, timeout: float = 6.0) -> IntentDeci
             timeout=timeout,
         )
         try:
-            args = _extract_tool_arguments(response)
-            break
+            candidate = _extract_tool_arguments(response)
         except ValueError as exc:
             last_exc = exc
             logger.warning("Router empty response (attempt %d/2), retrying", attempt + 1)
-    else:
+            continue
+        # tool 字段漏填或不在已知集合内时也重试：模型常常 reasoning/rewritten_query
+        # 都对、只漏了 enum 字段，重试一次往往就补上了。
+        if candidate.get("tool") in KNOWN_TOOLS:
+            args = candidate
+            break
+        last_exc = ValueError(f"Router returned invalid tool {candidate.get('tool')!r}")
+        logger.warning(
+            "Router returned invalid tool %r (attempt %d/2), retrying",
+            candidate.get("tool"), attempt + 1,
+        )
+        args = candidate  # 留作兜底用（取其 rewritten_query 等字段）
+
+    if args is None:
         raise last_exc  # type: ignore[misc]
 
     tool = args.get("tool")
     if tool not in KNOWN_TOOLS:
-        logger.warning("Router returned unknown tool %r, falling back to clarify", tool)
-        tool = "clarify"
+        # 重试后仍漏填：退回 recommend（购物安全默认），而非 clarify。
+        logger.warning("Router tool still invalid %r after retry, defaulting to recommend", tool)
+        tool = "recommend"
 
     return IntentDecision(
         tool=tool,

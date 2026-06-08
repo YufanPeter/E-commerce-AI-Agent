@@ -78,14 +78,54 @@ class TestResolveTargets:
         ids = tool._resolve_targets("对比第一个和第三个", _HITS)
         assert ids == ["p1", "p3"]
 
+    def test_first_and_last(self):
+        tool = self._tool()
+        ids = tool._resolve_targets("对比一下第一个和最后一个", _HITS)
+        assert ids == ["p1", "p3"]
+
     def test_brand_names(self):
         tool = self._tool()
         ids = tool._resolve_targets("对比小米和华为", _HITS)
         assert set(ids) == {"p2", "p3"}
 
+    def test_named_products_win_over_generic_pair_words(self):
+        """用户点名两款时，"这两款/两个"不能把目标覆盖成默认前两个。"""
+        tool = self._tool()
+        ids = tool._resolve_targets("我想对比一下小米和华为这两款", _HITS)
+        assert ids == ["p2", "p3"]
+
+    def test_rewritten_names_do_not_match_generic_pro_tokens(self):
+        """router 改写里有 Pro 时，不能因 Apple iPhone Pro 在前而误命中默认 Apple。"""
+        hits = [
+            {"product_id": "a1", "title": "Apple iPhone 17 Pro"},
+            {"product_id": "a2", "title": "Apple iPhone 17 Pro Max"},
+            {"product_id": "xm", "title": "小米 MIX Fold 5 内折大屏旗舰折叠屏手机"},
+            {"product_id": "hw", "title": "华为HUAWEI Pura 90 Pro 超感光影像曲面屏手机"},
+        ]
+        tool = self._tool()
+        ids = tool._resolve_targets("对比推荐列表里的小米MIX Fold 5和华为Pura 90 Pro这两款手机的差异", hits)
+        assert ids == ["xm", "hw"]
+
+    def test_partial_name_match_does_not_default_to_first_two(self):
+        """点名两款但上一轮只找到其中一款时，不能用"这两款"兜底成前两个。"""
+        hits = [
+            {"product_id": "a1", "title": "Apple iPhone 17 Pro"},
+            {"product_id": "a2", "title": "Apple iPhone 17 Pro Max"},
+            {"product_id": "oppo", "title": "OPPO Find X9 Ultra"},
+            {"product_id": "hw", "title": "华为HUAWEI Pura 90 Pro"},
+        ]
+        tool = self._tool()
+        ids = tool._resolve_targets("对比小米和华为这两款", hits)
+        assert ids == ["hw"]
+
     def test_default_first_two_when_vague(self):
         tool = self._tool()
         ids = tool._resolve_targets("对比一下", _HITS)
+        assert ids == ["p1", "p2"]
+
+    def test_generic_pair_words_still_default_when_no_names(self):
+        tool = self._tool()
+        ids = tool._resolve_targets("这两个有什么区别", _HITS)
         assert ids == ["p1", "p2"]
 
     def test_caps_at_three(self):

@@ -33,15 +33,15 @@ SYSTEM_PROMPT = """你是一位友好、专业的电商导购助手，说话像�
 - 直接基于提供的 payload 中的真实商品信息说话，绝不编造任何不存在的字段或商品。
 - 必须返回 JSON 格式，包含以下字段：
   - "opening": 开场白，用"为你XXX了"的格式（如"为你推荐了几款适合敏感肌的护肤品"）
-  - "items": 数组，每个元素包含 {"productId": "...", "description": "..."}，**productId 必须原样使用 payload.hits 里对应商品的 productId，禁止自造序号**；每个商品必须对应一个专属解说词，不能多个商品共用一段描述
+    - "items": 数组，每个元素包含 {"productId": "...", "description": "..."}，**productId 必须原样使用 payload.hits 里对应商品的 productId，禁止自造序号**；每个商品必须对应一个专属解说词，不能多个商品共用一段描述；description 只能写 1 句，控制在 45 个中文字符以内
   - "questions": 数组，包含 3-5 个追问方向（如"需要更平价的选择？"）
 - 报价格时一律使用 payload.hits 里的 price_display 字段（它已是「¥X 起」或「¥X」的正确形式），原样引用；不要自己拼价格、不要去掉「起」字，更不要给多规格商品报一个单一最高价。若某商品没有 price_display 则可不提价格。
-- 介绍每款时落到使用场景和人群（通勤、学习、送礼…），而不是只报价格和参数。
+- 介绍每款时落到使用场景和人群（通勤、学习、送礼…），而不是只报价格和参数；每款只写一句话，不要写保养建议、注意事项或长段参数说明。
 - 适度点出关键差异帮用户决策（价格梯度、核心卖点、适合谁）。
 - 若 payload.hits 为空，坦诚告知未找到，并给出具体的放宽建议（提高预算到 X、放宽品牌等）。此时 opening 说明未找到，items 为空数组。
 - 若 payload 里有 groups（用户一次提了多个需求，如"衣服和防晒"），请【按组分段】介绍：每组先点明需求（如"防晒方面"、"衣服方面"），再说该组挑了哪几款、为什么适合，不要把不同需求的商品混在一起说。
 - 不要复述 JSON 字段名，用自然口语介绍。
-- JSON 格式必须严格正确，不要包含任何额外文字。"""
+- JSON 格式必须严格正确，不要包含任何额外文字；输出首字符必须是 {，末字符必须是 }。"""
 
 
 # Few-shot 示例：用真实对话演示"导购口吻"远比文字规则有效。
@@ -113,6 +113,16 @@ def _trim_payload_for_llm(payload: dict[str, Any]) -> dict[str, Any]:
     trimmed: dict[str, Any] = {
         "query": payload.get("query"),
     }
+    contextual = payload.get("contextual_search")
+    if isinstance(contextual, dict):
+        trimmed["contextual_search"] = {
+            k: contextual.get(k)
+            for k in (
+                "mode", "target_query", "target_terms", "target_sub_categories",
+                "anchor_query", "anchor_sub_category", "exclude_sub_categories", "relation",
+            )
+            if contextual.get(k)
+        }
     # parsed 现在收纳在 debug 块；老格式（顶层 parsed）也兼容
     parsed = (payload.get("debug") or {}).get("parsed") or payload.get("parsed") or {}
     trimmed["parsed"] = {
@@ -149,6 +159,46 @@ def _build_messages(tool_result: ToolResult) -> list[dict[str, str]]:
         f"tool: {tool_result.tool_name}",
         f"payload: {json.dumps(trimmed, ensure_ascii=False)}",
     ]
+
+
+def _extract_json_object(text: str) -> str | None:
+    """Extract the first balanced JSON object, tolerating model preface/trailing text."""
+    start: int | None = None
+    depth = 0
+    in_string = False
+    escaped = False
+
+    for index, char in enumerate(text):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            if depth == 0:
+                start = index
+            depth += 1
+        elif char == "}" and depth > 0:
+            depth -= 1
+            if depth == 0 and start is not None:
+                candidate = text[start:index + 1]
+                try:
+                    json.loads(candidate)
+                except json.JSONDecodeError:
+                    return None
+                return candidate
+    return None
+
+
+def _normalize_json_response(text: str) -> str:
+    stripped = (text or "").strip()
+    return _extract_json_object(stripped) or stripped
     if tool_result.composer_hint:
         user_msg_parts.append(f"hint: {tool_result.composer_hint}")
     return [
@@ -178,7 +228,7 @@ class AnswerComposer:
             temperature=0.4,
             timeout=timeout,
         )
-        return (response.choices[0].message.content or "").strip()
+        return _normalize_json_response(response.choices[0].message.content or "")
 
     def compose_stream(
         self,

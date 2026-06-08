@@ -21,6 +21,7 @@ _CN_NUM = {
 
 _ORDINAL_RE = re.compile(r"第\s*([0-9]+|[一二两三四五六七八九十])\s*(?:个|款|件|种)?")
 _BARE_NUM_RE = re.compile(r"(?<!\d)([1-9])(?!\d)")
+_LAST_RE = re.compile(r"(?:最后|末尾|最末)\s*(?:一)?\s*(?:个|款|件|种)?")
 
 
 def _to_int(token: str) -> int | None:
@@ -51,6 +52,9 @@ def resolve_indices(query: str, hit_count: int) -> list[int]:
         n = _to_int(match.group(1))
         if n and 1 <= n <= hit_count and (n - 1) not in indices:
             indices.append(n - 1)
+
+    if _LAST_RE.search(text) and (hit_count - 1) not in indices:
+        indices.append(hit_count - 1)
 
     if not indices:
         for match in _BARE_NUM_RE.finditer(text):
