@@ -20,7 +20,7 @@ final class MockAgentService: AgentServicing {
                         )
                     )
                 )
-                try? await Task.sleep(nanoseconds: 500_000_000)
+                try? await Task.sleep(nanoseconds: 250_000_000)
 
                 guard !Task.isCancelled else {
                     continuation.finish()
@@ -36,46 +36,28 @@ final class MockAgentService: AgentServicing {
                         )
                     )
                 )
-                try? await Task.sleep(nanoseconds: 500_000_000)
+                try? await Task.sleep(nanoseconds: 250_000_000)
 
                 guard !Task.isCancelled else {
                     continuation.finish()
                     return
                 }
 
+                let products = MockProductCatalog.products(matching: request.text)
+                let text = generateMockResponseText(query: request.text, products: products)
+                
                 continuation.yield(
                     AgentStreamEventPayload(
-                        type: .status,
-                        status: AgentStatusPayload(
-                            phase: .generating,
-                            message: "正在生成推荐"
-                        )
+                        type: .textDelta,
+                        textDelta: text
                     )
                 )
-                try? await Task.sleep(nanoseconds: 300_000_000)
-
-                // 返回商品
-                let products = MockProductCatalog.products(matching: request.text)
                 continuation.yield(
                     AgentStreamEventPayload(
                         type: .products,
                         products: products
                     )
                 )
-                try? await Task.sleep(nanoseconds: 200_000_000)
-
-                // 返回文本（包含开场白、解说、追问）
-                let responseText = generateMockResponseText(query: request.text, products: products)
-                for (index, char) in responseText.enumerated() {
-                    continuation.yield(
-                        AgentStreamEventPayload(
-                            type: .textDelta,
-                            textDelta: String(char)
-                        )
-                    )
-                    try? await Task.sleep(nanoseconds: 30_000_000)
-                }
-
                 continuation.yield(
                     AgentStreamEventPayload(
                         type: .status,
@@ -95,58 +77,27 @@ final class MockAgentService: AgentServicing {
     func cancel(sessionID: String) async {}
 }
 
-private func generateMockResponseText(query: String, products: [ProductPayload]) -> String {
-    let productCount = min(products.count, 3)
-    
-    // 开场白
-    let opening: String
-    if query.lowercased().contains("平板") || query.lowercased().contains("电脑") {
-        opening = "为你推荐了 \(productCount) 款高性能平板电脑"
-    } else if query.lowercased().contains("手机") {
-        opening = "为你推荐了 \(productCount) 款热门智能手机"
-    } else if query.lowercased().contains("耳机") || query.lowercased().contains("音箱") {
-        opening = "为你推荐了 \(productCount) 款优质音频设备"
-    } else {
-        opening = "为你推荐了 \(productCount) 款精选商品"
-    }
-
-    // 商品解说（每个商品一段）
-    var descriptions: [String] = []
-    for (index, product) in products.prefix(productCount).enumerated() {
-        let features = [
-            "性能强劲，流畅运行各种应用",
-            "续航持久，满足全天使用需求",
-            "屏幕出色，视觉体验极佳",
-            "设计精美，手感舒适",
-            "性价比高，物超所值"
-        ]
-        let feature = features[index % features.count]
-        let description = "\(product.title)：\(feature)"
-        descriptions.append(description)
-    }
-
-    // 追问方向
-    let questions = [
-        "需要更平价的选择？",
-        "想要看特定品牌？",
-        "需要详细对比某两款？",
-        "想了解更多规格细节？"
-    ]
-
-    // 组合成完整文本
-    var text = opening + "\n\n"
-    text += descriptions.joined(separator: "\n\n") + "\n\n"
-    text += questions.joined(separator: "\n")
-
-    return text
-}
-
 final class MockProductService: ProductServicing {
     func fetchProduct(productID: String) async throws -> ProductPayload {
         guard let product = MockProductCatalog.all.first(where: { $0.productID == productID }) else {
             throw MockServiceError.notFound
         }
         return product
+    }
+
+    func fetchProducts(productIDs: [String]) async throws -> [ProductPayload] {
+        productIDs.compactMap { id in
+            MockProductCatalog.all.first { $0.productID == id }
+        }
+    }
+
+    func fetchProductPitch(productID: String) async -> String? {
+        guard let product = MockProductCatalog.all.first(where: { $0.productID == productID }) else {
+            return nil
+        }
+        let raw = product.summary ?? "这款商品值得推荐"
+        let cleaned = RecommendationCopy.sanitized(raw)
+        return cleaned.isEmpty ? nil : cleaned
     }
 
     func searchProducts(_ request: ProductSearchRequest) async throws -> ProductSearchResponse {
@@ -579,4 +530,59 @@ private enum MockCartFactory {
             payable: subtotal
         )
     }
+}
+
+private func generateMockResponseText(query: String, products: [ProductPayload]) -> String {
+    let productCount = min(products.count, 5)
+    
+    let opening: String
+    if query.lowercased().contains("平板") || query.lowercased().contains("电脑") {
+        opening = "为你推荐了 \(productCount) 款高性能平板电脑"
+    } else if query.lowercased().contains("手机") {
+        opening = "为你推荐了 \(productCount) 款热门智能手机"
+    } else if query.lowercased().contains("耳机") || query.lowercased().contains("音箱") {
+        opening = "为你推荐了 \(productCount) 款优质音频设备"
+    } else if query.lowercased().contains("服饰") || query.lowercased().contains("运动") {
+        opening = "为你推荐了 \(productCount) 款运动服饰"
+    } else {
+        opening = "为你推荐了 \(productCount) 款精选商品"
+    }
+
+    var items: [[String: String]] = []
+    let features = [
+        "性能强劲，流畅运行各种应用",
+        "设计精美，适合日常穿着",
+        "舒适透气，运动必备",
+        "性价比高，物超所值",
+        "款式时尚，百搭耐看"
+    ]
+    for (index, product) in products.prefix(productCount).enumerated() {
+        let feature = features[index % features.count]
+        items.append([
+            "productId": product.productID,
+            "description": "\(product.title)：\(feature)"
+        ])
+        print("生成 item: productId=\(product.productID), description=\(product.title)：\(feature)")
+    }
+
+    let questions = [
+        "需要更平价的选择？",
+        "想要看特定品牌？",
+        "需要详细对比某两款？",
+        "想了解更多规格细节？"
+    ]
+
+    let result: [String: Any] = [
+        "opening": opening,
+        "items": items,
+        "questions": questions
+    ]
+    
+    if let jsonData = try? JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted]),
+       let jsonString = String(data: jsonData, encoding: .utf8) {
+        print("生成的 JSON: \(jsonString)")
+        return jsonString
+    }
+    print("JSON 生成失败")
+    return ""
 }

@@ -204,7 +204,7 @@ struct BackendStatusBanner: View {
                         Text("后端服务未连接")
                             .font(.system(size: 14, weight: .semibold))
                             .foregroundStyle(AppTheme.textPrimary)
-                        Text("请在电脑上运行 ./scripts/start_backend.sh 启动后端。")
+                        Text("请在电脑上运行 ./scripts/dev.sh 启动后端（支持热重载）。")
                             .font(.system(size: 12))
                             .foregroundStyle(AppTheme.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -524,6 +524,12 @@ struct LiquidTabBar: View {
     }
 }
 
-#Preview {
+// #Preview {
+//     RootView()
+// }
+
+#if DEBUG
+#Preview("Root") {
     RootView()
 }
+#endif

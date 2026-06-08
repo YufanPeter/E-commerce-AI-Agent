@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ProductDetailView: View {
     let product: Product
+    let recommendationText: String?
     let onAddToCart: (Product, [String: String], Int) -> Void
 
     @State private var selectedOptions: [String: String]
@@ -12,6 +13,10 @@ struct ProductDetailView: View {
     @State private var toastID = UUID()
     @State private var successQuantity = 1
     @State private var successSummary = ""
+    @State private var displayedRecommendation = ""
+    @State private var isLoadingRecommendation = false
+
+    private let productService = RESTProductService()
 
     private var toastBottomPadding: CGFloat {
         AppTheme.bottomTabBarHeight + AppTheme.bottomTabBarBottomPadding + 40
@@ -19,9 +24,11 @@ struct ProductDetailView: View {
 
     init(
         product: Product,
+        recommendationText: String? = nil,
         onAddToCart: @escaping (Product, [String: String], Int) -> Void
     ) {
         self.product = product
+        self.recommendationText = recommendationText
         self.onAddToCart = onAddToCart
         _selectedOptions = State(initialValue: product.defaultSpecificationSelection)
     }
@@ -29,37 +36,31 @@ struct ProductDetailView: View {
     var body: some View {
         ZStack(alignment: .bottom) {
             ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    ProductRemoteImage(url: product.imageURL, cornerRadius: 26, placeholderIcon: "bag")
-                        .frame(height: 280)
+                VStack(alignment: .leading, spacing: 20) {
+                    productImageSection
 
-                    VStack(alignment: .leading, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 8) {
                         Text(product.priceDisplay(for: selectedOptions))
                             .font(.title.bold())
                             .foregroundStyle(AppTheme.error)
                         Text(product.title)
                             .font(.title3.bold())
                             .foregroundStyle(AppTheme.textPrimary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
 
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("AI 推荐理由")
-                            .font(.headline)
-                        Text(product.reason.isEmpty ? "暂时空缺" : product.reason)
-                            .font(.subheadline)
-                            .foregroundStyle(product.reason.isEmpty ? AppTheme.textSecondary.opacity(0.72) : AppTheme.textSecondary)
-                    }
-                    .padding(16)
-                    .floatingLiquidPanel(cornerRadius: 20)
+                    recommendationSection
 
-                    HStack {
-                        ForEach(product.tags, id: \.self) { tag in
-                            Text(tag)
-                                .font(.caption.weight(.medium))
-                                .foregroundStyle(AppTheme.primary)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 7)
-                                .background(AppTheme.softPurple, in: Capsule())
+                    if !product.tags.isEmpty {
+                        HStack {
+                            ForEach(product.tags, id: \.self) { tag in
+                                Text(tag)
+                                    .font(.caption.weight(.medium))
+                                    .foregroundStyle(AppTheme.primary)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 7)
+                                    .background(AppTheme.softPurple, in: Capsule())
+                            }
                         }
                     }
 
@@ -73,7 +74,7 @@ struct ProductDetailView: View {
                             .padding(.vertical, 15)
                             .background(AppTheme.primary, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                     }
-                    .padding(.top, 8)
+                    .padding(.top, 4)
                 }
                 .padding(20)
                 .padding(.bottom, 112)
@@ -100,6 +101,74 @@ struct ProductDetailView: View {
         .background(AppTheme.background)
         .navigationTitle("商品详情")
         .navigationBarTitleDisplayMode(.inline)
+        .task(id: product.id) {
+            await loadRecommendation()
+        }
+    }
+
+    private var productImageSection: some View {
+        ProductRemoteImage(
+            url: product.imageURL,
+            cornerRadius: 20,
+            placeholderIcon: "bag",
+            contentMode: .fit
+        )
+        .frame(maxWidth: .infinity)
+        .frame(height: 300)
+        .background(Color.white, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(AppTheme.border, lineWidth: 1)
+        )
+    }
+
+    private var recommendationSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("AI 推荐理由")
+                .font(.headline)
+                .foregroundStyle(AppTheme.textPrimary)
+
+            if isLoadingRecommendation {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("正在生成推荐理由…")
+                        .font(.subheadline)
+                        .foregroundStyle(AppTheme.textSecondary)
+                }
+            } else if displayedRecommendation.isEmpty {
+                Text("暂时空缺")
+                    .font(.subheadline)
+                    .foregroundStyle(AppTheme.textSecondary.opacity(0.72))
+            } else {
+                Text(displayedRecommendation)
+                    .font(.subheadline)
+                    .foregroundStyle(AppTheme.textSecondary)
+                    .lineSpacing(5)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .floatingLiquidPanel(cornerRadius: 20)
+    }
+
+    @MainActor
+    private func loadRecommendation() async {
+        if let passed = recommendationText.flatMap({ RecommendationCopy.sanitized($0) }),
+           !passed.isEmpty {
+            displayedRecommendation = passed
+            return
+        }
+
+        isLoadingRecommendation = true
+        defer { isLoadingRecommendation = false }
+
+        if let fetched = await productService.fetchProductPitch(productID: product.id) {
+            displayedRecommendation = fetched
+        } else {
+            displayedRecommendation = ""
+        }
     }
 
     private var selectedSpecificationSummary: String {

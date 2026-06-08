@@ -21,6 +21,7 @@
 		A100001A2B00000100000007 /* CartView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000A2B00000100000007 /* CartView.swift */; };
 		A100001A2B00000100000008 /* PreferenceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000A2B00000100000008 /* PreferenceView.swift */; };
 		A100001A2B00000100000030 /* ComparisonView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000A2B00000100000030 /* ComparisonView.swift */; };
+		A100001A2B00000100000042 /* PreviewFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000A2B00000100000042 /* PreviewFixtures.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -34,6 +35,7 @@
 		A100000A2B00000100000004 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		A100000A2B00000100000005 /* GuideView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuideView.swift; sourceTree = "<group>"; };
 		A100000A2B00000100000030 /* ComparisonView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComparisonView.swift; sourceTree = "<group>"; };
+		A100000A2B00000100000042 /* PreviewFixtures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewFixtures.swift; sourceTree = "<group>"; };
 		A100000A2B00000100000006 /* ProductDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProductDetailView.swift; sourceTree = "<group>"; };
 		A100000A2B00000100000007 /* CartView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CartView.swift; sourceTree = "<group>"; };
 		A100000A2B00000100000008 /* PreferenceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferenceView.swift; sourceTree = "<group>"; };
@@ -53,7 +55,7 @@
 
 /* Begin PBXGroup section */
 		A100003A2B00000100000001 = {isa = PBXGroup; children = (A100003A2B00000100000002 /* AIShoppingGuide */, A100003A2B00000100000003 /* Products */, ); sourceTree = "<group>"; };
-		A100003A2B00000100000002 /* AIShoppingGuide */ = {isa = PBXGroup; children = (A100000A2B00000100000001 /* AIShoppingGuideApp.swift */, A100000A2B00000100000002 /* AppTheme.swift */, A100000A2B00000100000003 /* Models.swift */, A100000A2B00000100000020 /* ConversationStore.swift */, A100000A2B00000100000011 /* APIModels.swift */, A100000A2B00000100000012 /* FrontendServices.swift */, A100000A2B00000100000013 /* MockFrontendServices.swift */, A100000A2B00000100000004 /* RootView.swift */, A100000A2B00000100000005 /* GuideView.swift */, A100000A2B00000100000030 /* ComparisonView.swift */, A100000A2B00000100000006 /* ProductDetailView.swift */, A100000A2B00000100000007 /* CartView.swift */, A100000A2B00000100000008 /* PreferenceView.swift */, A100000A2B00000100000010 /* Assets.xcassets */, ); path = AIShoppingGuide; sourceTree = "<group>"; };
+		A100003A2B00000100000002 /* AIShoppingGuide */ = {isa = PBXGroup; children = (A100000A2B00000100000001 /* AIShoppingGuideApp.swift */, A100000A2B00000100000002 /* AppTheme.swift */, A100000A2B00000100000003 /* Models.swift */, A100000A2B00000100000020 /* ConversationStore.swift */, A100000A2B00000100000011 /* APIModels.swift */, A100000A2B00000100000012 /* FrontendServices.swift */, A100000A2B00000100000013 /* MockFrontendServices.swift */, A100000A2B00000100000042 /* PreviewFixtures.swift */, A100000A2B00000100000004 /* RootView.swift */, A100000A2B00000100000005 /* GuideView.swift */, A100000A2B00000100000030 /* ComparisonView.swift */, A100000A2B00000100000006 /* ProductDetailView.swift */, A100000A2B00000100000007 /* CartView.swift */, A100000A2B00000100000008 /* PreferenceView.swift */, A100000A2B00000100000010 /* Assets.xcassets */, ); path = AIShoppingGuide; sourceTree = "<group>"; };
 		A100003A2B00000100000003 /* Products */ = {isa = PBXGroup; children = (A100000A2B00000100000009 /* AIShoppingGuide.app */, ); name = Products; sourceTree = "<group>"; };
 /* End PBXGroup section */
 
@@ -113,7 +115,7 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		A100006A2B00000100000001 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A100001A2B00000100000001 /* AIShoppingGuideApp.swift in Sources */, A100001A2B00000100000002 /* AppTheme.swift in Sources */, A100001A2B00000100000003 /* Models.swift in Sources */, A100001A2B00000100000020 /* ConversationStore.swift in Sources */, A100001A2B00000100000010 /* APIModels.swift in Sources */, A100001A2B00000100000011 /* FrontendServices.swift in Sources */, A100001A2B00000100000012 /* MockFrontendServices.swift in Sources */, A100001A2B00000100000004 /* RootView.swift in Sources */, A100001A2B00000100000005 /* GuideView.swift in Sources */, A100001A2B00000100000030 /* ComparisonView.swift in Sources */, A100001A2B00000100000006 /* ProductDetailView.swift in Sources */, A100001A2B00000100000007 /* CartView.swift in Sources */, A100001A2B00000100000008 /* PreferenceView.swift in Sources */, ); runOnlyForDeploymentPostprocessing = 0; };
+		A100006A2B00000100000001 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A100001A2B00000100000001 /* AIShoppingGuideApp.swift in Sources */, A100001A2B00000100000002 /* AppTheme.swift in Sources */, A100001A2B00000100000003 /* Models.swift in Sources */, A100001A2B00000100000020 /* ConversationStore.swift in Sources */, A100001A2B00000100000010 /* APIModels.swift in Sources */, A100001A2B00000100000011 /* FrontendServices.swift in Sources */, A100001A2B00000100000012 /* MockFrontendServices.swift in Sources */, A100001A2B00000100000042 /* PreviewFixtures.swift in Sources */, A100001A2B00000100000004 /* RootView.swift in Sources */, A100001A2B00000100000005 /* GuideView.swift in Sources */, A100001A2B00000100000030 /* ComparisonView.swift in Sources */, A100001A2B00000100000006 /* ProductDetailView.swift in Sources */, A100001A2B00000100000007 /* CartView.swift in Sources */, A100001A2B00000100000008 /* PreferenceView.swift in Sources */, ); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */

@@ -74,6 +74,65 @@ def get_products(ids: str = Query(..., description="Comma-separated product ids"
     }
 
 
+@router.post("/products/{product_id}/pitch")
+def product_pitch(product_id: str) -> dict[str, str]:
+    """单品推荐理由：走与导购 recommend 相同的 composer，只返回一条不含价格的 description。"""
+    detail = store.get_product_detail(product_id)
+    if detail is None:
+        raise HTTPException(
+            status_code=404,
+            detail=error_payload(
+                code="PRODUCT_NOT_FOUND",
+                message="Product not found",
+                retryable=False,
+            ),
+        )
+
+    card = {
+        "product_id": detail.product_id,
+        "title": detail.title,
+        "brand": detail.brand,
+        "category": detail.category,
+        "sub_category": detail.sub_category,
+        "price": detail.price_range.min_price,
+        "price_display": price_display(detail.price_range),
+    }
+    from agent.composer import AnswerComposer
+    from agent.session import AgentSession
+    from agent.tools.base import ToolResult
+
+    tool_result = ToolResult(
+        tool_name="recommend",
+        payload={"query": detail.title, "products": [card]},
+        composer_hint=(
+            "这是商品详情页的推荐理由。"
+            "JSON 的 items 只含这一条商品；description 写 1-2 句场景化卖点，"
+            "【禁止出现任何价格、¥、元、起等价格表述】；questions 返回空数组。"
+        ),
+    )
+    narrative = AnswerComposer().compose(tool_result, AgentSession(), timeout=15.0)
+    description = _extract_pitch_description(narrative, detail.product_id)
+    return {"description": description}
+
+
+def _extract_pitch_description(narrative: str, product_id: str) -> str:
+    text = (narrative or "").strip()
+    if not text:
+        return ""
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return text[:240]
+    items = data.get("items") or []
+    if not items:
+        return (data.get("opening") or "")[:240]
+    for item in items:
+        pid = item.get("productId") or item.get("product_id")
+        if pid == product_id or len(items) == 1:
+            return str(item.get("description") or "").strip()
+    return str(items[0].get("description") or "").strip()
+
+
 def error_payload(code: str, message: str, retryable: bool) -> dict[str, Any]:
     return {
         "code": code,

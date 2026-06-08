@@ -10,6 +10,9 @@
 #   PORT=8000 ./scripts/start_backend.sh        # 自定义端口
 #   USE_RERANK=0 ./scripts/start_backend.sh     # 禁用 API 精排（链路只走向量召回排序）
 #   ./scripts/start_backend.sh --reload         # venv 模式：开发热重载（额外参数透传给 uvicorn）
+#   ./scripts/dev.sh                            # 推荐：开发模式（自动 --reload + 重启占用端口的旧进程）
+#   ./scripts/stop_backend.sh                   # 停止占用端口的进程
+#   ./scripts/restart_backend.sh                # 停止后重新 dev 启动
 #
 # 脚本会自动：
 #   1. 定位/创建 .venv 并按需安装依赖
@@ -113,13 +116,49 @@ fi
 # 3) 端口占用检查 --------------------------------------------------------------
 if lsof -nP -iTCP:"${PORT}" -sTCP:LISTEN >/dev/null 2>&1; then
   EXISTING_PID="$(lsof -nP -iTCP:"${PORT}" -sTCP:LISTEN -t 2>/dev/null | head -1)"
-  warn "端口 ${PORT} 已被占用（PID ${EXISTING_PID}），后端可能已在运行。"
-  if curl -s -m 3 "http://${HOST}:${PORT}/health" | grep -q '"ok"'; then
-    log "现有服务健康检查通过：http://${HOST}:${PORT}/health"
-    exit 0
+  if [ "${FORCE_RESTART:-0}" = "1" ]; then
+    warn "开发模式：停止占用 ${PORT} 的旧进程（PID ${EXISTING_PID}）…"
+    kill "${EXISTING_PID}" 2>/dev/null || true
+    sleep 0.5
+    if lsof -nP -iTCP:"${PORT}" -sTCP:LISTEN >/dev/null 2>&1; then
+      err "无法释放端口 ${PORT}，请手动停止 PID ${EXISTING_PID}"
+      exit 1
+    fi
+  else
+    warn "端口 ${PORT} 已被占用（PID ${EXISTING_PID}），后端可能已在运行。"
+    if curl -s -m 3 "http://${HOST}:${PORT}/health" | grep -q '"ok"'; then
+      log "现有服务健康检查通过：http://${HOST}:${PORT}/health"
+      if [ "${DEV:-0}" = "1" ]; then
+        warn "开发模式需要热重载时，请用 ./scripts/dev.sh（会自动重启）或 FORCE_RESTART=1 ./scripts/start_backend.sh --reload"
+      fi
+      exit 0
+    fi
+    err "端口被占用但 /health 无响应，请手动停止该进程后重试：kill ${EXISTING_PID}"
+    exit 1
   fi
-  err "端口被占用但 /health 无响应，请手动停止该进程后重试：kill ${EXISTING_PID}"
-  exit 1
+fi
+
+# 开发热重载：DEV=1 且未显式传 --reload 时自动开启
+# macOS 默认 bash 3.2 + set -u：空数组 "${arr[@]}" 会报 unbound variable，需显式初始化。
+UVICORN_ARGS=()
+if [ "$#" -gt 0 ]; then
+  UVICORN_ARGS=("$@")
+fi
+if [ "${DEV:-0}" = "1" ]; then
+  has_reload=0
+  if [ "${#UVICORN_ARGS[@]}" -gt 0 ]; then
+    for arg in "${UVICORN_ARGS[@]}"; do
+      if [ "$arg" = "--reload" ]; then has_reload=1; break; fi
+    done
+  fi
+  if [ "${has_reload}" -eq 0 ]; then
+    if [ "${#UVICORN_ARGS[@]}" -gt 0 ]; then
+      UVICORN_ARGS=(--reload "${UVICORN_ARGS[@]}")
+    else
+      UVICORN_ARGS=(--reload)
+    fi
+    log "DEV=1：已自动启用 uvicorn --reload"
+  fi
 fi
 
 # 4) 启动 + 健康检查 -----------------------------------------------------------
@@ -134,4 +173,11 @@ log "启动 uvicorn：http://${HOST}:${PORT}  (workdir=${BACKEND_DIR})"
 ) &
 
 cd "${BACKEND_DIR}"
-exec "${VENV_PY}" -m uvicorn api.main:app --host "${HOST}" --port "${PORT}" "$@"
+UVICORN_CMD=(
+  "${VENV_PY}" -m uvicorn api.main:app
+  --host "${HOST}" --port "${PORT}"
+)
+if [ "${#UVICORN_ARGS[@]}" -gt 0 ]; then
+  UVICORN_CMD+=("${UVICORN_ARGS[@]}")
+fi
+exec "${UVICORN_CMD[@]}"

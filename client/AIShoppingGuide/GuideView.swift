@@ -27,7 +27,7 @@ struct GuideView: View {
     @State private var inputText = ""
     @State private var isComposerExpanded = false
     @State private var showHistory = false
-    @State private var selectedProduct: Product?
+    @State private var productDetailContext: ProductDetailContext?
     @State private var comparisonContext: ComparisonContext?
     @State private var lastQuery: String = ""
     @State private var currentConversationID = UUID()
@@ -114,8 +114,11 @@ struct GuideView: View {
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
             }
-            .navigationDestination(item: $selectedProduct) { product in
-                ProductDetailView(product: product) { product, selectedOptions, quantity in
+            .navigationDestination(item: $productDetailContext) { context in
+                ProductDetailView(
+                    product: context.product,
+                    recommendationText: context.recommendationText
+                ) { product, selectedOptions, quantity in
                     addToCart(product, selectedOptions: selectedOptions, quantity: quantity)
                 }
             }
@@ -233,7 +236,7 @@ struct GuideView: View {
                         examples: [],
                         onExampleTap: { send($0) },
                         onRetry: retryLast,
-                        onProductTap: { selectedProduct = $0 },
+                        onProductTap: { openProductDetail($0) },
                         onSpecSubmit: { send($0) },
                         onCompareTap: { comparisonContext = ComparisonContext(candidates: $0) },
                         onFollowUpQuestionTap: { send($0) }
@@ -1073,6 +1076,23 @@ struct GuideView: View {
         messages[index].comparison = comparison
     }
 
+    private func openProductDetail(_ product: Product) {
+        productDetailContext = ProductDetailContext(
+            product: product,
+            recommendationText: recommendationDescription(for: product)
+        )
+    }
+
+    /// 从最近一条已完成的 AI 回复里取该商品的专属解说。
+    private func recommendationDescription(for product: Product) -> String? {
+        for message in messages.reversed() {
+            if let text = message.recommendationDescription(for: product.id) {
+                return text
+            }
+        }
+        return nil
+    }
+
     private func addToCart(
         _ product: Product,
         selectedOptions: [String: String] = [:],
@@ -1114,16 +1134,66 @@ struct MessageRow: View {
         }
     }
     
+    private var parsedStructuredContent: StructuredContent? {
+        guard message.state == .ready else {
+            return nil
+        }
+        guard let structured = message.structuredContent else {
+            return tryParseStructuredContent(from: message.text)
+        }
+        return structured
+    }
+    
+    private func tryParseStructuredContent(from text: String) -> StructuredContent? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("{") && trimmed.hasSuffix("}") else { 
+            print("JSON 解析失败：不以 { 开头或 } 结尾")
+            return nil 
+        }
+        
+        let openBraceCount = trimmed.filter { $0 == "{" }.count
+        let closeBraceCount = trimmed.filter { $0 == "}" }.count
+        guard openBraceCount == closeBraceCount else {
+            print("JSON 解析失败：大括号不匹配 \(openBraceCount):\(closeBraceCount)")
+            return nil
+        }
+        
+        if let data = trimmed.data(using: .utf8) {
+            do {
+                let decoder = JSONDecoder()
+                decoder.keyDecodingStrategy = .useDefaultKeys
+                let content = try decoder.decode(StructuredContent.self, from: data)
+                print("JSON 解析成功: opening=\(content.opening), items.count=\(content.items.count), questions.count=\(content.questions.count)")
+                return content
+            } catch {
+                print("JSON 解析失败: \(error)")
+                print("原始文本: \(text.prefix(200))")
+                return nil
+            }
+        }
+        return nil
+    }
+    
     private var textParagraphs: [String] {
         let components = message.text.components(separatedBy: "\n")
         return components.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     }
     
     private var openingText: String? {
-        textParagraphs.first
+        // 优先使用结构化内容
+        if let content = parsedStructuredContent {
+            return content.opening
+        }
+        // 降级：从文本中取第一段
+        return textParagraphs.first
     }
     
     private var followUpQuestions: [String] {
+        // 优先使用结构化内容
+        if let content = parsedStructuredContent {
+            return content.questions
+        }
+        // 降级：从文本中提取包含问号的段落
         let questions = textParagraphs.filter { paragraph in
             paragraph.contains("？") || paragraph.contains("?") || 
             paragraph.contains("需要") || paragraph.contains("想要") ||
@@ -1133,6 +1203,11 @@ struct MessageRow: View {
     }
     
     private var middleParagraphs: [String] {
+        // 如果有结构化内容，不使用 middleParagraphs
+        if parsedStructuredContent != nil {
+            return []
+        }
+        // 降级：从文本中提取中间段落
         guard let opening = openingText else { return textParagraphs }
         var middle = textParagraphs.filter { $0 != opening && !followUpQuestions.contains($0) }
         if middle.count > message.products.count {
@@ -1143,6 +1218,21 @@ struct MessageRow: View {
     
     private var productSections: [ProductSection] {
         let products = message.products
+        
+        // 结构化内容：优先 productId 精确匹配，失败则按顺序对齐（兼容 LLM 返回序号的情况）
+        if let content = parsedStructuredContent {
+            return products.enumerated().map { index, product in
+                let item = content.items.first { $0.productId == product.id }
+                    ?? (index < content.items.count ? content.items[index] : nil)
+                let description = item.flatMap {
+                    let cleaned = RecommendationCopy.sanitized($0.description)
+                    return cleaned.isEmpty ? nil : cleaned
+                } ?? (product.reason.isEmpty ? nil : product.reason)
+                return ProductSection(product: product, description: description)
+            }
+        }
+        
+        // 否则使用索引方式匹配（降级方案）
         let descriptions = middleParagraphs
         return products.enumerated().map { index, product in
             ProductSection(
@@ -1625,21 +1715,6 @@ struct ProductCard: View {
             Text(product.priceDisplay(for: product.defaultSpecificationSelection))
                 .font(.title3.bold())
                 .foregroundStyle(AppTheme.error)
-            
-            if !product.reason.isEmpty {
-                HStack(alignment: .top, spacing: 6) {
-                    Text("AI推荐：")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(AppTheme.primary)
-                    Text(product.reason)
-                        .font(.caption)
-                        .foregroundStyle(AppTheme.textSecondary)
-                        .lineLimit(2)
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .background(AppTheme.softPurple.opacity(0.5), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-            }
 
             Button(action: onDetail) {
                 Text("查看详情")
@@ -2143,3 +2218,37 @@ private extension AgentStatusPhase {
         }
     }
 }
+
+#if DEBUG
+#Preview("推荐消息") {
+    ScrollView {
+        MessageRow(
+            message: PreviewFixtures.recommendMessage,
+            examples: [],
+            onExampleTap: { _ in },
+            onRetry: {},
+            onProductTap: { _ in },
+            onSpecSubmit: { _ in },
+            onCompareTap: { _ in },
+            onFollowUpQuestionTap: { _ in }
+        )
+        .padding()
+    }
+    .background(AppTheme.background)
+}
+
+#Preview("加载中") {
+    MessageRow(
+        message: PreviewFixtures.loadingMessage,
+        examples: [],
+        onExampleTap: { _ in },
+        onRetry: {},
+        onProductTap: { _ in },
+        onSpecSubmit: { _ in },
+        onCompareTap: { _ in },
+        onFollowUpQuestionTap: { _ in }
+    )
+    .padding()
+    .background(AppTheme.background)
+}
+#endif

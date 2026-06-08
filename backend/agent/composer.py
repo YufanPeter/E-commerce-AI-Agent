@@ -31,15 +31,17 @@ SYSTEM_PROMPT = """你是一位友好、专业的电商导购助手，说话像�
 风格要求：
 - 中文回答，简洁自然，避免冗长，控制在 200 字以内。
 - 直接基于提供的 payload 中的真实商品信息说话，绝不编造任何不存在的字段或商品。
-- 开场必须用"为你XXX了"的格式总括这次推荐（如"为你推荐了几款适合油皮的洗面奶"、"为你挑选了5款500元以内的蓝牙耳机"），再展开介绍。
-- 善用归并表达：同价位、同定位的商品放一起说（如"3299 元档的 A 和 B 都是…"），不要机械地一条条罗列。
+- 必须返回 JSON 格式，包含以下字段：
+  - "opening": 开场白，用"为你XXX了"的格式（如"为你推荐了几款适合敏感肌的护肤品"）
+  - "items": 数组，每个元素包含 {"productId": "...", "description": "..."}，**productId 必须原样使用 payload.hits 里对应商品的 productId，禁止自造序号**；每个商品必须对应一个专属解说词，不能多个商品共用一段描述
+  - "questions": 数组，包含 3-5 个追问方向（如"需要更平价的选择？"）
 - 报价格时一律使用 payload.hits 里的 price_display 字段（它已是「¥X 起」或「¥X」的正确形式），原样引用；不要自己拼价格、不要去掉「起」字，更不要给多规格商品报一个单一最高价。若某商品没有 price_display 则可不提价格。
 - 介绍每款时落到使用场景和人群（通勤、学习、送礼…），而不是只报价格和参数。
 - 适度点出关键差异帮用户决策（价格梯度、核心卖点、适合谁）。
-- 若 payload.hits 为空，坦诚告知未找到，并给出具体的放宽建议（提高预算到 X、放宽品牌等）。
+- 若 payload.hits 为空，坦诚告知未找到，并给出具体的放宽建议（提高预算到 X、放宽品牌等）。此时 opening 说明未找到，items 为空数组。
 - 若 payload 里有 groups（用户一次提了多个需求，如"衣服和防晒"），请【按组分段】介绍：每组先点明需求（如"防晒方面"、"衣服方面"），再说该组挑了哪几款、为什么适合，不要把不同需求的商品混在一起说。
 - 不要复述 JSON 字段名，用自然口语介绍。
-- 结尾请提供 3-5 个简单的追问方向，用换行分隔，引导用户进一步明确需求或获取更多信息（如"需要更平价的选择？"、"想看看其他品牌？"、"需要详细对比某两款？"）。"""
+- JSON 格式必须严格正确，不要包含任何额外文字。"""
 
 
 # Few-shot 示例：用真实对话演示"导购口吻"远比文字规则有效。
@@ -51,19 +53,23 @@ _FEW_SHOT: list[dict[str, str]] = [
         "content": (
             'tool: recommend\n'
             'payload: {"query": "5000元以内高性价比数码", "parsed": {"category": "数码电子", "max_price": 5000}, '
-            '"hits": [{"title": "华为 FreeBuds Pro 5 降噪耳机", "price": 1699}, '
-            '{"title": "vivo Pad 6 Pro", "price": 3299}, {"title": "小米平板 8 Pro", "price": 3299}, '
-            '{"title": "iPad Air M4", "price": 4799}, {"title": "华为 MatePad Pro Max 12.6", "price": 4999}]}'
+            '"hits": [{"productId": "p_digital_001", "title": "华为 FreeBuds Pro 5 降噪耳机", "price": 1699}, '
+            '{"productId": "p_digital_002", "title": "vivo Pad 6 Pro", "price": 3299}, {"productId": "p_digital_003", "title": "小米平板 8 Pro", "price": 3299}, '
+            '{"productId": "p_digital_004", "title": "iPad Air M4", "price": 4799}, {"productId": "p_digital_005", "title": "华为 MatePad Pro Max 12.6", "price": 4999}]}'
         ),
     },
     {
         "role": "assistant",
         "content": (
-            "为你推荐了 5 款 5000 元以内的高性价比数码：\n"
-            "华为 FreeBuds Pro 5（1699 元）降噪效果出色，通勤佩戴很合适。\n"
-            "vivo Pad 6 Pro 和小米平板 8 Pro 都是 3299 元，性价比很高，适合学习娱乐。\n"
-            "iPad Air（M4，4799 元）或华为 MatePad Pro Max（4999 元）适合追求高端体验的用户。\n"
-            "\n需要更平价的选择？\n想要看特定品牌？\n需要详细对比某两款？"
+            '{"opening": "为你推荐了 5 款 5000 元以内的高性价比数码", '
+            '"items": ['
+            '{"productId": "p_digital_001", "description": "华为 FreeBuds Pro 5（1699元）：音质和降噪都在线，通勤佩戴很舒服"}, '
+            '{"productId": "p_digital_002", "description": "vivo Pad 6 Pro（3299元）：性能够用、学习娱乐两不误，性价比很高"}, '
+            '{"productId": "p_digital_003", "description": "小米平板 8 Pro（3299元）：性能均衡，适合日常使用"}, '
+            '{"productId": "p_digital_004", "description": "iPad Air M4（4799元）：M4芯片，性能强劲，适合专业用途"}, '
+            '{"productId": "p_digital_005", "description": "华为 MatePad Pro Max（4999元）：12.6英寸大屏，办公体验极佳"}'
+            '], '
+            '"questions": ["需要更平价的选择？", "想要看特定品牌？", "需要详细对比某两款？"]}'
         ),
     },
     {
@@ -78,10 +84,9 @@ _FEW_SHOT: list[dict[str, str]] = [
     {
         "role": "assistant",
         "content": (
-            "为你查询了 300 元以内的蓝牙耳机，暂时没有合适的货。\n"
-            "目前在售的款式价位都偏高一些，如果预算能提到 1500 元左右，可以给你推荐几款降噪和音质都不错的；"
-            "或者你也可以放宽品牌限制，我再帮你找找看。\n"
-            "\n需要提高预算？\n想看看其他价位？\n需要我推荐其他品类？"
+            '{"opening": "抱歉，300元以内的真无线耳机暂时没有合适的货", '
+            '"items": [], '
+            '"questions": ["预算能提高到多少？", "可以放宽品牌限制吗？", "考虑有线耳机吗？"]}'
         ),
     },
 ]
@@ -90,6 +95,18 @@ _FEW_SHOT: list[dict[str, str]] = [
 # payload 里塞 LLM 不需要的字段（如 evidence chunk）只会浪费 token。
 # 这里裁剪只保留对话术有用的精简字段。
 _HIT_KEEP_KEYS = ("title", "brand", "category", "sub_category", "price_display", "price", "base_price", "score")
+
+
+def _trim_hit_for_llm(h: dict[str, Any]) -> dict[str, Any]:
+    """裁剪单条商品，保留话术字段并把 product_id 统一成 productId 供 LLM 回写。"""
+    out: dict[str, Any] = {}
+    pid = h.get("product_id") or h.get("productId")
+    if pid:
+        out["productId"] = pid
+    for k in _HIT_KEEP_KEYS:
+        if k in h:
+            out[k] = h[k]
+    return out
 
 
 def _trim_payload_for_llm(payload: dict[str, Any]) -> dict[str, Any]:
@@ -105,10 +122,7 @@ def _trim_payload_for_llm(payload: dict[str, Any]) -> dict[str, Any]:
     }
     # 商品列表：新格式叫 products，老格式叫 hits
     hits = payload.get("products") or payload.get("hits") or []
-    trimmed["hits"] = [
-        {k: h.get(k) for k in _HIT_KEEP_KEYS if k in h}
-        for h in hits
-    ]
+    trimmed["hits"] = [_trim_hit_for_llm(h) for h in hits]
     # 多需求场景：透传分组结构，让 composer 按需求分组介绍。
     # 每组只保留 label + 精简商品，避免把 query/空组等噪声塞进 prompt。
     groups = payload.get("groups")
@@ -121,10 +135,7 @@ def _trim_payload_for_llm(payload: dict[str, Any]) -> dict[str, Any]:
             trimmed_groups.append(
                 {
                     "label": g.get("label"),
-                    "hits": [
-                        {k: h.get(k) for k in _HIT_KEEP_KEYS if k in h}
-                        for h in g_products
-                    ],
+                    "hits": [_trim_hit_for_llm(h) for h in g_products],
                 }
             )
         if trimmed_groups:

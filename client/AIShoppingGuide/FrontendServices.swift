@@ -108,6 +108,8 @@ protocol AgentServicing {
 
 protocol ProductServicing {
     func fetchProduct(productID: String) async throws -> ProductPayload
+    func fetchProducts(productIDs: [String]) async throws -> [ProductPayload]
+    func fetchProductPitch(productID: String) async -> String?
     func searchProducts(_ request: ProductSearchRequest) async throws -> ProductSearchResponse
     func compareProducts(_ request: ProductComparisonRequest) async throws -> ProductComparisonPayload
 }
@@ -225,6 +227,24 @@ final class RESTProductService: ProductServicing {
 
     func fetchProduct(productID: String) async throws -> ProductPayload {
         try await get(ProductPayload.self, path: "products/\(productID)")
+    }
+
+    /// 单品 AI 推荐理由（与导购 composer 同逻辑）；失败返回 nil。
+    func fetchProductPitch(productID: String) async -> String? {
+        var request = URLRequest(url: baseURL.appendingPathComponent("products/\(productID)/pitch"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 20
+        guard
+            let (data, response) = try? await session.data(for: request),
+            let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let raw = obj["description"] as? String
+        else {
+            return nil
+        }
+        let cleaned = RecommendationCopy.sanitized(raw)
+        return cleaned.isEmpty ? nil : cleaned
     }
 
     func fetchProducts(productIDs: [String]) async throws -> [ProductPayload] {
@@ -949,7 +969,7 @@ extension Product {
             id: payload.productID,
             title: payload.title,
             price: payload.price.display,
-            reason: "",
+            reason: payload.summary ?? "这款商品值得推荐",
             details: "",
             tags: payload.tags,
             specifications: specifications,

@@ -284,11 +284,12 @@ class TestComposerBlocking:
                 "title": "T", "brand": "B", "category": "c", "sub_category": "sc",
                 "base_price": 100, "score": 0.8,
                 "evidence": ["a" * 10000],
-                "product_id": "should_drop",
+                "product_id": "p_beauty_001",
             }],
         }
         out = _trim_payload_for_llm(payload)
         assert "evidence" not in out["hits"][0]
+        assert out["hits"][0]["productId"] == "p_beauty_001"
         assert "product_id" not in out["hits"][0]
         assert "soft_terms" not in out["parsed"]
 

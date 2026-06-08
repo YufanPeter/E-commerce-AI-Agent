@@ -14,7 +14,12 @@
 用 Xcode 打开：
 
 ```bash
-open /Users/wsm/E-commerce-AI-Agent/client/AIShoppingGuide.xcodeproj
+open client/AIShoppingGuide.xcodeproj
 ```
+
+## 开发热刷新
+
+- **后端**：`./scripts/dev.sh`（Python 自动重载）
+- **iOS UI**：Xcode Canvas → `GuideView.swift` 底部 `#Preview("推荐消息")`，保存即刷新
 
 项目使用 iOS 17.0 作为 deployment target，UI 主要基于 SwiftUI 与系统 Material 实现 Liquid Glass 风格。

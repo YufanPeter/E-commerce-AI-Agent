@@ -6,7 +6,7 @@ enum Sender: String, Codable {
 }
 
 enum MessageState: String, Codable {
-    case understanding = "思考中"
+    case understanding = "理解中"
     case retrieving = "检索中"
     case generating = "生成中"
     case ready
@@ -198,6 +198,87 @@ struct ChatMessage: Identifiable, Codable {
     var comparison: ProductComparisonPayload? = nil
     /// 拍照找货：用户这条消息附带的本地图片（缩略图渲染用）；无则为 nil。
     var localImageData: Data? = nil
+    /// AI 返回的结构化内容（JSON 格式）
+    var structuredContent: StructuredContent? = nil
+}
+
+struct StructuredContent: Codable {
+    let opening: String
+    let items: [StructuredItem]
+    let questions: [String]
+}
+
+struct StructuredItem: Codable {
+    let productId: String
+    let description: String
+    
+    enum CodingKeys: String, CodingKey {
+        case productId
+        case description
+    }
+}
+
+extension StructuredContent {
+    /// 从 composer 返回的 narrative JSON 解析结构化内容。
+    static func parse(from text: String) -> StructuredContent? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("{"), trimmed.hasSuffix("}") else { return nil }
+        let open = trimmed.filter { $0 == "{" }.count
+        let close = trimmed.filter { $0 == "}" }.count
+        guard open == close else { return nil }
+        guard let data = trimmed.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(StructuredContent.self, from: data)
+    }
+}
+
+/// 导购推荐理由文案：去掉价格等冗余信息。
+enum RecommendationCopy {
+    private static let pricePatterns = [
+        #"售价\s*[¥￥]?\s*[\d,]+(?:\.\d+)?起?"#,
+        #"[（(]\s*[\d,]+(?:\.\d+)?\s*元\s*[）)]"#,
+        #"[¥￥]\s*[\d,]+(?:\.\d+)?起?"#,
+    ]
+
+    static func sanitized(_ raw: String) -> String {
+        var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return "" }
+        for pattern in pricePatterns {
+            text = text.replacingOccurrences(
+                of: pattern,
+                with: "",
+                options: .regularExpression
+            )
+        }
+        text = text
+            .replacingOccurrences(of: "：，", with: "：")
+            .replacingOccurrences(of: "，，", with: "，")
+            .replacingOccurrences(of: "  ", with: " ")
+            .trimmingCharacters(in: CharacterSet(charactersIn: "，,、：: "))
+        return text
+    }
+}
+
+extension ChatMessage {
+    /// 从本条 AI 消息的结构化 JSON 里取某商品的专属解说（与列表页逻辑一致）。
+    func recommendationDescription(for productID: String) -> String? {
+        guard sender == .ai, state == .ready else { return nil }
+        guard let content = structuredContent ?? StructuredContent.parse(from: text) else { return nil }
+
+        let item = content.items.first { $0.productId == productID }
+            ?? products.firstIndex(where: { $0.id == productID })
+                .flatMap { idx in idx < content.items.count ? content.items[idx] : nil }
+
+        guard let description = item?.description else { return nil }
+        let cleaned = RecommendationCopy.sanitized(description)
+        return cleaned.isEmpty ? nil : cleaned
+    }
+}
+
+struct ProductDetailContext: Identifiable, Hashable {
+    let product: Product
+    let recommendationText: String?
+
+    var id: String { product.id }
 }
 
 /// 多规格商品的一个可选维度（如「颜色」对应一组取值）。

@@ -25,11 +25,19 @@ ARK_BASE_URL=https://ark.cn-*
 
 ### 2. 启动后端
 
+**日常开发（推荐，Python 改完自动重载）：**
+
+```bash
+./scripts/dev.sh
+```
+
+**生产/演示（无热重载）：**
+
 ```bash
 ./scripts/start_backend.sh
 ```
 
-脚本自动建虚拟环境、装依赖并启动。访问 <http://127.0.0.1:8000/health> 返回 `{"status":"ok"}` 即成功。
+`dev.sh` 会启用 `uvicorn --reload`，并自动重启占用 8000 端口的旧进程。访问 <http://127.0.0.1:8000/health> 返回 `{"status":"ok"}` 即成功。
 
 > 首次启动需后台预热模型约 30–60 秒，首条对话稍等即可。
 
@@ -66,6 +74,15 @@ open client/AIShoppingGuide.xcodeproj
 ```
 
 在 Xcode 选一个 iOS 模拟器点 ▶︎ Run。模拟器与 Mac 共享 localhost，默认连 `http://127.0.0.1:8000`，无需额外配置。
+
+#### 开发热刷新
+
+| 改什么 | 怎么做 |
+|--------|--------|
+| **Python 后端** | `./scripts/dev.sh` 启动，保存 `.py` 后自动重载 |
+| **SwiftUI 界面** | Xcode 打开 `GuideView.swift` → 右侧 Canvas → `#Preview("推荐消息")`，保存即刷新 |
+
+> 不建议接入 Inject / InjectionIII SPM 包：Xcode 常在「Updating Injection…」阶段卡住（需从 GitHub 拉包）。用 Canvas Preview 调 UI 更稳。
 
 进入「导购」页输入例如「不要含酒精的防晒」，看到流式回复和商品卡片即联调成功。
 
