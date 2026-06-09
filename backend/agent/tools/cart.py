@@ -451,17 +451,25 @@ class CartTool:
     def _filter_skus(
         self, query: str, skus: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
-        """按用户这句话里能识别到的规格值过滤 SKU。
+        """按用户这句话里能识别到的规格值过滤 SKU（覆盖所有品类）。
 
         没识别到任何规格 → 原样返回（触发反问）；识别到几个维度 →
-        取交集，返回满足全部约束的 SKU。"""
+        取交集，返回满足全部约束的 SKU。
+
+        两段式匹配，确定性优先：
+        ① 精确整值匹配（主路径）：用户这句里**原样包含**某个规格取值的完整字符串
+           即采纳。前端规格卡发的就是库里的 canonical 值（如 '12GB+512GB'/'M码'/
+           '幻影紫'），所以点选场景永远走这条、零歧义、永不死循环。同维度多个值都
+           整串命中时取**最长**的那个（'12GB+512GB' 胜过假想子串），杜绝共享前缀误配。
+        ② 模糊打分回退（仅当某维度精确匹配没命中）：用户打字/语音的近似说法
+           （如只说 '512' 或 '深灰'）才退回 token 打分，取唯一最高分；并列则不约束。
+        """
         dims = self._varying_dims(skus)
         constraints: dict[str, str] = {}
         for dim, values in dims.items():
-            for val in values:
-                if self._value_matches(val, query):
-                    constraints[dim] = val
-                    break
+            chosen = self._pick_dim_value(values, query)
+            if chosen is not None:
+                constraints[dim] = chosen
         if not constraints:
             return list(skus)
         return [
@@ -470,8 +478,45 @@ class CartTool:
         ]
 
     @staticmethod
+    def _pick_dim_value(values: list[str], query: str) -> str | None:
+        """在某维度的候选取值里，选出用户这句话指定的那个；选不出返回 None。"""
+        q = query or ""
+        q_lower = q.lower()
+        # ① 精确整值命中（取最长，避免子串型误配）。大小写不敏感。
+        exact = [
+            v for v in values
+            if v and (v in q or v.lower() in q_lower)
+        ]
+        if exact:
+            exact.sort(key=len, reverse=True)
+            # 最长唯一 → 采纳；若并列最长（理论上 canonical 值不会，稳妥起见）则不约束
+            if len(exact) == 1 or len(exact[0]) > len(exact[1]):
+                return exact[0]
+            return None
+        # ② 模糊打分回退：取唯一最高分，并列视为歧义不约束。
+        best_val: str | None = None
+        best_score = 0
+        tie = False
+        for val in values:
+            score = CartTool._value_match_score(val, q)
+            if score > best_score:
+                best_score, best_val, tie = score, val, False
+            elif score == best_score and score > 0:
+                tie = True
+        if best_val is not None and best_score > 0 and not tie:
+            return best_val
+        return None
+
+    @staticmethod
     def _value_matches(value: str, query: str) -> bool:
-        """判断用户话里是否点到了某个规格取值。
+        """判断用户话里是否点到了某个规格取值（命中任一 token 即 True）。"""
+        return CartTool._value_match_score(value, query) > 0
+
+    @staticmethod
+    def _value_match_score(value: str, query: str) -> int:
+        """用户话里命中了该规格取值的多少个 token（数字/中文片段/英文整词）。
+
+        分数越高代表匹配越完整，用于同维度多取值的消歧。
 
         匹配按"整 token"进行，避免松散的片段误配（例如规格值
         '灰色 Asphalt Grey' 里的 'sp' 撞上商品名 'Osprey' 的 'sp'）：
@@ -482,26 +527,39 @@ class CartTool:
           不做任意 2 字母片段匹配。"""
         value = (value or "").strip()
         if not value:
-            return False
+            return 0
         q = query.lower()
+        score = 0
+        # 0) 字母尺码（M码/L码/XL码/S/XXL 等）：字母前缀 ≤3，整段带左右边界命中。
+        #    左边界 (?<![a-z]) 关键——否则 'L码' 会命中 'XL码'、'S' 命中 'XS'。
+        #    右边界：带'码'时'码'即右锚；裸字母要求右侧非字母。尺码识别成功记 1 分。
+        size_match = re.fullmatch(r"([A-Za-z]{1,3})(码)?", value)
+        if size_match:
+            token = value.lower()
+            right_guard = "" if size_match.group(2) else r"(?![a-z])"
+            if re.search(rf"(?<![a-z]){re.escape(token)}{right_guard}", q):
+                score += 1
+            return score
         # 1) 数字 token：要求是独立数字（前后非数字），避免 28 命中 280
         for num in re.findall(r"\d+", value):
             if re.search(rf"(?<!\d){re.escape(num)}(?!\d)", query):
-                return True
+                score += 1
         # 2) 中文连续片段：≥2 字才整段命中（避免 "码"/"色" 这类单字单位误配）；
         #    ≥3 字的长值额外允许 ≥2 字连续片段命中（如 "暗夜黑" 命中 "暗夜黑实战色"）
         for run in re.findall(r"[\u4e00-\u9fff]+", value):
             if len(run) >= 2 and run in query:
-                return True
-            if len(run) >= 3:
+                score += 1
+            elif len(run) >= 3:
                 for i in range(len(run) - 1):
                     if run[i:i + 2] in query:
-                        return True
+                        score += 1
+                        break
         # 3) 英文整词（≥3 字母）
         for word in re.findall(r"[a-zA-Z]{3,}", value):
             if word.lower() in q:
-                return True
-        return False
+                score += 1
+        return score
+
 
     @staticmethod
     def _match_ordinal(

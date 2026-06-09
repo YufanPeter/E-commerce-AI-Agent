@@ -179,3 +179,136 @@ def test_cart_dispatch_failure_falls_back_to_view(monkeypatch, store: CartStore)
     r = CartTool(cart_store=store).run("随便说点啥", AgentSession(), {})
     # 降级为展示购物车，而非报错
     assert r.payload["action"] == "view"
+
+
+# --------------------------- 规格消歧（共享前缀防死循环）---------------------------
+
+def _phone_skus() -> list[dict]:
+    """模拟 Pura 90 Pro：存储 12GB+256GB(标准版) / 12GB+512GB(高配版)，共享 12GB 前缀。"""
+    skus = []
+    for storage, version, colors in (
+        ("12GB+256GB", "标准版", ["星芒黑", "雪域白", "幻影紫", "青釉绿"]),
+        ("12GB+512GB", "高配版", ["星芒黑", "雪域白", "幻影紫", "青釉绿"]),
+    ):
+        for i, color in enumerate(colors):
+            skus.append({
+                "sku_id": f"{storage}_{color}",
+                "options": {"存储": storage, "颜色": color, "版本": version},
+            })
+    return skus
+
+
+def test_filter_skus_disambiguates_shared_numeric_prefix(store: CartStore):
+    """用户说 12GB+512GB 不能被 12GB+256GB 抢匹配（两者共享 '12'）。"""
+    tool = CartTool(cart_store=store)
+    matched = tool._filter_skus("我要 12GB+512GB 幻影紫 高配版", _phone_skus())
+    assert len(matched) == 1
+    assert matched[0]["options"] == {"存储": "12GB+512GB", "颜色": "幻影紫", "版本": "高配版"}
+
+
+def test_filter_skus_lower_storage_still_works(store: CartStore):
+    tool = CartTool(cart_store=store)
+    matched = tool._filter_skus("我要 12GB+256GB 星芒黑 标准版", _phone_skus())
+    assert len(matched) == 1
+    assert matched[0]["options"]["存储"] == "12GB+256GB"
+
+
+def test_value_match_score_prefers_more_complete_match(store: CartStore):
+    tool = CartTool(cart_store=store)
+    q = "我要 12GB+512GB"
+    # 512 版本命中 12+512=2 个 token，256 版本仅命中 12=1 个 token
+    assert tool._value_match_score("12GB+512GB", q) > tool._value_match_score("12GB+256GB", q)
+
+
+def _pants_skus() -> list[dict]:
+    """优衣库短裤：尺码 M/L/XL 码 × 颜色，字母尺码无数字、中文'码'仅 1 字。"""
+    skus = []
+    for size in ("M码", "L码", "XL码"):
+        for color in ("黑色", "深灰色", "藏蓝色"):
+            skus.append({"sku_id": f"{size}_{color}", "options": {"尺码": size, "颜色": color}})
+    return skus
+
+
+def test_filter_skus_letter_size_resolves_uniquely(store: CartStore):
+    """字母尺码 M码 + 深灰色应唯一命中，不再因尺码识别失败而循环追问。"""
+    tool = CartTool(cart_store=store)
+    matched = tool._filter_skus("我要 M码 深灰色", _pants_skus())
+    assert len(matched) == 1
+    assert matched[0]["options"] == {"尺码": "M码", "颜色": "深灰色"}
+
+
+def test_letter_size_l_does_not_match_xl(store: CartStore):
+    """关键边界：'L码' 不能命中 'XL码'（左边界守卫），否则 XL 句会误判含 L。"""
+    tool = CartTool(cart_store=store)
+    q = "我要 XL码 黑色"
+    assert tool._value_match_score("XL码", q) == 1
+    assert tool._value_match_score("L码", q) == 0
+    matched = tool._filter_skus(q, _pants_skus())
+    assert len(matched) == 1
+    assert matched[0]["options"] == {"尺码": "XL码", "颜色": "黑色"}
+
+
+# --------------------- 全品类精确整值匹配（前端规格卡场景）---------------------
+
+def _beauty_skus() -> list[dict]:
+    """美妆：规格容量 + 适用肤质（共享 'ml' 数字前缀的容量）。"""
+    skus = []
+    for spec in ("30ml", "50ml", "30ml*2"):
+        for skin in ("干性肌肤", "油性肌肤", "中性肌肤"):
+            skus.append({"sku_id": f"{spec}_{skin}", "options": {"规格": spec, "肤质": skin}})
+    return skus
+
+
+def _food_skus() -> list[dict]:
+    """食品：口味 + 规格（净含量共享数字）。"""
+    skus = []
+    for flavor in ("原味", "藤椒味", "海苔味"):
+        for size in ("100g", "100g*3", "500g"):
+            skus.append({"sku_id": f"{flavor}_{size}", "options": {"口味": flavor, "规格": size}})
+    return skus
+
+
+def test_filter_skus_exact_match_phone_all_dims(store: CartStore):
+    """手机：前端卡片发 canonical 全值，三维度精确唯一命中。"""
+    tool = CartTool(cart_store=store)
+    matched = tool._filter_skus("我要 12GB+256GB 青釉绿 标准版", _phone_skus())
+    assert len(matched) == 1
+    assert matched[0]["options"] == {"存储": "12GB+256GB", "颜色": "青釉绿", "版本": "标准版"}
+
+
+def test_filter_skus_exact_match_beauty_multipack(store: CartStore):
+    """美妆：'30ml*2' 不能被 '30ml' 抢（精确取最长值）。"""
+    tool = CartTool(cart_store=store)
+    matched = tool._filter_skus("我要 30ml*2 干性肌肤", _beauty_skus())
+    assert len(matched) == 1
+    assert matched[0]["options"] == {"规格": "30ml*2", "肤质": "干性肌肤"}
+    # 单装也能精确命中
+    single = tool._filter_skus("我要 30ml 油性肌肤", _beauty_skus())
+    assert len(single) == 1
+    assert single[0]["options"] == {"规格": "30ml", "肤质": "油性肌肤"}
+
+
+def test_filter_skus_exact_match_food_multipack(store: CartStore):
+    """食品：'100g*3' 不能被 '100g' 抢，口味+规格精确唯一命中。"""
+    tool = CartTool(cart_store=store)
+    matched = tool._filter_skus("我要 藤椒味 100g*3", _food_skus())
+    assert len(matched) == 1
+    assert matched[0]["options"] == {"口味": "藤椒味", "规格": "100g*3"}
+
+
+def test_filter_skus_fuzzy_fallback_partial_color(store: CartStore):
+    """打字近似说法（只说 '深灰' 不带 '色'）走模糊回退仍能命中。"""
+    tool = CartTool(cart_store=store)
+    matched = tool._filter_skus("M码 深灰", _pants_skus())
+    assert len(matched) == 1
+    assert matched[0]["options"] == {"尺码": "M码", "颜色": "深灰色"}
+
+
+def test_filter_skus_partial_spec_keeps_asking(store: CartStore):
+    """只说了颜色没说尺码 → 仍有多个 SKU，触发继续追问（不静默乱选）。"""
+    tool = CartTool(cart_store=store)
+    matched = tool._filter_skus("深灰色", _pants_skus())
+    assert len(matched) == 3  # M/L/XL 三个深灰色，无法唯一
+
+
+

@@ -1403,11 +1403,16 @@ struct MessageRow: View {
         if let content = parsedStructuredContent {
             return content.questions
         }
-        // 降级：从文本中提取包含问号的段落
+        // 降级：从文本中提取真正像「追问方向」的段落。
+        // 注意：必须排除已作为开场白渲染的段落，否则像 cart 选规格这类单段确定性
+        // 文案（含「想要」字样）会被同一段既渲染成开场白气泡、又渲染成追问胶囊 →
+        // 屏幕上出现一模一样的两个气泡。开场白已经展示过，不再重复当追问。
+        let opening = openingText
         let questions = textParagraphs.filter { paragraph in
-            paragraph.contains("？") || paragraph.contains("?") || 
-            paragraph.contains("需要") || paragraph.contains("想要") ||
-            paragraph.contains("想看") || paragraph.contains("需要")
+            guard paragraph != opening else { return false }
+            return paragraph.contains("？") || paragraph.contains("?") ||
+                paragraph.contains("需要") || paragraph.contains("想要") ||
+                paragraph.contains("想看")
         }
         return questions
     }
@@ -2181,40 +2186,155 @@ struct CameraPicker: UIViewControllerRepresentable {
     }
 }
 
+// MARK: - 商品图缓存（两级：内存解码图 + 磁盘 URLCache）
+//
+// AsyncImage 不做持久缓存——同一商品图在聊天卡片/对比页/详情页/购物车多处重复
+// 出现都会重新下载，冷启动也重下。这里用进程级共享缓存让重复展示秒开：
+//   1. NSCache<NSURL, UIImage>：已解码 UIImage，命中即同步返回，零解码开销。
+//   2. URLCache（大磁盘）：跨冷启动持久化原始字节，未命中内存时走它，避免重新下载。
+// 下载成功后回填两级缓存。所有 ProductRemoteImage 共享同一份，互相复用。
+
+enum ProductImageCache {
+    /// 已解码图的内存缓存。键用 NSURL（绝对串），命中直接渲染。
+    static let memory: NSCache<NSURL, UIImage> = {
+        let cache = NSCache<NSURL, UIImage>()
+        cache.countLimit = 200                     // 最多缓存 200 张解码图
+        cache.totalCostLimit = 80 * 1024 * 1024    // 约 80MB 像素预算
+        return cache
+    }()
+
+    /// 原始字节的磁盘缓存，跨冷启动复用，避免重复下载。
+    static let session: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.urlCache = URLCache(
+            memoryCapacity: 16 * 1024 * 1024,    // 16MB 内存
+            diskCapacity: 256 * 1024 * 1024,     // 256MB 磁盘
+            diskPath: "product_images"
+        )
+        config.requestCachePolicy = .returnCacheDataElseLoad  // 有缓存先用缓存
+        return URLSession(configuration: config)
+    }()
+}
+
+/// 单张商品图的异步加载器：内存命中同步返回，否则走带磁盘缓存的 URLSession 下载。
+@MainActor
+final class ImageLoader: ObservableObject {
+    @Published var image: UIImage?
+    @Published var failed = false
+
+    private var loadingURL: URL?
+    private var task: Task<Void, Never>?
+
+    func load(_ url: URL?) {
+        guard let url else {
+            image = nil
+            failed = false
+            loadingURL = nil
+            return
+        }
+        // 同一 URL 已加载或正在加载：不重复发起。
+        if loadingURL == url, image != nil || task != nil { return }
+
+        // 内存命中：同步赋值，无加载态闪烁。
+        if let cached = ProductImageCache.memory.object(forKey: url as NSURL) {
+            image = cached
+            failed = false
+            loadingURL = url
+            return
+        }
+
+        loadingURL = url
+        failed = false
+        image = nil
+        task?.cancel()
+        task = Task { [weak self] in
+            let decoded = await Self.fetch(url)
+            if Task.isCancelled { return }
+            guard let self, self.loadingURL == url else { return }
+            if let decoded {
+                ProductImageCache.memory.setObject(
+                    decoded,
+                    forKey: url as NSURL,
+                    cost: Self.cost(of: decoded)
+                )
+                self.image = decoded
+            } else {
+                self.failed = true
+            }
+            self.task = nil
+        }
+    }
+
+    /// 下载并在后台线程解码（解码很耗时，放离主线程）。
+    private static func fetch(_ url: URL) async -> UIImage? {
+        do {
+            let (data, _) = try await ProductImageCache.session.data(from: url)
+            return UIImage(data: data)?.decoded()
+        } catch {
+            return nil
+        }
+    }
+
+    private static func cost(of image: UIImage) -> Int {
+        let size = image.size
+        let scale = image.scale
+        return Int(size.width * scale * size.height * scale * 4)  // RGBA 字节数
+    }
+}
+
+private extension UIImage {
+    /// 预解码：把图绘制一遍强制 CoreGraphics 解码，避免首次上屏时主线程卡顿。
+    func decoded() -> UIImage {
+        guard let cgImage else { return self }
+        let format = UIGraphicsImageRendererFormat.preferred()
+        format.scale = scale
+        format.opaque = false
+        let renderer = UIGraphicsImageRenderer(size: size, format: format)
+        return renderer.image { _ in
+            UIImage(cgImage: cgImage, scale: scale, orientation: imageOrientation)
+                .draw(in: CGRect(origin: .zero, size: size))
+        }
+    }
+}
+
 struct ProductRemoteImage: View {
     let url: URL?
     let cornerRadius: CGFloat
     let placeholderIcon: String
     var contentMode: ContentMode = .fill
 
+    @StateObject private var loader = ImageLoader()
+
     var body: some View {
-        AsyncImage(url: url, transaction: Transaction(animation: .easeOut(duration: 0.3))) { phase in
-            switch phase {
-            case .success(let image):
-                if contentMode == .fit {
-                    image
-                        .resizable()
-                        .scaledToFit()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .background(Color.white)
-                        .transition(.opacity)
-                } else {
-                    image
-                        .resizable()
-                        .scaledToFill()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .clipped()
-                        .transition(.opacity)
-                }
-            case .empty:
-                placeholderBox { ProgressView().tint(AppTheme.primary) }
-            case .failure:
-                placeholderBox { placeholderIconView }
-            @unknown default:
-                placeholderBox { placeholderIconView }
+        content
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .onAppear { loader.load(url) }
+            .onChange(of: url) { _, newURL in loader.load(newURL) }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if let image = loader.image {
+            if contentMode == .fit {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color.white)
+                    .transition(.opacity)
+            } else {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
+                    .transition(.opacity)
             }
+        } else if loader.failed {
+            placeholderBox { placeholderIconView }
+        } else {
+            placeholderBox { ProgressView().tint(AppTheme.primary) }
         }
-        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
     }
 
     @ViewBuilder
