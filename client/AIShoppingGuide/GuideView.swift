@@ -86,17 +86,18 @@ struct GuideView: View {
 
                 composerStack
                     .padding(.horizontal, 16)
-                    .padding(.bottom, composerBottomPadding)
                     .background(
                         GeometryReader { geometry in
                             Color.clear.preference(key: ComposerHeightPreferenceKey.self, value: geometry.size.height)
                         }
                     )
+                    .padding(.bottom, composerBottomPadding)
                     .zIndex(1)
             }
             .background(AppTheme.background)
             .onPreferenceChange(ComposerHeightPreferenceKey.self) { height in
                 guard height > 0 else { return }
+                guard abs(composerHeight - height) > 0.5 else { return }
                 composerHeight = height
             }
             .sheet(isPresented: $showHistory) {
@@ -207,6 +208,7 @@ struct GuideView: View {
                     .padding(.trailing, 18)
                     .padding(.bottom, jumpButtonBottomPadding)
                     .transition(.scale(scale: 0.92).combined(with: .opacity))
+                    .zIndex(2)
                 }
             }
         }
@@ -289,21 +291,47 @@ struct GuideView: View {
         )
     }
 
+    @ViewBuilder
     private func jumpToLatestButton(action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 6) {
-                Image(systemName: "arrow.down")
-                    .font(.system(size: 13, weight: .bold))
-                Text("最新")
-                    .font(.caption.weight(.semibold))
+        let label = Image(systemName: "arrow.down")
+            .font(.system(size: 18, weight: .bold))
+            .foregroundStyle(AppTheme.primary)
+            .frame(width: 52, height: 52)
+
+        Group {
+            if #available(iOS 26.0, *) {
+                label
+                    .glassEffect(.regular.interactive(), in: Circle())
+            } else {
+                label
+                    .background(.regularMaterial, in: Circle())
+                    .background(AppTheme.liquidOverlay, in: Circle())
+                    .overlay(
+                        Circle()
+                            .stroke(
+                                LinearGradient(
+                                    colors: [
+                                        AppTheme.liquidStrokeStrong,
+                                        AppTheme.liquidStrokeSoft,
+                                        AppTheme.primary.opacity(0.18)
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                ),
+                                lineWidth: 1
+                            )
+                    )
             }
-            .foregroundStyle(.white)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 9)
-            .background(AppTheme.primary, in: Capsule())
-            .shadow(color: AppTheme.primary.opacity(0.28), radius: 12, y: 5)
         }
-        .buttonStyle(.plain)
+        .shadow(color: AppTheme.shadow, radius: 18, y: 10)
+        .shadow(color: AppTheme.primary.opacity(0.14), radius: 14, y: 4)
+        .contentShape(Circle())
+        .highPriorityGesture(
+            TapGesture()
+                .onEnded(action)
+        )
+        .accessibilityLabel("跳到最新消息")
+        .accessibilityAddTraits(.isButton)
     }
 
     /// 空态：分类入口色块 + 动态热门搜索。仅在当前会话还没有任何消息时显示，
@@ -1005,10 +1033,12 @@ struct GuideView: View {
     }
 
     private func jumpToLatest(_ proxy: ScrollViewProxy) {
+        pendingAutoFollowWorkItem?.cancel()
         shouldHoldLatestQuestionAnchor = false
         isAutoFollowEnabled = true
         shouldShowJumpToLatest = false
-        scheduleAutoFollowScroll(proxy, animated: true, delay: 0)
+        scrollToLatestMessage(proxy, animated: true)
+        scheduleAutoFollowScroll(proxy, animated: true, delay: 0.12)
     }
 
     private func scrollToEmptyState(_ proxy: ScrollViewProxy) {
@@ -1039,7 +1069,7 @@ struct GuideView: View {
         let anchor = latestContentAnchor
 
         if animated {
-            withAnimation(.easeOut(duration: 0.22)) {
+            withAnimation(.interactiveSpring(response: 0.32, dampingFraction: 0.86, blendDuration: 0.08)) {
                 proxy.scrollTo(targetID, anchor: anchor)
             }
         } else {

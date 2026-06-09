@@ -44,7 +44,7 @@ struct AppTheme {
     static let bottomTabBarHeight: CGFloat = 72
     static let bottomTabBarBottomPadding: CGFloat = -14
     static let goldenRatioMinor: CGFloat = 0.382
-    static let guideComposerTabGap = bottomTabBarHeight * goldenRatioMinor
+    static let guideComposerTabGap: CGFloat = 16
     static let guideComposerBottomPadding = bottomTabBarHeight + bottomTabBarBottomPadding + guideComposerTabGap
     static let cartCheckoutTabGap: CGFloat = 22
     static let cartCheckoutBottomPadding = bottomTabBarHeight + bottomTabBarBottomPadding + cartCheckoutTabGap
