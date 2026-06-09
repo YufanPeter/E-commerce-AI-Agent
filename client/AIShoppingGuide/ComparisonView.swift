@@ -141,7 +141,7 @@ struct ComparisonView: View {
 
     private func recommendationCard(_ text: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label("选购建议", systemImage: "sparkles")
+            Label("选购建议", systemImage: "checkmark.seal")
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(AppTheme.primary)
             Text(text)

@@ -2,47 +2,48 @@ import SwiftUI
 import UIKit
 
 struct AppTheme {
-    static let primary = Color.dynamic(lightHex: "0F8F8C", darkHex: "5EEAD4")
-    static let secondary = Color.dynamic(lightHex: "E6F5F2", darkHex: "122E30")
-    static let softBlue = Color.dynamic(lightHex: "EDF5FF", darkHex: "142536")
-    static let softPurple = Color.dynamic(lightHex: "EAF7F3", darkHex: "142B2D")
-    static let background = Color.dynamic(lightHex: "F5F7F8", darkHex: "0D1113")
-    static let surface = Color.dynamic(lightHex: "FEFFFF", darkHex: "171D20")
-    static let textPrimary = Color.dynamic(lightHex: "182124", darkHex: "F2F7F7")
-    static let textSecondary = Color.dynamic(lightHex: "627174", darkHex: "9FB0B3")
-    static let success = Color.dynamic(lightHex: "22C55E", darkHex: "4ADE80")
-    static let error = Color.dynamic(lightHex: "EF4444", darkHex: "FF6B6B")
+    // 白色为主 + 一点米色点缀；陶土色强调，去掉科技感的青绿与发光。
+    static let primary = Color.dynamic(lightHex: "CE8763", darkHex: "EBA886")      // 浅陶土/暖赭强调色
+    static let secondary = Color.dynamic(lightHex: "F5EFE7", darkHex: "2A231D")     // 浅米填充
+    static let softBlue = Color.dynamic(lightHex: "F6F0E8", darkHex: "211C17")      // 用户气泡（浅米）
+    static let softPurple = Color.dynamic(lightHex: "F4EEE5", darkHex: "241E18")    // 芯片/规格填充（浅米）
+    static let background = Color.dynamic(lightHex: "FBFAF7", darkHex: "13110F")     // 近白·极淡米底
+    static let surface = Color.dynamic(lightHex: "FFFFFF", darkHex: "1E1A16")        // 卡片表面（纯白）
+    static let textPrimary = Color.dynamic(lightHex: "2B2520", darkHex: "F2ECE4")    // 暖近黑
+    static let textSecondary = Color.dynamic(lightHex: "8A7E72", darkHex: "A89C8E")  // 暖灰
+    static let success = Color.dynamic(lightHex: "3F9F6B", darkHex: "5BD08C")
+    static let error = Color.dynamic(lightHex: "D2543E", darkHex: "F0846E")
     static let border = Color.dynamic(
-        light: UIColor(hex: "123133").withAlphaComponent(0.09),
-        dark: UIColor.white.withAlphaComponent(0.13)
+        light: UIColor(hex: "2B2520").withAlphaComponent(0.08),
+        dark: UIColor.white.withAlphaComponent(0.11)
     )
     static let liquidOverlay = Color.dynamic(
-        light: UIColor.white.withAlphaComponent(0.28),
-        dark: UIColor.white.withAlphaComponent(0.07)
+        light: UIColor.white.withAlphaComponent(0.10),
+        dark: UIColor.white.withAlphaComponent(0.03)
     )
     static let liquidStrokeStrong = Color.dynamic(
-        light: UIColor.white.withAlphaComponent(0.88),
-        dark: UIColor.white.withAlphaComponent(0.22)
+        light: UIColor(hex: "2B2520").withAlphaComponent(0.10),
+        dark: UIColor.white.withAlphaComponent(0.12)
     )
     static let liquidStrokeSoft = Color.dynamic(
-        light: UIColor.white.withAlphaComponent(0.26),
-        dark: UIColor.white.withAlphaComponent(0.08)
+        light: UIColor(hex: "2B2520").withAlphaComponent(0.05),
+        dark: UIColor.white.withAlphaComponent(0.05)
     )
     static let tabBarSurface = Color.dynamic(
-        light: UIColor.white.withAlphaComponent(0.82),
-        dark: UIColor(hex: "172024").withAlphaComponent(0.88)
+        light: UIColor.white.withAlphaComponent(0.96),
+        dark: UIColor(hex: "1D1916").withAlphaComponent(0.96)
     )
     static let tabSelectionSurface = Color.dynamic(
-        light: UIColor.white.withAlphaComponent(0.92),
-        dark: UIColor(hex: "223035").withAlphaComponent(0.92)
+        light: UIColor(hex: "F2E8DE"),
+        dark: UIColor(hex: "2A241E")
     )
     static let shadow = Color.dynamic(
-        light: UIColor(hex: "092C2E").withAlphaComponent(0.10),
-        dark: UIColor.black.withAlphaComponent(0.46)
+        light: UIColor(hex: "2B1E12").withAlphaComponent(0.05),
+        dark: UIColor.black.withAlphaComponent(0.24)
     )
     static let accentGlow = Color.dynamic(
-        light: UIColor(hex: "0F8F8C").withAlphaComponent(0.14),
-        dark: UIColor(hex: "5EEAD4").withAlphaComponent(0.12)
+        light: UIColor(hex: "C2613C").withAlphaComponent(0.03),
+        dark: UIColor(hex: "E89A72").withAlphaComponent(0.04)
     )
 
     static let bottomTabBarHeight: CGFloat = 72
@@ -111,7 +112,7 @@ struct SurfacePanelModifier: ViewModifier {
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .stroke(AppTheme.border, lineWidth: 1)
             )
-            .shadow(color: AppTheme.shadow.opacity(0.42), radius: 14, y: 7)
+            .shadow(color: AppTheme.shadow.opacity(0.45), radius: 5, y: 2)
     }
 }
 
@@ -134,25 +135,12 @@ extension View {
     }
 
     func floatingLiquidPanel(cornerRadius: CGFloat = 28) -> some View {
-        background(.regularMaterial, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            .background(AppTheme.liquidOverlay, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        background(AppTheme.surface, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .stroke(
-                        LinearGradient(
-                            colors: [
-                                AppTheme.liquidStrokeStrong,
-                                AppTheme.liquidStrokeSoft,
-                                AppTheme.primary.opacity(0.14)
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        ),
-                        lineWidth: 1
-                    )
+                    .stroke(AppTheme.border, lineWidth: 1)
             )
-            .shadow(color: AppTheme.shadow.opacity(0.72), radius: 18, y: 9)
-            .shadow(color: AppTheme.accentGlow, radius: 14, y: 2)
+            .shadow(color: AppTheme.shadow.opacity(0.4), radius: 6, y: 2)
     }
 }
 

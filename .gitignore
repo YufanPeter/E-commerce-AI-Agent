@@ -67,3 +67,6 @@ Thumbs.db
 
 # Claude local files
 .claude/
+# Downloaded agent skills (taste-skill)
+.agents/
+skills-lock.json

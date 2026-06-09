@@ -92,7 +92,7 @@ struct ProductDetailView: View {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 15)
             .background(AppTheme.primary, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .shadow(color: AppTheme.accentGlow, radius: 14, y: 5)
+            .shadow(color: AppTheme.shadow.opacity(0.45), radius: 7, y: 2)
         }
         .buttonStyle(.tactile)
         .padding(.horizontal, 20)
@@ -101,11 +101,11 @@ struct ProductDetailView: View {
 
     private var detailBottomScrim: some View {
         Rectangle()
-            .fill(.ultraThinMaterial)
+            .fill(AppTheme.surface.opacity(0.94))
             .frame(height: bottomOverlayHeight)
             .mask(
                 LinearGradient(
-                    colors: [.clear, .black.opacity(0.42), .black.opacity(0.82)],
+                    colors: [.clear, .black.opacity(0.22), .black.opacity(0.58)],
                     startPoint: .top,
                     endPoint: .bottom
                 )
@@ -134,7 +134,7 @@ struct ProductDetailView: View {
             productInfo
 
             if !product.reason.isEmpty {
-                productTextBlock(title: "推荐依据", text: product.reason, icon: "sparkles")
+                productTextBlock(title: "推荐依据", text: product.reason, icon: "lightbulb")
             }
 
             if !product.details.isEmpty {

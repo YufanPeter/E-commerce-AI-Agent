@@ -26,7 +26,7 @@ struct PreferenceView: View {
     private var profileCard: some View {
         HStack(spacing: 14) {
             Circle()
-                .fill(LinearGradient(colors: [AppTheme.primary, Color(hex: "2563EB")], startPoint: .topLeading, endPoint: .bottomTrailing))
+                .fill(AppTheme.secondary)
                 .frame(width: 62, height: 62)
                 .overlay(Text("L").font(.title2.bold()).foregroundStyle(.white))
             VStack(alignment: .leading, spacing: 4) {
@@ -87,10 +87,11 @@ struct FlowTags: View {
             ForEach(tags, id: \.self) { tag in
                 Text(tag)
                     .font(.subheadline.weight(.medium))
-                    .foregroundStyle(AppTheme.primary)
+                    .foregroundStyle(AppTheme.textPrimary)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 10)
-                    .background(AppTheme.secondary.opacity(0.78), in: Capsule())
+                    .background(AppTheme.secondary.opacity(0.52), in: Capsule())
+                    .overlay(Capsule().stroke(AppTheme.border, lineWidth: 1))
             }
         }
     }

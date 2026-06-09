@@ -168,7 +168,7 @@ struct GuideView: View {
                 Text("CartPilot")
                     .font(.system(size: 26, weight: .bold, design: .rounded))
                     .foregroundStyle(AppTheme.textPrimary)
-                Text("智能导购 · 实时推荐")
+                Text("购物导购")
                     .font(.caption.weight(.medium))
                     .foregroundStyle(AppTheme.textSecondary)
             }
@@ -310,33 +310,13 @@ struct GuideView: View {
             .foregroundStyle(AppTheme.primary)
             .frame(width: 52, height: 52)
 
-        Group {
-            if #available(iOS 26.0, *) {
-                label
-                    .glassEffect(.regular.interactive(), in: Circle())
-            } else {
-                label
-                    .background(.regularMaterial, in: Circle())
-                    .background(AppTheme.liquidOverlay, in: Circle())
-                    .overlay(
-                        Circle()
-                            .stroke(
-                                LinearGradient(
-                                    colors: [
-                                        AppTheme.liquidStrokeStrong,
-                                        AppTheme.liquidStrokeSoft,
-                                        AppTheme.primary.opacity(0.18)
-                                    ],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                ),
-                                lineWidth: 1
-                            )
-                    )
-            }
-        }
-        .shadow(color: AppTheme.shadow, radius: 18, y: 10)
-        .shadow(color: AppTheme.primary.opacity(0.14), radius: 14, y: 4)
+        label
+            .background(AppTheme.surface, in: Circle())
+            .overlay(
+                Circle()
+                    .stroke(AppTheme.border, lineWidth: 1)
+            )
+        .shadow(color: AppTheme.shadow.opacity(0.5), radius: 8, y: 3)
         .contentShape(Circle())
         .highPriorityGesture(
             TapGesture()
@@ -346,174 +326,43 @@ struct GuideView: View {
         .accessibilityAddTraits(.isButton)
     }
 
-    /// 空态：分类入口色块 + 动态热门搜索。仅在当前会话还没有任何消息时显示，
+    /// 空态：一句安静的问候 + 朴素的分类入口。仅在当前会话还没有任何消息时显示，
     /// 数据来自后端 /suggestions（真实库存），点哪条都一定有结果；用户发起检索后随消息出现而隐去。
     private var emptyState: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            guideIntroPanel
-            categorySection
-
-            if !displayedHotSearches.isEmpty {
-                hotSearchSection
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var guideIntroPanel: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .top, spacing: 14) {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(AppTheme.primary)
-                    .frame(width: 44, height: 44)
-                    .background(AppTheme.secondary, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("想买点什么？")
-                        .font(.system(size: 28, weight: .bold, design: .rounded))
-                        .foregroundStyle(AppTheme.textPrimary)
-                    Text("挑个分类逛逛，或直接说说你的需求")
-                        .font(.subheadline)
-                        .foregroundStyle(AppTheme.textSecondary)
-                }
+        VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("想找点什么")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(AppTheme.textPrimary)
+                Text("直接说需求，或选个分类")
+                    .font(.subheadline)
+                    .foregroundStyle(AppTheme.textSecondary)
             }
 
-            HStack(spacing: 8) {
-                intentPill("预算偏好")
-                intentPill("拍照线索")
-                intentPill("对比决策")
-            }
-        }
-        .padding(18)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            LinearGradient(
-                colors: [AppTheme.surface, AppTheme.softBlue.opacity(0.72)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            ),
-            in: RoundedRectangle(cornerRadius: 26, style: .continuous)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 26, style: .continuous)
-                .stroke(AppTheme.border, lineWidth: 1)
-        )
-    }
-
-    private var categorySection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("逛分类")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(AppTheme.textPrimary)
-
-            LazyVGrid(
-                columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)],
-                spacing: 12
-            ) {
+            FlowLayout(spacing: 10) {
                 ForEach(displayedCategories) { category in
                     Button {
                         send(category.query)
                     } label: {
-                        categoryCard(category)
+                        HStack(spacing: 6) {
+                            Image(systemName: category.icon)
+                                .font(.system(size: 14, weight: .regular))
+                                .foregroundStyle(AppTheme.textSecondary)
+                            Text(category.name)
+                                .font(.subheadline)
+                                .foregroundStyle(AppTheme.textPrimary)
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 9)
+                        .background(AppTheme.surface, in: Capsule())
+                        .overlay(Capsule().stroke(AppTheme.border, lineWidth: 1))
                     }
                     .buttonStyle(.tactile)
                 }
             }
         }
-        .padding(16)
-        .surfacePanel(cornerRadius: 22)
-    }
-
-    private var hotSearchSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Label("大家都在搜", systemImage: "flame.fill")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(AppTheme.textPrimary)
-                    .labelStyle(.titleAndIcon)
-                    .symbolRenderingMode(.multicolor)
-                Spacer()
-                Button {
-                    Task { await refreshHotSearches() }
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "arrow.triangle.2.circlepath")
-                            .rotationEffect(.degrees(isRefreshingHot ? 360 : 0))
-                            .animation(isRefreshingHot ? .linear(duration: 0.6) : .default, value: isRefreshingHot)
-                        Text("换一批")
-                    }
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(AppTheme.textSecondary)
-                }
-                .buttonStyle(.tactile)
-                .disabled(isRefreshingHot)
-            }
-
-            FlowLayout(spacing: 8) {
-                ForEach(displayedHotSearches, id: \.self) { term in
-                    Button {
-                        send(term)
-                    } label: {
-                        Text(term)
-                            .font(.subheadline.weight(.medium))
-                            .foregroundStyle(AppTheme.textPrimary)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 9)
-                            .background(AppTheme.secondary.opacity(0.72), in: Capsule())
-                            .overlay(Capsule().stroke(AppTheme.border, lineWidth: 1))
-                    }
-                    .buttonStyle(.tactile)
-                }
-            }
-        }
-        .padding(16)
-        .surfacePanel(cornerRadius: 22)
-    }
-
-    private func intentPill(_ title: String) -> some View {
-        Text(title)
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(AppTheme.primary)
-            .lineLimit(1)
-            .minimumScaleFactor(0.82)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            .background(AppTheme.secondary.opacity(0.82), in: Capsule())
-    }
-
-    /// 单个分类色块：图标 + 名称 + 渐变底色。
-    private func categoryCard(_ category: CategoryEntry) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: category.icon)
-                .font(.system(size: 20, weight: .semibold))
-                .foregroundStyle(.white)
-                .frame(width: 40, height: 40)
-                .background(category.tint, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            VStack(alignment: .leading, spacing: 2) {
-                Text(category.name)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(AppTheme.textPrimary)
-                Text("逛一逛")
-                    .font(.caption2)
-                    .foregroundStyle(AppTheme.textSecondary)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            LinearGradient(
-                colors: [category.tint.opacity(0.16), AppTheme.surface.opacity(0.72)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            ),
-            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(category.tint.opacity(0.18), lineWidth: 1)
-        )
+        .padding(.top, 6)
     }
 
     /// 展示用分类：优先用后端返回，未就绪时退回默认四类，保证空态永不空白。
@@ -658,7 +507,7 @@ struct GuideView: View {
 
     /// 输入框占位文案：挂了图片时引导用户配一句话（如"找个相似但平价的"）。
     private var composerPlaceholder: String {
-        pendingImageData != nil ? "想找相似的？说说要求，比如「平价同款」…" : "想买点什么？和我聊聊…"
+        pendingImageData != nil ? "补充需求，例如「更平价」「同品牌」" : "搜索商品、品牌或需求"
     }
 
     private var isKeyboardPresented: Bool {
@@ -736,7 +585,7 @@ struct GuideView: View {
         shouldHoldLatestQuestionAnchor = true
         pendingQuestionAnchorID = userMessage.id
         messages.append(userMessage)
-        let placeholder = imageData != nil ? "正在识别图片" : "正在理解你的需求"
+        let placeholder = imageData != nil ? "正在识别图片并匹配商品" : "正在为你匹配商品"
         messages.append(ChatMessage(sender: .ai, text: placeholder, state: .understanding))
         runAgent(for: query, imageBase64: imageData?.base64EncodedString())
     }
@@ -748,7 +597,7 @@ struct GuideView: View {
         isAutoFollowEnabled = true
         shouldHoldLatestQuestionAnchor = false
         shouldShowJumpToLatest = false
-        messages.append(ChatMessage(sender: .ai, text: "正在重新理解你的需求", state: .understanding))
+        messages.append(ChatMessage(sender: .ai, text: "正在重新匹配商品", state: .understanding))
         runAgent(for: query)
     }
 
@@ -800,7 +649,7 @@ struct GuideView: View {
             var visibleNarrative = ""
             var isStructuredNarrative = false
             var hydrated: [Product] = []
-            var statusText = imageBase64 == nil ? "正在理解你的需求" : "正在识别图片"
+            var statusText = imageBase64 == nil ? "正在匹配商品" : "正在识别图片并匹配商品"
 
             do {
                 let request = AgentRequestPayload(
@@ -1542,7 +1391,7 @@ struct MessageRow: View {
                         }
                     }
                     
-                    // 3. 追问方向
+                    // 3. 下一步操作
                     if !followUpQuestions.isEmpty {
                         VStack(alignment: .leading, spacing: 6) {
                             ForEach(followUpQuestions, id: \.self) { question in
@@ -1555,7 +1404,8 @@ struct MessageRow: View {
                                         .foregroundStyle(AppTheme.primary)
                                         .padding(.horizontal, 14)
                                         .padding(.vertical, 8)
-                                        .background(AppTheme.softPurple.opacity(0.5), in: Capsule())
+                                        .background(AppTheme.secondary.opacity(0.7), in: Capsule())
+                                        .overlay(Capsule().stroke(AppTheme.border, lineWidth: 1))
                                 }
                                 .buttonStyle(.tactile)
                             }
@@ -1605,16 +1455,10 @@ struct MessageRow: View {
                             }
                             .padding(.horizontal, 24)
                             .padding(.vertical, 14)
-                            .background(
-                                LinearGradient(
-                                    colors: [AppTheme.primary, AppTheme.primary.opacity(0.8)],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                )
-                            )
+                            .background(AppTheme.primary)
                             .foregroundColor(.white)
                             .cornerRadius(14)
-                            .shadow(color: AppTheme.primary.opacity(0.3), radius: 6, x: 0, y: 3)
+                            .shadow(color: AppTheme.primary.opacity(0.22), radius: 6, x: 0, y: 3)
                         }
                         
                         Text("点击上方按钮重新搜索")
@@ -2082,20 +1926,22 @@ struct CategoryEntry: Identifiable {
 
     var icon: String {
         switch name {
+        // 统一描边线条风格的简约图标。
         case "数码电子": return "laptopcomputer"
-        case "服饰运动": return "tshirt.fill"
-        case "美妆护肤": return "sparkles"
-        case "食品饮料", "食品生活": return "cup.and.saucer.fill"
-        default: return "bag.fill"
+        case "服饰运动": return "figure.run"
+        case "美妆护肤": return "drop"
+        case "食品饮料", "食品生活": return "cup.and.saucer"
+        default: return "bag"
         }
     }
 
     var tint: Color {
         switch name {
-        case "数码电子": return Color(hex: "3B82F6")
-        case "服饰运动": return Color(hex: "10B981")
-        case "美妆护肤": return Color(hex: "EC4899")
-        case "食品饮料", "食品生活": return Color(hex: "F59E0B")
+        // 低饱和大地色，与陶土主色和谐，去掉高饱和 AI 亮色。
+        case "数码电子": return Color(hex: "6E89A6")   // 雾蓝
+        case "服饰运动": return Color(hex: "7E9B6B")   // 橄榄绿
+        case "美妆护肤": return Color(hex: "C77B82")   // 豆沙粉
+        case "食品饮料", "食品生活": return Color(hex: "D69A4C")   // 芥末黄
         default: return AppTheme.primary
         }
     }

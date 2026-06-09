@@ -144,7 +144,7 @@ struct CartView: View {
         .padding(.horizontal, 20)
         .padding(.top, 12)
         .padding(.bottom, 12)
-        .floatingLiquidPanel(cornerRadius: 26)
+        .surfacePanel(cornerRadius: 24)
         .padding(.horizontal, 16)
         .padding(.bottom, AppTheme.cartCheckoutBottomPadding)
     }
@@ -159,18 +159,7 @@ struct CartView: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity)
-        .background(
-            LinearGradient(
-                colors: [AppTheme.surface, AppTheme.secondary.opacity(0.56)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            ),
-            in: RoundedRectangle(cornerRadius: 22, style: .continuous)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .stroke(AppTheme.border, lineWidth: 1)
-        )
+        .surfacePanel(cornerRadius: 22)
     }
 
     private func cartOverviewMetric(title: String, value: String) -> some View {
@@ -610,7 +599,7 @@ private struct CartSpecificationEditorSheet: View {
                 .padding(.horizontal, 20)
                 .padding(.top, 12)
                 .padding(.bottom, 12)
-                .background(.regularMaterial)
+                .background(AppTheme.surface)
             }
             .navigationTitle("修改规格")
             .navigationBarTitleDisplayMode(.inline)

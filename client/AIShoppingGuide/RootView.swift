@@ -8,7 +8,7 @@ enum AppTab: String, CaseIterable {
 
     var icon: String {
         switch self {
-        case .guide: return "sparkles"
+        case .guide: return "bag"
         case .cart: return "cart"
         case .preference: return "person"
         }
@@ -121,11 +121,11 @@ struct RootView: View {
 
             // 底部模糊遮罩：卡片滑到导航栏区域时自然淡出，保证导航栏清晰可读
             Rectangle()
-                .fill(.ultraThinMaterial)
+                .fill(AppTheme.surface.opacity(0.94))
                 .frame(height: AppTheme.bottomTabBarHeight + 64)
                 .mask(
                     LinearGradient(
-                        colors: [.clear, .black.opacity(0.6), .black, .black],
+                        colors: [.clear, .black.opacity(0.28), .black.opacity(0.7), .black],
                         startPoint: .top,
                         endPoint: .bottom
                     )
