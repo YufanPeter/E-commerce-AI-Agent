@@ -535,6 +535,25 @@ class TestComposerStreaming:
         assert "payload:" in messages[-1]["content"]
         assert "hint: h" in messages[-1]["content"]
 
+    def test_product_detail_build_messages_uses_detail_prompt_and_evidence(self):
+        from agent.composer import _build_messages
+
+        sr = ToolResult(
+            tool_name="product_detail",
+            payload={
+                "query": "这款评价怎么样",
+                "focus_aspect": "reviews",
+                "product": {"product_id": "p1", "title": "T"},
+                "evidence": [{"source_type": "user_review", "text": "评价很好"}],
+            },
+            composer_hint="基于评价回答",
+        )
+        messages = _build_messages(sr)
+        assert "单品导购问答" in messages[0]["content"]
+        assert "不要输出 JSON" in messages[0]["content"]
+        assert "评价很好" in messages[-1]["content"]
+        assert "items" not in messages[0]["content"]
+
 
 # ---------- Orchestrator: 主流程 + 降级（非流式） ----------
 

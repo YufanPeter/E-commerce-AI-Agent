@@ -44,6 +44,19 @@ SYSTEM_PROMPT = """你是一位友好、专业的电商导购助手，说话像�
 - JSON 格式必须严格正确，不要包含任何额外文字；输出首字符必须是 {，末字符必须是 }。"""
 
 
+PRODUCT_DETAIL_SYSTEM_PROMPT = """你是一位专业的单品导购问答助手。用户已经指向了某一款商品，你的任务是基于 payload.product 和 payload.evidence 回答用户追问。
+
+严格规则：
+- 只输出自然中文，不要输出 JSON。
+- 回答控制在 3-5 句，直接回应用户问点。
+- 必须基于 payload.evidence 和 payload.product，不要编造没有证据的信息。
+- 如果用户问评价/口碑，优先总结 user_review 证据里的共性。
+- 如果用户问差评/缺点，必须优先说明负面证据；如果负面证据不足，要明确说目前证据有限。
+- 如果用户问敏感肌/安全性，不要做医疗承诺，只能说“从现有评价/FAQ 看”。
+- 可以适度引用一两条证据来源，例如“有用户提到…”。
+- 证据不足时要坦诚，不要硬夸。"""
+
+
 # Few-shot 示例：用真实对话演示"导购口吻"远比文字规则有效。
 # 模型会直接模仿 assistant 的归并表达、场景化卖点和总括开场。
 # 注意：示例里的商品/价格是虚构的演示数据，仅用于教格式，不会进入真实回答。
@@ -113,6 +126,12 @@ def _trim_payload_for_llm(payload: dict[str, Any]) -> dict[str, Any]:
     trimmed: dict[str, Any] = {
         "query": payload.get("query"),
     }
+    if payload.get("product"):
+        trimmed["product"] = payload.get("product")
+    if payload.get("focus_aspect"):
+        trimmed["focus_aspect"] = payload.get("focus_aspect")
+    if payload.get("evidence"):
+        trimmed["evidence"] = payload.get("evidence")
     contextual = payload.get("contextual_search")
     if isinstance(contextual, dict):
         trimmed["contextual_search"] = {
@@ -161,9 +180,15 @@ def _build_messages(tool_result: ToolResult) -> list[dict[str, str]]:
     ]
     if tool_result.composer_hint:
         user_msg_parts.append(f"hint: {tool_result.composer_hint}")
+    system_prompt = (
+        PRODUCT_DETAIL_SYSTEM_PROMPT
+        if tool_result.tool_name == "product_detail"
+        else SYSTEM_PROMPT
+    )
+    few_shot = [] if tool_result.tool_name == "product_detail" else _FEW_SHOT
     return [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        *_FEW_SHOT,
+        {"role": "system", "content": system_prompt},
+        *few_shot,
         {"role": "user", "content": "\n".join(user_msg_parts)},
     ]
 
@@ -210,6 +235,12 @@ def _normalize_json_response(text: str) -> str:
 
 def _fallback_json_response(tool_result: ToolResult) -> str:
     payload = tool_result.payload or {}
+    if tool_result.tool_name == "product_detail":
+        product = payload.get("product") or {}
+        title = product.get("title") or "这款商品"
+        evidence_note = "现有证据有限，"
+        return f"{evidence_note}{title}可以先参考商品描述、问答和用户评价再判断；如果你想看评价、差评或使用建议，可以继续具体问我。"
+
     hits = payload.get("products") or payload.get("hits") or []
     items = []
     for hit in hits[:5]:
