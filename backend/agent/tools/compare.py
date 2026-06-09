@@ -27,6 +27,7 @@ from typing import Any
 from agent.comparison import build_comparison
 from agent.session import AgentSession
 from agent.tools.base import ToolResult
+from agent.tools.resolve import resolve_many
 from agent.tools.reference import resolve_by_name, resolve_indices
 from store.product_store import ProductStore
 
@@ -69,6 +70,13 @@ class CompareTool:
             product_ids = [pid for pid in explicit_ids][:_MAX_COMPARE]
         else:
             product_ids = self._resolve_targets(query, last_hits)
+            # 规则定位不到 2 款 → 用共享分层 resolver 的 LLM 语义兼底再试一次
+            # （如「对比华为耳机和小米手机」这类口语品类词）。只有凑足 2 款才采纳，
+            # 避免把“只点名了一款”的场景幻出第二款（那是故意的反问）。
+            if len(product_ids) < 2:
+                llm_ids = self._resolve_targets_llm(query, last_hits)
+                if len(llm_ids) >= 2:
+                    product_ids = llm_ids
 
         if len(product_ids) < 2:
             # 定位不到 2 款 → 反问。记下「正在对比追问」，下一轮用户回答
@@ -145,6 +153,36 @@ class CompareTool:
 
         ordered: list[str] = []
         for i in indices[:_MAX_COMPARE]:
+            pid = last_hits[i]["product_id"]
+            if pid not in ordered:
+                ordered.append(pid)
+        return ordered
+
+    def _resolve_targets_llm(
+        self, query: str, last_hits: list[dict[str, Any]]
+    ) -> list[str]:
+        """规则定位不到 2 款时的 LLM 语义兜底：把 last_hits 补上品类/子品类后
+        交给共享分层 resolver（序号→名称→LLM）挑出最多 2 款。
+
+        让"对比华为耳机和小米手机"这类口语品类词也能命中对应商品；LLM 不可用
+        时返回空列表，调用方据此继续走反问。"""
+        enriched: list[dict[str, Any]] = []
+        for hit in last_hits:
+            item = dict(hit)
+            try:
+                detail = self._store.get_product_detail(hit["product_id"])
+            except Exception:  # noqa: BLE001 - 富化失败不影响主流程
+                detail = None
+            if detail is not None:
+                item.setdefault("title", detail.title)
+                item["brand"] = detail.brand
+                item["category"] = detail.category
+                item["sub_category"] = detail.sub_category
+            enriched.append(item)
+
+        picked = resolve_many(query, enriched, k=_MAX_COMPARE)
+        ordered: list[str] = []
+        for i in picked:
             pid = last_hits[i]["product_id"]
             if pid not in ordered:
                 ordered.append(pid)

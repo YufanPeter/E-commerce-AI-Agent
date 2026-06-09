@@ -36,6 +36,7 @@ from typing import Any
 
 from agent.session import AgentSession
 from agent.tools.base import ToolResult
+from agent.tools.resolve import resolve_one
 from agent.tools.reference import resolve_by_name, resolve_indices
 from store.product_store import ProductDetail, ProductReview, ProductStore, price_display
 
@@ -162,9 +163,18 @@ class ProductDetailTool:
                 {
                     "product_id": last_hits[i]["product_id"],
                     "title": searchable_hits[i].get("title", f"第{i + 1}款"),
+                    "brand": searchable_hits[i].get("brand", ""),
+                    "category": searchable_hits[i].get("category", ""),
+                    "sub_category": searchable_hits[i].get("sub_category", ""),
                 }
                 for i in name_matches[:3]
             ]
+            # 先让 LLM 按语义在候选里挑唯一一款（「华为耳机」→ 子品类·真无线耳机）。
+            # resolve_one 底层会走「序号→名称唯一→LLM 消歧」分层，把"靠 title 子串"
+            # 升级成"对商品库结构化字段做语义匹配"，避免同品牌不同品类反复反问。
+            picked = resolve_one(query, candidates)
+            if picked is not None:
+                return str(candidates[picked]["product_id"]), None, query
             # 记住「我们在哪几款里追问」+「用户原本想问的属性」，下一轮才能把
             # “第一款”正确映射到候选子集，并保留 focus（如“续航”）。
             session.set("pending_detail", {"candidates": candidates, "focus_query": query})
@@ -226,6 +236,9 @@ class ProductDetailTool:
             if detail is not None:
                 item.setdefault("title", detail.title)
                 item["brand"] = detail.brand
+                # 带上品类/子品类，LLM 消歧才能把「耳机」对应到「真无线耳机」那款。
+                item["category"] = detail.category
+                item["sub_category"] = detail.sub_category
             enriched.append(item)
         return enriched
 
@@ -314,18 +327,12 @@ _COMPARE_INTENT_WORDS: tuple[str, ...] = (
 
 
 def _pick_from_candidates(query: str, candidates: list[dict[str, Any]]) -> str | None:
-    """把用户应答映射到澄清候选子集里的某个商品（序号优先，其次品牌名）。"""
-    if not candidates:
-        return None
-    indices = resolve_indices(query, len(candidates))
-    if indices:
-        index = indices[0]
-        if 0 <= index < len(candidates):
-            return str(candidates[index]["product_id"])
-    name_matches = resolve_by_name(query, candidates)
-    if len(name_matches) == 1:
-        return str(candidates[name_matches[0]]["product_id"])
-    return None
+    """把用户应答映射到澄清候选子集里的某个商品。
+
+    统一走共享分层 resolver（序号→名称唯一→LLM 语义消歧）；
+    定不了返回 None，调用方继续追问。"""
+    picked = resolve_one(query, candidates)
+    return str(candidates[picked]["product_id"]) if picked is not None else None
 
 
 def is_detail_selection_reply(query: str) -> bool:

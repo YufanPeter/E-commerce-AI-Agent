@@ -28,6 +28,7 @@ from typing import Any
 from agent.llm_actions import ActionSpec, dispatch_action
 from agent.session import AgentSession
 from agent.tools.base import ToolResult
+from agent.tools.resolve import resolve_one
 from agent.tools.reference import resolve_indices, resolve_by_name, extract_name_query
 from store.cart_store import CartNotFoundError, CartStore, DEFAULT_ADDRESS
 from store.product_store import ProductStore
@@ -189,7 +190,13 @@ class CartTool:
         if len(named) == 1:
             return self._begin_add(last_hits[named[0]]["product_id"], qty, session, query)
         if len(named) > 1:
-            return self._ask_which_product([last_hits[i] for i in named], session)
+            # 同品牌多品类（「华为耳机」命中华为耳机+华为手机）→ 先让 LLM 按子品类
+            # 语义挑唯一一款，挑不出再列候选反问，避免反复追问。
+            subset = [last_hits[i] for i in named]
+            picked = resolve_one(query, self._enrich_candidates(subset))
+            if picked is not None:
+                return self._begin_add(subset[picked]["product_id"], qty, session, query)
+            return self._ask_which_product(subset, session)
 
         # 3) 全库点名检索（text2sql 思路）：先拿原句直接和库里品牌名做子串匹配，
         #    "请你把小米加入购物车"这种带语气前缀也能稳稳命中"小米"；品牌没命中
@@ -251,6 +258,27 @@ class CartTool:
             needs_composer=False,
         )
 
+    def _enrich_candidates(
+        self, candidates: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """给候选补上 brand/category/sub_category，供 LLM 语义消歧用依据。
+
+        富化失败（取详情异常）不影响主流程——LLM 仍可只凭 title 消歧。"""
+        enriched: list[dict[str, Any]] = []
+        for cand in candidates:
+            item = dict(cand)
+            try:
+                detail = self._products.get_product_detail(cand["product_id"])
+            except Exception:  # noqa: BLE001
+                detail = None
+            if detail is not None:
+                item.setdefault("title", detail.title)
+                item["brand"] = detail.brand
+                item["category"] = detail.category
+                item["sub_category"] = detail.sub_category
+            enriched.append(item)
+        return enriched
+
     def _resolve_pending_add(
         self, query: str, session: AgentSession, pending_add: dict[str, Any]
     ) -> ToolResult:
@@ -271,15 +299,8 @@ class CartTool:
         if switched is not None:
             return switched
 
-        picked: int | None = None
-        ordinals = resolve_indices(query, len(candidates))
-        if ordinals:
-            picked = ordinals[0]
-        else:
-            named = resolve_by_name(query, candidates)
-            if len(named) == 1:
-                picked = named[0]
-
+        # 统一分层定位：序号 → 名称唯一 → LLM 语义消歧（「华为耳机」选真无线耳机那款）。
+        picked = resolve_one(query, self._enrich_candidates(candidates))
         if picked is None:
             # 仍定位不到：保留候选，再问一次
             return self._ask_which_product(candidates, session)
@@ -506,11 +527,6 @@ class CartTool:
         if best_val is not None and best_score > 0 and not tie:
             return best_val
         return None
-
-    @staticmethod
-    def _value_matches(value: str, query: str) -> bool:
-        """判断用户话里是否点到了某个规格取值（命中任一 token 即 True）。"""
-        return CartTool._value_match_score(value, query) > 0
 
     @staticmethod
     def _value_match_score(value: str, query: str) -> int:

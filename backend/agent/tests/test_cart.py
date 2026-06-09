@@ -312,3 +312,40 @@ def test_filter_skus_partial_spec_keeps_asking(store: CartStore):
 
 
 
+
+
+# --------------------------- LLM 语义消歧（"华为耳机"在 cart 也生效） ---------------------------
+
+def test_add_ambiguous_name_uses_llm(store: CartStore, monkeypatch):
+    """同品牌多品类时（'华为'命中耳机+手机两款），先让 LLM 按子品类挑唯一一款。"""
+    # 屏幕上两款同品牌不同子品类
+    sess = AgentSession()
+    sess.remember_search(
+        {"category": "数码电子"},
+        [{"product_id": "d1", "title": "华为 FreeBuds 真无线耳机"},
+         {"product_id": "d2", "title": "华为 Pura 90 手机"}],
+    )
+    tool = CartTool(cart_store=store)
+    # dispatch 判为 add（无 index）
+    monkeypatch.setattr(cart_module, "dispatch_action", _stub_dispatch("add"))
+    # 资料富化取不到详情不影响；直接桩 resolve_one 模拟 LLM 选中耳机 d1（候选第 0 个）
+    monkeypatch.setattr(cart_module, "resolve_one", lambda query, cands: 0)
+    # begin_add 会查 SKU；d1 不在临时库 → list_skus 空 → 返回换一款提示，但关键是没反问“加哪一款”
+    res = tool.run("把华为耳机加进来", sess, {})
+    assert res.payload.get("action") != "ask_which_product"
+
+
+def test_add_ambiguous_name_llm_unavailable_asks(store: CartStore, monkeypatch):
+    """LLM 不可用（resolve_one 返回 None）→ 必须列候选反问，绝不乱加。"""
+    sess = AgentSession()
+    sess.remember_search(
+        {"category": "数码电子"},
+        [{"product_id": "d1", "title": "华为 FreeBuds 真无线耳机"},
+         {"product_id": "d2", "title": "华为 Pura 90 手机"}],
+    )
+    tool = CartTool(cart_store=store)
+    monkeypatch.setattr(cart_module, "dispatch_action", _stub_dispatch("add"))
+    monkeypatch.setattr(cart_module, "resolve_one", lambda query, cands: None)
+    res = tool.run("把华为加进来", sess, {})
+    assert res.payload["action"] == "ask_which_product"
+    assert sess.get("pending_add") is not None

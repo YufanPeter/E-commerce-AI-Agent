@@ -274,3 +274,35 @@ class TestFixedDimensions:
         for d in _GENERIC_DIMENSIONS:
             assert d in dims
 
+
+
+def test_run_uses_llm_fallback_when_rules_find_one(monkeypatch):
+    """规则只定位到 <2 款时，run() 用 LLM 语义兜底补到 2 款再对比。"""
+    import agent.tools.compare as compare_module
+
+    tool = CompareTool(product_store=_FakeStore(_DETAILS))
+    monkeypatch.setattr(compare_module, "build_comparison", _fake_build)
+    # 规则路径定不到 2 款（只点名了一款"小米"），LLM 兜底补齐挑出 p2+p3
+    monkeypatch.setattr(
+        compare_module, "resolve_many", lambda query, cands, k=2: [1, 2]
+    )
+    sess = _session_with_hits(_HITS)
+    res = tool.run("对比小米和另一个旗舰这两款", sess, {})
+    # 成功生成对比（而非反问）
+    assert res.payload["comparison"] is not None
+    ids = [p["product_id"] for p in res.payload["comparison"]["products"]]
+    assert ids == ["p2", "p3"]
+
+
+def test_run_asks_when_llm_also_fails(monkeypatch):
+    """LLM 兜底也定不到 2 款 → 反问并记 pending_compare，绝不乱比。"""
+    import agent.tools.compare as compare_module
+
+    tool = CompareTool(product_store=_FakeStore(_DETAILS))
+    monkeypatch.setattr(compare_module, "resolve_many", lambda query, cands, k=2: [])
+    sess = _session_with_hits(_HITS)
+    # 只点名一款（小米）→ 规则定到 1 款；LLM 兜底也空 → 反问
+    res = tool.run("对比小米这款和另一个", sess, {})
+    assert res.payload["comparison"] is None
+    assert "哪几款" in (res.narrative_override or "")
+    assert sess.get("pending_compare") is not None
