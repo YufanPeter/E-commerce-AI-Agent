@@ -13,6 +13,12 @@ private struct ComposerHeightPreferenceKey: PreferenceKey {
     }
 }
 
+/// 聊天滚动几何快照：是否接近底部 + 内容是否真正可滚动（超过一屏）。
+private struct ScrollSnapshot: Equatable {
+    let isNearBottom: Bool
+    let isScrollable: Bool
+}
+
 /// 进入对比页的上下文：携带候选商品（当前这条 AI 消息推荐的商品），
 /// 对比页内用下拉菜单从中挑选 2-3 件进行对比。
 struct ComparisonContext: Identifiable, Hashable {
@@ -42,6 +48,8 @@ struct GuideView: View {
     @State private var isNearChatBottom = true
     @State private var isUserInteractingWithChat = false
     @State private var shouldShowJumpToLatest = false
+    /// 内容是否超过视口（真正可滚动）。只有可滚动且不在底部时才显示"跳到最新"。
+    @State private var isChatScrollable = false
     @State private var pendingQuestionAnchorID: UUID?
     @State private var shouldHoldLatestQuestionAnchor = false
     @State private var pendingAutoFollowWorkItem: DispatchWorkItem?
@@ -212,8 +220,11 @@ struct GuideView: View {
                     .onChange(of: currentConversationID) { _, _ in
                         scrollToEmptyState(proxy)
                     }
+                    .onChange(of: scrollAnchorToken) { _, _ in
+                        driveAutoScroll(proxy)
+                    }
 
-                if shouldShowJumpToLatest {
+                if shouldShowJumpToLatest && isChatScrollable {
                     jumpToLatestButton {
                         jumpToLatest(proxy)
                     }
@@ -230,11 +241,19 @@ struct GuideView: View {
     private var trackedChatScrollView: some View {
         if #available(iOS 18.0, *) {
             chatScrollView
-                .onScrollGeometryChange(for: Bool.self) { geometry in
+                .onScrollGeometryChange(for: ScrollSnapshot.self) { geometry in
                     let distanceFromBottom = geometry.contentSize.height - geometry.visibleRect.maxY
-                    return distanceFromBottom <= nearBottomThreshold
-                } action: { _, isNearBottom in
-                    updateScrollPosition(isNearBottom: isNearBottom)
+                    // 内容高度比可视区高出一屏阈值以上，才算"真正可滚动"。
+                    let scrollable = geometry.contentSize.height > geometry.containerSize.height + nearBottomThreshold
+                    return ScrollSnapshot(
+                        isNearBottom: distanceFromBottom <= nearBottomThreshold,
+                        isScrollable: scrollable
+                    )
+                } action: { _, snapshot in
+                    if isChatScrollable != snapshot.isScrollable {
+                        isChatScrollable = snapshot.isScrollable
+                    }
+                    updateScrollPosition(isNearBottom: snapshot.isNearBottom)
                 }
         } else {
             chatScrollView
@@ -260,6 +279,12 @@ struct GuideView: View {
                         onFollowUpTap: fillInputWithFollowUp
                     )
                     .id(message.id)
+                    .transition(
+                        .asymmetric(
+                            insertion: .opacity.combined(with: .offset(y: 14)),
+                            removal: .opacity
+                        )
+                    )
 
                     Color.clear
                         .frame(height: 1)
@@ -586,15 +611,19 @@ struct GuideView: View {
         }
         let userMessage = ChatMessage(sender: .user, text: query, localImageData: imageData)
         pendingAutoFollowWorkItem?.cancel()
-        isAutoFollowEnabled = false // 禁用自动滚动，让用户从开头阅读
-        isNearChatBottom = false
+        // 发送后保持自动跟随到最新，确保用户气泡和 AI 回复始终可见、不被输入框遮住。
+        isAutoFollowEnabled = true
+        isNearChatBottom = true
         isUserInteractingWithChat = false
-        shouldShowJumpToLatest = true // 显示"最新"按钮
+        shouldShowJumpToLatest = false
         shouldHoldLatestQuestionAnchor = true
         pendingQuestionAnchorID = userMessage.id
-        messages.append(userMessage)
         let placeholder = imageData != nil ? "正在识别图片并匹配商品" : "正在为你匹配商品"
-        messages.append(ChatMessage(sender: .ai, text: placeholder, state: .understanding))
+        // 用户气泡 + 助手占位一起以弹性动画淡入，避免"啪"地直接出现。
+        withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
+            messages.append(userMessage)
+            messages.append(ChatMessage(sender: .ai, text: placeholder, state: .understanding))
+        }
         runAgent(for: query, imageBase64: imageData?.base64EncodedString())
     }
 
@@ -1074,6 +1103,17 @@ struct GuideView: View {
         } else if !isNearChatBottom {
             shouldShowJumpToLatest = true
         }
+    }
+
+    /// 消息/状态变化时驱动滚动：
+    /// - 刚发送（短回复流式中）：把用户这条问题滚到顶部，让用户从头读，AI 回复在下方展开。
+    /// - 其它情况（长回复、出商品卡、已就绪）：跟随到最新内容底部，确保新内容不被输入框遮住。
+    private func driveAutoScroll(_ proxy: ScrollViewProxy) {
+        if shouldKeepLatestQuestionVisible, let anchorID = pendingQuestionAnchorID {
+            scrollToQuestion(anchorID, proxy: proxy)
+            return
+        }
+        handleContentChange(proxy)
     }
 
     private func scrollToQuestion(_ id: UUID, proxy: ScrollViewProxy) {
