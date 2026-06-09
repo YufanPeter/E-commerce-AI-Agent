@@ -236,7 +236,36 @@ struct ChatMessage: Identifiable, Codable {
 struct StructuredContent: Codable {
     let opening: String
     let items: [StructuredItem]
-    let questions: [String]
+    /// 可直接填入输入框的追问 Prompt，点击后不自动发送。
+    let followup: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case opening, items, followup, questions
+    }
+
+    init(opening: String, items: [StructuredItem], followup: [String] = []) {
+        self.opening = opening
+        self.items = items
+        self.followup = followup
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        opening = try container.decode(String.self, forKey: .opening)
+        items = try container.decode([StructuredItem].self, forKey: .items)
+        if let followup = try container.decodeIfPresent([String].self, forKey: .followup) {
+            self.followup = followup
+        } else {
+            self.followup = try container.decodeIfPresent([String].self, forKey: .questions) ?? []
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(opening, forKey: .opening)
+        try container.encode(items, forKey: .items)
+        try container.encode(followup, forKey: .followup)
+    }
 }
 
 struct StructuredItem: Codable {

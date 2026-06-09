@@ -598,17 +598,17 @@ private func generateMockResponseText(query: String, products: [ProductPayload])
         print("生成 item: productId=\(product.productID), description=\(product.title)：\(feature)")
     }
 
-    let questions = [
-        "需要更平价的选择？",
-        "想要看特定品牌？",
-        "需要详细对比某两款？",
-        "想了解更多规格细节？"
+    let followup = [
+        "推荐一些更平价的选择",
+        "推荐其他品牌的商品",
+        "对比一下刚才推荐的两款",
+        "想了解更多规格细节"
     ]
 
     let result: [String: Any] = [
         "opening": opening,
         "items": items,
-        "questions": questions
+        "followup": followup
     ]
     
     if let jsonData = try? JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted]),

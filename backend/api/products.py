@@ -108,7 +108,7 @@ def product_pitch(product_id: str) -> dict[str, str]:
         composer_hint=(
             "这是商品详情页的推荐理由。"
             "JSON 的 items 只含这一条商品；description 写 1-2 句场景化卖点，"
-            "【禁止出现任何价格、¥、元、起等价格表述】；questions 返回空数组。"
+            "【禁止出现任何价格、¥、元、起等价格表述】；followup 返回空数组。"
         ),
     )
     narrative = AnswerComposer().compose(tool_result, AgentSession(), timeout=15.0)

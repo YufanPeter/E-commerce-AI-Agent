@@ -34,7 +34,10 @@ SYSTEM_PROMPT = """你是一位友好、专业的电商导购助手，说话像�
 - 必须返回 JSON 格式，包含以下字段：
   - "opening": 开场白，用"为你XXX了"的格式（如"为你推荐了几款适合敏感肌的护肤品"）
     - "items": 数组，每个元素包含 {"productId": "...", "description": "..."}，**productId 必须原样使用 payload.hits 里对应商品的 productId，禁止自造序号**；每个商品必须对应一个专属解说词，不能多个商品共用一段描述；description 只能写 1 句，控制在 45 个中文字符以内，且不要包含价格、¥、元、起等价格表述
-  - "questions": 数组，包含 3-5 个追问方向（如"需要更平价的选择？"）
+  - "followup": 数组，包含 3-5 条【用户视角】的可直接发送 Prompt。每条都是用户亲口对导购说的话，点击后会填入输入框供编辑发送。
+    - 正确："推荐其他版型的阿迪达斯运动裤"、"看看更多配色可选的"、"找加绒的秋冬款"、"推荐其他品牌的运动长裤"
+    - 错误（禁止）："需要其他版型的阿迪达斯运动裤？"、"想要更多配色可选？"、"要不要看看其他品牌？" —— 这是助手在问用户，不是用户在提需求
+    - 用祈使/请求口吻（推荐/找/看看/对比/帮我…），禁止"要不要""需要吗""想要吗"等问句；结合当前推荐写具体可执行的下一步，不要空泛
 - 卡片本身已经展示价格；除非 opening 里做总体价格梯度说明，否则不要在 items[].description 里重复价格。
 - 介绍每款时落到使用场景和人群（通勤、学习、送礼…），而不是只报价格和参数；每款只写一句话，不要写保养建议、注意事项或长段参数说明。
 - 适度点出关键差异帮用户决策（价格梯度、核心卖点、适合谁）。
@@ -82,7 +85,7 @@ _FEW_SHOT: list[dict[str, str]] = [
             '{"productId": "p_digital_004", "description": "iPad Air M4（4799元）：M4芯片，性能强劲，适合专业用途"}, '
             '{"productId": "p_digital_005", "description": "华为 MatePad Pro Max（4999元）：12.6英寸大屏，办公体验极佳"}'
             '], '
-            '"questions": ["需要更平价的选择？", "想要看特定品牌？", "需要详细对比某两款？"]}'
+            '"followup": ["推荐一些更平价的选择", "推荐其他品牌的商品", "对比一下刚才推荐的两款"]}'
         ),
     },
     {
@@ -99,7 +102,25 @@ _FEW_SHOT: list[dict[str, str]] = [
         "content": (
             '{"opening": "抱歉，300元以内的真无线耳机暂时没有合适的货", '
             '"items": [], '
-            '"questions": ["预算能提高到多少？", "可以放宽品牌限制吗？", "考虑有线耳机吗？"]}'
+            '"followup": ["预算放宽到500以内再推荐", "不限品牌，推荐平价真无线耳机", "推荐有线耳机替代"]}'
+        ),
+    },
+    {
+        "role": "user",
+        "content": (
+            'tool: recommend\n'
+            'payload: {"query": "阿迪达斯运动长裤", "parsed": {"brand_include": "阿迪达斯", "sub_category": "运动长裤"}, '
+            '"hits": [{"productId": "p_sport_001", "title": "阿迪达斯 经典三条纹收口长裤", "brand": "阿迪达斯", "sub_category": "运动长裤"}]}'
+        ),
+    },
+    {
+        "role": "assistant",
+        "content": (
+            '{"opening": "为你推荐了几款阿迪达斯运动长裤", '
+            '"items": ['
+            '{"productId": "p_sport_001", "description": "经典三条纹收口长裤，日常休闲运动通勤穿着舒适百搭"}'
+            '], '
+            '"followup": ["推荐其他版型的阿迪达斯运动裤", "看看更多配色可选的", "找加绒的秋冬款", "推荐其他品牌的运动长裤"]}'
         ),
     },
 ]
@@ -257,12 +278,12 @@ def _fallback_json_response(tool_result: ToolResult) -> str:
 
     if items:
         opening = f"为你找到 {len(items)} 款可以优先看的商品"
-        questions = ["需要更平价的选择？", "想看更多同类商品？", "需要详细对比某两款？"]
+        followup = ["推荐一些更平价的选择", "看看更多同类商品", "对比一下刚才推荐的两款"]
     else:
         opening = "暂时没有生成完整说明，可以换个说法再试一次"
-        questions = ["可以放宽预算吗？", "要不要换个品牌看看？", "需要我重新推荐吗？"]
+        followup = ["预算放宽一些再推荐", "换个品牌看看", "重新帮我推荐"]
     return json.dumps(
-        {"opening": opening, "items": items, "questions": questions},
+        {"opening": opening, "items": items, "followup": followup},
         ensure_ascii=False,
     )
 
