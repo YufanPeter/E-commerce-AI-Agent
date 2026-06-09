@@ -73,6 +73,23 @@ def _build_tool_schema(taxonomy: dict) -> dict:
                         "items": {"type": "string", "enum": brands},
                         "description": "用户明确排除的品牌。'不要 X' 这种否定才放进来。",
                     },
+                    "category_exclude": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": categories},
+                        "description": (
+                            "用户明确排除的【一级品类】，必须严格选自候选列表。"
+                            "用户说'不要X品类'时把官方品类名放进来。"
+                        ),
+                    },
+                    "sub_category_exclude": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": sub_categories},
+                        "description": (
+                            "用户明确排除的【子类目】，必须严格选自候选列表（不是字面词！）。"
+                            "这是品类反选的首选字段——用户说'不要功能性饮料'/'不要能量饮料'，"
+                            "都要映射到官方子类目 '功能饮料' 放进来，而不是塞进 negative_ingredients。"
+                        ),
+                    },
                     "max_price": {
                         "type": ["number", "null"],
                         "description": "价格上限（人民币元）。如 '300 以内' → 300。",
@@ -106,6 +123,8 @@ def _build_tool_schema(taxonomy: dict) -> dict:
                     "sub_category",
                     "brand_include",
                     "brand_exclude",
+                    "category_exclude",
+                    "sub_category_exclude",
                     "max_price",
                     "min_price",
                     "negative_ingredients",
@@ -125,16 +144,23 @@ SYSTEM_PROMPT = """你是电商搜索的需求解析器。严格遵守以下规�
 3. 否定语义只看局部范围：
    - "我要 Nike，不要太贵" → brand_include=["Nike"]，brand_exclude=[]
    - "推荐手机，不要华为" → sub_category="智能手机"，brand_exclude=["华为"]
-4. negative_ingredients 是【开放式排除关键词】列表：用户说"不要X"/"不含X"/"无X"/"除了X"时，
-   一律把 X 放进来。不限于固定清单，任何成分 / 品类 / 口味 / 属性都可以填
-   （如 "花生"、"香菜"、"辣"、"咖啡"、"酒精"、"香精"）。下游按"商品标题与描述里是否
-   出现该词"做字面子串过滤，所以务必填【商品文本里会真实出现的字面词】，
-   不要引申成字面不同的术语：
-   - "不要咖啡的饮料" → ["咖啡"]（不能为空，也不能写成"咖啡因"）
+4. 【品类反选优先走结构化字段，这是最重要的反选规则】：
+   用户说"不要X品类"/"不要X类的"/"除了X"时，先判断 X 是不是一个品类/子类目：
+   - 是子类目 → 放进 sub_category_exclude（映射到官方值），**不要**放进 negative_ingredients。
+     例："不要功能性饮料"/"不要能量饮料"/"不要功能饮料" → sub_category_exclude=["功能饮料"]
+     例："推荐饮料，不要碳酸的" → sub_category_exclude=["碳酸饮料"]
+     例："要手机，不要平板" → sub_category_exclude=["平板电脑"]
+   - 是一级品类 → 放进 category_exclude（映射到官方值）。
+     例："推荐点吃的，不要美妆" → category_exclude=["美妆护肤"]
+   子类目/品类的同义说法（"功能性饮料"="能量饮料"="提神饮料"→"功能饮料"）必须归一到 enum 官方值。
+5. negative_ingredients 只用于【非品类的成分 / 口味 / 属性】排除（品类反选已由上一条处理）：
+   用户说"不含X"/"无X"/"不要X的"且 X 不是品类时填。下游按"商品标题与描述里是否出现该词"
+   做字面子串过滤，所以务必填【商品文本里会真实出现的字面词】，不要引申成字面不同的术语：
+   - "不要咖啡的饮料" → negative_ingredients=["咖啡"]（咖啡是口味/成分，不是要排除的子类目）
    - "不要花生的零食" → ["花生"]
    - "不放香菜" → ["香菜"]
-   - "不要日系"/"不要韩系" → 直接填 ["日系"] / ["韩系"]
-   特例：用户字面就是说成分（"无咖啡因"/"不含咖啡因"）时才填该成分本身 → ["咖啡因"]。
+   - "无糖" → ["糖"]；"不含酒精" → ["酒精"]
+   特例：用户字面就是说成分（"无咖啡因"）时填该成分本身 → ["咖啡因"]。
    注意：不要把用户正在搜索的主体品类填进来（搜"饮料"时别填"饮料"），只填要排除的部分。
 5. 一级品类（category）同义词映射（用户只给大类、没给子品类时务必填 category）：
    - "美妆"/"化妆品"/"护肤"/"护肤品" → "美妆护肤"
@@ -417,11 +443,27 @@ def _to_parsed_query(
                 out.append(canonical)
         return out
 
+    known_sub_categories = set(taxonomy["sub_to_cat"].keys())
+
+    def _filter_enum(values: list[str] | None, allowed: set[str]) -> list[str]:
+        """品类/子类目反选：只保留在 taxonomy enum 里的官方值，去重。"""
+        if not values:
+            return []
+        seen: set[str] = set()
+        out: list[str] = []
+        for value in values:
+            if value in allowed and value not in seen:
+                seen.add(value)
+                out.append(value)
+        return out
+
     return ParsedQuery(
         original_query=query,
         intent="product_search",
         category=category,
         sub_category=sub_category,
+        category_exclude=_filter_enum(arguments.get("category_exclude"), known_categories),
+        sub_category_exclude=_filter_enum(arguments.get("sub_category_exclude"), known_sub_categories),
         max_price=_coerce_float(arguments.get("max_price")),
         min_price=_coerce_float(arguments.get("min_price")),
         brand_include=_filter_brands(arguments.get("brand_include")),

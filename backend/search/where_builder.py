@@ -8,7 +8,9 @@ from __future__ import annotations
 
 不在这里做的事：
 - 价格 / 品牌的合法性校验（LLM enum + ParsedQuery dataclass 已经守门）
-- 软偏好 / 否定成分（不是 Chroma 能干的活，留给后置过滤 / 重排）
+- 软偏好 / 成分否定（不是 Chroma 能干的活，留给后置过滤 / 重排）
+  注意：品类/子类目否定（category_exclude/sub_category_exclude）是结构化字段，
+  在这里走 $nin 召回阶段排除；只有自由文本的成分否定才留到后置过滤。
 """
 
 from typing import Any
@@ -34,6 +36,13 @@ def build_chroma_where(parsed: ParsedQuery) -> dict[str, Any] | None:
         clauses.append({"category": parsed.category})
     if parsed.sub_category:
         clauses.append({"sub_category": parsed.sub_category})
+
+    # 品类反选：在召回阶段就按结构化 metadata 字段排除，确定性、零泄漏。
+    # 这是企业级反选的正确做法——排除项压根不进候选集，而不是召回后再补救。
+    if parsed.sub_category_exclude:
+        clauses.append({"sub_category": {"$nin": list(parsed.sub_category_exclude)}})
+    if parsed.category_exclude:
+        clauses.append({"category": {"$nin": list(parsed.category_exclude)}})
 
     if parsed.min_price is not None:
         clauses.append({"base_price": {"$gte": float(parsed.min_price)}})

@@ -78,3 +78,139 @@ def test_search_service_raises_when_api_rerank_fails(monkeypatch):
             reranker=_BoomReranker(),
             use_rerank=True,
         ).search("轻量跑鞋", top_k_products=2)
+
+
+# --------------------- 否定/反选：product 级剔除 ---------------------
+
+def _drink_chunk(pid: str, chunk_type: str, document: str, title: str, sub_category: str) -> RetrievedChunk:
+    return RetrievedChunk(
+        chunk_id=f"{pid}-{chunk_type}",
+        document=document,
+        metadata={
+            "product_id": pid,
+            "title": title,
+            "brand": "品牌",
+            "category": "食品生活",
+            "sub_category": sub_category,
+            "base_price": 5,
+        },
+        distance=0.3,
+    )
+
+
+class _MultiChunkRetriever:
+    """模拟东鹏特饮：多个 chunk，只有部分含品类词，评价 chunk 不含。"""
+
+    def __init__(self, chunks):
+        self._chunks = chunks
+
+    def search(self, query: str, top_k: int = 10, where=None):
+        return list(self._chunks)
+
+
+def test_negative_category_excludes_whole_product(monkeypatch):
+    """说'不要功能饮料'：即便商品的评价 chunk 不含品类词，整个商品也要被剔除。"""
+    chunks = [
+        # 功能饮料：评价 chunk 文本不含"功能饮料"，但 title/sub_category 含
+        _drink_chunk("dp", "user_review", "熬夜喝很提神，口感不错", "东鹏特饮 维生素功能饮料 500ml", "功能饮料"),
+        _drink_chunk("dp", "marketing", "添加牛磺酸和咖啡因", "东鹏特饮 维生素功能饮料 500ml", "功能饮料"),
+        # 普通饮料：应保留
+        _drink_chunk("milk", "marketing", "纯牛奶醇香", "某某纯牛奶 250ml", "牛奶"),
+    ]
+    parsed = ParsedQuery(
+        original_query="推荐饮料 不要功能饮料",
+        sub_category=None,
+        retrieval_query="饮料",
+        negative_ingredients=["功能饮料"],
+    )
+    monkeypatch.setattr("search.search_service.understand_query", lambda query: parsed)
+
+    result = SearchService(
+        retriever=_MultiChunkRetriever(chunks),
+        reranker=None,
+        use_rerank=False,
+    ).search("推荐饮料 不要功能饮料", top_k_products=5)
+
+    pids = [hit.product_id for hit in result.hits]
+    assert "dp" not in pids          # 整个功能饮料商品被剔除（含评价 chunk）
+    assert "milk" in pids            # 普通饮料保留
+
+
+def test_negative_keyword_in_document_excludes_product(monkeypatch):
+    """否定词只出现在某 chunk 文本里时，也要剔除该商品的全部 chunk。"""
+    chunks = [
+        _drink_chunk("x", "marketing", "经典原味", "X 饮料", "饮料"),
+        _drink_chunk("x", "ingredient", "配料含阿斯巴甜", "X 饮料", "饮料"),
+        _drink_chunk("y", "marketing", "天然无添加", "Y 饮料", "饮料"),
+    ]
+    parsed = ParsedQuery(
+        original_query="饮料 不要阿斯巴甜",
+        sub_category=None,
+        retrieval_query="饮料",
+        negative_ingredients=["阿斯巴甜"],
+    )
+    monkeypatch.setattr("search.search_service.understand_query", lambda query: parsed)
+
+    result = SearchService(
+        retriever=_MultiChunkRetriever(chunks),
+        reranker=None,
+        use_rerank=False,
+    ).search("饮料 不要阿斯巴甜", top_k_products=5)
+
+    pids = [hit.product_id for hit in result.hits]
+    assert "x" not in pids
+    assert "y" in pids
+
+
+def test_sub_category_exclude_postfilter_fallback(monkeypatch):
+    """P0 结构化反选的后置兜底：sub_category_exclude 命中的商品整体剔除。
+
+    （模拟 where $nin 漏网/SQLite 回退路径，确保后置过滤这道防线也生效。）"""
+    chunks = [
+        _drink_chunk("dp", "user_review", "熬夜喝很提神", "东鹏特饮 500ml", "功能饮料"),
+        _drink_chunk("dp", "marketing", "牛磺酸咖啡因", "东鹏特饮 500ml", "功能饮料"),
+        _drink_chunk("rb", "marketing", "红牛维生素", "红牛 250ml", "功能饮料"),
+        _drink_chunk("tea", "marketing", "无糖乌龙茶", "东方树叶 500ml", "茶饮"),
+    ]
+    parsed = ParsedQuery(
+        original_query="推荐饮料 不要功能饮料",
+        retrieval_query="饮料",
+        sub_category_exclude=["功能饮料"],
+    )
+    monkeypatch.setattr("search.search_service.understand_query", lambda query: parsed)
+
+    result = SearchService(
+        retriever=_MultiChunkRetriever(chunks),
+        reranker=None,
+        use_rerank=False,
+    ).search("推荐饮料 不要功能饮料", top_k_products=5)
+
+    pids = [hit.product_id for hit in result.hits]
+    assert "dp" not in pids   # 东鹏：功能饮料被剔
+    assert "rb" not in pids   # 红牛：功能饮料被剔
+    assert "tea" in pids      # 茶饮保留
+
+
+def test_synonym_negative_normalized_then_excludes(monkeypatch):
+    """用户/LLM 给的是'能量饮料'，库里是'功能饮料'——归一后仍能剔除。"""
+    chunks = [
+        _drink_chunk("rb", "user_review", "提神效果好", "红牛 250ml", "功能饮料"),
+        _drink_chunk("tea", "marketing", "清爽乌龙", "东方树叶 500ml", "茶饮"),
+    ]
+    parsed = ParsedQuery(
+        original_query="饮料 不要能量饮料",
+        retrieval_query="饮料",
+        negative_ingredients=["能量饮料"],  # 故意给同义词，考验归一
+    )
+    monkeypatch.setattr("search.search_service.understand_query", lambda query: parsed)
+
+    result = SearchService(
+        retriever=_MultiChunkRetriever(chunks),
+        reranker=None,
+        use_rerank=False,
+    ).search("饮料 不要能量饮料", top_k_products=5)
+
+    pids = [hit.product_id for hit in result.hits]
+    assert "rb" not in pids
+    assert "tea" in pids
+

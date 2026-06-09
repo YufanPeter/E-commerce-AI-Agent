@@ -22,6 +22,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import sqlite3
 from dataclasses import asdict, dataclass, field, fields
 from functools import lru_cache
@@ -46,6 +47,8 @@ class ParsedQuery:
     intent: str = "product_search"
     category: str | None = None
     sub_category: str | None = None
+    category_exclude: list[str] = field(default_factory=list)
+    sub_category_exclude: list[str] = field(default_factory=list)
     max_price: float | None = None
     min_price: float | None = None
     brand_include: list[str] = field(default_factory=list)
@@ -61,6 +64,8 @@ class ParsedQuery:
         return {
             "category": self.category,
             "sub_category": self.sub_category,
+            "category_exclude": self.category_exclude,
+            "sub_category_exclude": self.sub_category_exclude,
             "max_price": self.max_price,
             "min_price": self.min_price,
             "brand_include": self.brand_include,
@@ -120,6 +125,8 @@ class ParsedQuery:
             intent=self.intent or base.intent,
             category=pick(self.category, base.category),
             sub_category=pick(self.sub_category, base.sub_category),
+            category_exclude=union(self.category_exclude, base.category_exclude),
+            sub_category_exclude=union(self.sub_category_exclude, base.sub_category_exclude),
             max_price=pick(self.max_price, base.max_price),
             min_price=pick(self.min_price, base.min_price),
             brand_include=replace_or_keep(self.brand_include, base.brand_include),
@@ -268,9 +275,14 @@ def understand_query(query: str) -> ParsedQuery:
             "LLM query understanding failed, degrade to vector-only recall: %r", exc
         )
         # 降级：不带任何 hard_filter，retrieval_query 用原文，让向量召回兜底。
+        # 但【否定/反选】是用户的硬性诉求，不能因 LLM 挂了就完全失效——这里用
+        # 确定性正则 + taxonomy 兜底抽取「不要X品类」，至少保住品类反选。
+        sub_excl, cat_excl = _regex_extract_excludes(query)
         return ParsedQuery(
             original_query=query,
             retrieval_query=normalized,
+            sub_category_exclude=sub_excl,
+            category_exclude=cat_excl,
             needs_clarification=False,
         )
 
@@ -279,6 +291,144 @@ def clear_cache() -> None:
     """taxonomy 或 LLM prompt 变更后调一次。"""
     _cached_understand.cache_clear()
     load_taxonomy.cache_clear()
+
+
+# 否定意图触发词：用户表达"不要/不含/排除"时的常见说法。
+_NEGATION_CUES = ("不要", "不想要", "不想", "不含", "不带", "没有", "无", "除了", "排除", "拒绝", "讨厌")
+
+# 品类同义词 → taxonomy 官方 sub_category（确定性兜底，覆盖全部一级类目的高频反选目标）。
+# LLM 挂掉时靠这张表保住品类反选；命中后走 where $nin 召回阶段排除。
+# 维护原则：key 写用户口语，value 必须是 taxonomy 里真实存在的官方子类目（含斜杠的写全名，
+# 如 "坚果/零食"），否则不会被采纳。官方子类目本身（及其斜杠拆分项）由代码自动兜底，无需逐一列出。
+_SUBCAT_SYNONYMS: dict[str, str] = {
+    # —— 食品饮料 ——
+    "功能性饮料": "功能饮料",
+    "能量饮料": "功能饮料",
+    "功能型饮料": "功能饮料",
+    "提神饮料": "功能饮料",
+    "碳酸": "碳酸饮料",
+    "汽水": "碳酸饮料",
+    "气泡水": "碳酸饮料",
+    "可乐": "碳酸饮料",
+    "零食": "坚果/零食",
+    "坚果": "坚果/零食",
+    "小零食": "坚果/零食",
+    "膨化食品": "坚果/零食",
+    "速食": "方便食品",
+    "泡面": "方便食品",
+    "方便面": "方便食品",
+    "酸奶": "酸奶",
+    "牛奶": "牛奶",
+    "纯牛奶": "牛奶",
+    "茶": "茶饮",
+    "茶饮料": "茶饮",
+    # —— 数码电子 ——
+    "蓝牙耳机": "真无线耳机",
+    "无线耳机": "真无线耳机",
+    "耳机": "真无线耳机",
+    "手机": "智能手机",
+    "平板": "平板电脑",
+    "ipad": "平板电脑",
+    "笔记本": "笔记本电脑",
+    "电脑": "笔记本电脑",
+    "笔电": "笔记本电脑",
+    # —— 服饰运动 ——
+    "慢跑鞋": "跑步鞋",
+    "运动鞋": "跑步鞋",
+    "球鞋": "篮球鞋",
+    "登山鞋": "徒步鞋",
+    "短袖": "短袖T恤",
+    "t恤": "短袖T恤",
+    "短裤": "运动短裤",
+    "长裤": "运动长裤",
+    "卫衣": "卫衣",
+    "瑜伽裤": "瑜伽裤",
+    "速干衣": "速干T恤",
+    "双肩包": "背包",
+    "书包": "背包",
+    # —— 美妆护肤 ——
+    "补水面膜": "面膜",
+    "贴片面膜": "面膜",
+    "面膜": "面膜",
+    "精华液": "精华",
+    "精华": "精华",
+    "面部精华": "精华",
+    "爽肤水": "化妆水",
+    "化妆水": "化妆水",
+    "卸妆水": "卸妆",
+    "卸妆油": "卸妆",
+    "卸妆膏": "卸妆",
+    "洗面奶": "洁面",
+    "洁面乳": "洁面",
+    "面部防晒": "防晒",
+    "防晒霜": "防晒",
+    "防晒": "防晒",
+    "口红": "唇釉",
+    "唇釉": "唇釉",
+    "面霜": "面霜",
+    "乳液": "面霜",
+    "眼霜": "眼霜",
+    "粉底": "粉底液",
+    "粉底液": "粉底液",
+    "散粉": "蜜粉",
+    "蜜粉": "蜜粉",
+    "眉笔": "眉笔",
+}
+
+
+def _regex_extract_excludes(query: str) -> tuple[list[str], list[str]]:
+    """LLM 失败降级时的确定性否定兜底：从原句抽「不要X品类」→ (子类目排除, 一级类目排除)。
+
+    只在出现否定触发词时才尝试，且只认 taxonomy 里真实存在的品类/同义词，
+    保证零误伤（不会把"不要太贵"误当品类排除）。"""
+    text = query or ""
+    if not any(cue in text for cue in _NEGATION_CUES):
+        return [], []
+
+    taxonomy = load_taxonomy()
+    sub_to_cat = taxonomy.get("sub_to_cat", {}) or {}
+    known_cats = {c for c in sub_to_cat.values() if c}
+
+    # 预拆斜杠子类目（如 "坚果/零食"）：任一拆分项命中即视作命中该官方子类目。
+    # 否则用户说"不要坚果"永远匹配不上带斜杠的官方名。
+    sub_parts: dict[str, str] = {}
+    for sub in sub_to_cat:
+        for part in re.split(r"[/、，,]", sub):
+            part = part.strip()
+            if len(part) >= 2:
+                sub_parts.setdefault(part, sub)
+
+    sub_excl: list[str] = []
+    cat_excl: list[str] = []
+
+    def _add_sub(official: str) -> None:
+        if official in sub_to_cat and official not in sub_excl:
+            sub_excl.append(official)
+
+    # 找否定触发词之后的一小段文本，在其中匹配品类同义词 / 官方子类目 / 一级类目。
+    for cue in _NEGATION_CUES:
+        idx = text.find(cue)
+        if idx < 0:
+            continue
+        window = text[idx + len(cue): idx + len(cue) + 12]
+        # 1) 同义词表（口语 → 官方子类目）
+        for syn, official in _SUBCAT_SYNONYMS.items():
+            if syn in window:
+                _add_sub(official)
+        # 2) 官方子类目全名直接命中
+        for sub in sub_to_cat:
+            if sub in window:
+                _add_sub(sub)
+        # 3) 斜杠子类目的拆分项命中（"坚果" → "坚果/零食"）
+        for part, official in sub_parts.items():
+            if part in window:
+                _add_sub(official)
+        # 4) 一级类目命中
+        for cat in known_cats:
+            if cat in window and cat not in cat_excl:
+                cat_excl.append(cat)
+
+    return sub_excl, cat_excl
 
 
 # ---------------------------------------------------------------------------

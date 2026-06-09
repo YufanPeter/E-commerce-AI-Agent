@@ -156,12 +156,28 @@ class SearchService:
         )
         raw_count = len(chunks)
 
-        # ③ 后置过滤：剔除含否定成分的 chunk（在 rerank 之前做，节省 rerank 算力）
-        if parsed.negative_ingredients:
-            chunks = [
-                c for c in chunks
-                if not _contains_any(c.document, parsed.negative_ingredients)
-            ]
+        # ③ 后置过滤：product 级剔除否定项（在 rerank 之前做，节省 rerank 算力）。
+        #    注意必须是 **product 级** 而非 chunk 级：一个商品有多个 chunk（描述/规格/
+        #    评价/FAQ），若只剔"文本含否定词的那个 chunk"，其余 chunk 仍会让整个商品
+        #    被召回——这正是"说了不要功能饮料还出现"的根因。这里只要某商品任一 chunk
+        #    的文本或其 title/品类命中否定词，就把该商品的**全部** chunk 一起剔除。
+        #
+        #    两道防线（P0 的 where $nin 已在召回阶段挡掉结构化品类反选，这里是兜底）：
+        #    a) sub_category_exclude / category_exclude：按 chunk metadata 的品类字段
+        #       兜底剔除（防 SQLite 回退路径或 metadata 写法差异导致 $nin 漏网）。
+        #    b) negative_ingredients：先经别名归一（能量饮料→功能饮料），再扫
+        #       chunk 文本 + title + 品类做子串剔除（处理成分/口味等非品类否定）。
+        negatives = _normalize_negatives(parsed.negative_ingredients)
+        excluded_subs = set(parsed.sub_category_exclude or [])
+        excluded_cats = set(parsed.category_exclude or [])
+        if negatives or excluded_subs or excluded_cats:
+            banned_products = {
+                c.product_id
+                for c in chunks
+                if c.product_id and _chunk_is_banned(c, negatives, excluded_subs, excluded_cats)
+            }
+            if banned_products:
+                chunks = [c for c in chunks if c.product_id not in banned_products]
         filtered_count = len(chunks)
 
         # ④ API 精排。调试智谱接入阶段不做失败降级：配置缺失、网络超时或
@@ -189,6 +205,72 @@ class SearchService:
 
 def _contains_any(text: str, needles: list[str]) -> bool:
     return any(needle and needle in text for needle in needles)
+
+
+# 否定词归一别名表：把用户/LLM 的同义说法收敛到「商品文本里会真实出现的字面词」。
+# 例如用户说"能量饮料"、LLM 抽成"功能性饮料"，库里实际是"功能饮料"——
+# 不归一就会子串匹配失败、反选漏网。这是字面过滤兜底的关键一层。
+# 注意：P0 的结构化 sub_category_exclude 已在召回阶段处理品类反选，这里主要
+# 兜底 LLM 偶尔把品类同义词错塞进 negative_ingredients 的情况。
+_NEGATIVE_ALIAS: dict[str, str] = {
+    "功能性饮料": "功能饮料",
+    "能量饮料": "功能饮料",
+    "功能型饮料": "功能饮料",
+    "提神饮料": "功能饮料",
+    "碳酸": "碳酸饮料",
+    "汽水": "碳酸饮料",
+    "气泡水": "碳酸饮料",
+    "0糖": "无糖",
+    "零糖": "无糖",
+    "无糖型": "无糖",
+}
+
+
+def _normalize_negatives(negatives: list[str] | None) -> list[str]:
+    """把否定词经别名表归一到库里真实字面词，去重。空安全。"""
+    if not negatives:
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in negatives:
+        term = _NEGATIVE_ALIAS.get(raw, raw)
+        if term and term not in seen:
+            seen.add(term)
+            out.append(term)
+    return out
+
+
+def _chunk_is_banned(
+    chunk: RetrievedChunk,
+    negatives: list[str],
+    excluded_subs: set[str],
+    excluded_cats: set[str],
+) -> bool:
+    """该 chunk 所属商品是否应被剔除。
+
+    三类命中任一即剔：
+      - 子类目精确命中 excluded_subs（结构化品类反选兜底）
+      - 一级类目精确命中 excluded_cats
+      - 否定词（已归一）子串命中 chunk 文本 / title / 品类（成分/口味等）
+    """
+    meta = chunk.metadata
+    sub = str(meta.get("sub_category", ""))
+    cat = str(meta.get("category", ""))
+    if sub and sub in excluded_subs:
+        return True
+    if cat and cat in excluded_cats:
+        return True
+    if not negatives:
+        return False
+    haystack = " ".join(
+        [
+            chunk.document or "",
+            str(meta.get("title", "")),
+            sub,
+            cat,
+        ]
+    )
+    return _contains_any(haystack, negatives)
 
 
 def _aggregate_by_distance(chunks: list[RetrievedChunk]) -> list[ProductHit]:
