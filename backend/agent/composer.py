@@ -33,9 +33,9 @@ SYSTEM_PROMPT = """你是一位友好、专业的电商导购助手，说话像�
 - 直接基于提供的 payload 中的真实商品信息说话，绝不编造任何不存在的字段或商品。
 - 必须返回 JSON 格式，包含以下字段：
   - "opening": 开场白，用"为你XXX了"的格式（如"为你推荐了几款适合敏感肌的护肤品"）
-    - "items": 数组，每个元素包含 {"productId": "...", "description": "..."}，**productId 必须原样使用 payload.hits 里对应商品的 productId，禁止自造序号**；每个商品必须对应一个专属解说词，不能多个商品共用一段描述；description 只能写 1 句，控制在 45 个中文字符以内
+    - "items": 数组，每个元素包含 {"productId": "...", "description": "..."}，**productId 必须原样使用 payload.hits 里对应商品的 productId，禁止自造序号**；每个商品必须对应一个专属解说词，不能多个商品共用一段描述；description 只能写 1 句，控制在 45 个中文字符以内，且不要包含价格、¥、元、起等价格表述
   - "questions": 数组，包含 3-5 个追问方向（如"需要更平价的选择？"）
-- 报价格时一律使用 payload.hits 里的 price_display 字段（它已是「¥X 起」或「¥X」的正确形式），原样引用；不要自己拼价格、不要去掉「起」字，更不要给多规格商品报一个单一最高价。若某商品没有 price_display 则可不提价格。
+- 卡片本身已经展示价格；除非 opening 里做总体价格梯度说明，否则不要在 items[].description 里重复价格。
 - 介绍每款时落到使用场景和人群（通勤、学习、送礼…），而不是只报价格和参数；每款只写一句话，不要写保养建议、注意事项或长段参数说明。
 - 适度点出关键差异帮用户决策（价格梯度、核心卖点、适合谁）。
 - 若 payload.hits 为空，坦诚告知未找到，并给出具体的放宽建议（提高预算到 X、放宽品牌等）。此时 opening 说明未找到，items 为空数组。
@@ -159,6 +159,13 @@ def _build_messages(tool_result: ToolResult) -> list[dict[str, str]]:
         f"tool: {tool_result.tool_name}",
         f"payload: {json.dumps(trimmed, ensure_ascii=False)}",
     ]
+    if tool_result.composer_hint:
+        user_msg_parts.append(f"hint: {tool_result.composer_hint}")
+    return [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        *_FEW_SHOT,
+        {"role": "user", "content": "\n".join(user_msg_parts)},
+    ]
 
 
 def _extract_json_object(text: str) -> str | None:
@@ -199,13 +206,34 @@ def _extract_json_object(text: str) -> str | None:
 def _normalize_json_response(text: str) -> str:
     stripped = (text or "").strip()
     return _extract_json_object(stripped) or stripped
-    if tool_result.composer_hint:
-        user_msg_parts.append(f"hint: {tool_result.composer_hint}")
-    return [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        *_FEW_SHOT,
-        {"role": "user", "content": "\n".join(user_msg_parts)},
-    ]
+
+
+def _fallback_json_response(tool_result: ToolResult) -> str:
+    payload = tool_result.payload or {}
+    hits = payload.get("products") or payload.get("hits") or []
+    items = []
+    for hit in hits[:5]:
+        product_id = hit.get("product_id") or hit.get("productId") or ""
+        title = hit.get("title") or "这款商品"
+        if not product_id:
+            continue
+        items.append(
+            {
+                "productId": product_id,
+                "description": f"{title}整体匹配你的需求，可以先点开详情看看。",
+            }
+        )
+
+    if items:
+        opening = f"为你找到 {len(items)} 款可以优先看的商品"
+        questions = ["需要更平价的选择？", "想看更多同类商品？", "需要详细对比某两款？"]
+    else:
+        opening = "暂时没有生成完整说明，可以换个说法再试一次"
+        questions = ["可以放宽预算吗？", "要不要换个品牌看看？", "需要我重新推荐吗？"]
+    return json.dumps(
+        {"opening": opening, "items": items, "questions": questions},
+        ensure_ascii=False,
+    )
 
 
 class AnswerComposer:
@@ -258,7 +286,7 @@ class AnswerComposer:
                 timeout=timeout,
                 stream=True,
             )
-            emitted_any = False
+            pieces: list[str] = []
             for chunk in stream:
                 # OpenAI SDK：chunk.choices[0].delta.content；豆包 Ark 一致。
                 try:
@@ -267,11 +295,12 @@ class AnswerComposer:
                     continue
                 piece = getattr(delta, "content", None)
                 if piece:
-                    emitted_any = True
-                    yield piece
-            if not emitted_any:
+                    pieces.append(piece)
+            if pieces:
+                yield _normalize_json_response("".join(pieces))
+            else:
                 # 模型一个 token 都没吐（理论极少见），给个保底
-                yield "（暂未生成内容，请换种说法再试一次）"
+                yield _fallback_json_response(tool_result)
         except Exception as exc:  # noqa: BLE001 - 流式中任何异常都要兜住
             logger.exception("Streaming compose failed mid-flight")
-            yield f"\n[生成中断：{type(exc).__name__}]"
+            yield _fallback_json_response(tool_result)

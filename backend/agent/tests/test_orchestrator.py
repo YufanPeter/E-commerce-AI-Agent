@@ -469,7 +469,7 @@ class TestComposerStreaming:
                 ["你好", "，我", "推荐 T。"]
             )
             chunks = list(AnswerComposer().compose_stream(sr, AgentSession()))
-        assert chunks == ["你好", "，我", "推荐 T。"]
+        assert chunks == ["你好，我推荐 T。"]
         assert "".join(chunks) == "你好，我推荐 T。"
 
     def test_stream_empty_emits_placeholder(self):
@@ -482,7 +482,9 @@ class TestComposerStreaming:
             # 空 chunks（极端情况）
             mock_client.return_value.chat.completions.create.return_value = iter([])
             chunks = list(AnswerComposer().compose_stream(sr, AgentSession()))
-        assert chunks == ["（暂未生成内容，请换种说法再试一次）"]
+        assert len(chunks) == 1
+        assert chunks[0].startswith("{")
+        assert "questions" in chunks[0]
 
     def test_stream_mid_flight_error_yields_tail(self):
         sr = ToolResult(
@@ -498,9 +500,9 @@ class TestComposerStreaming:
         with patch("agent.composer.get_client") as mock_client:
             mock_client.return_value.chat.completions.create.return_value = _gen()
             chunks = list(AnswerComposer().compose_stream(sr, AgentSession()))
-        # 应该至少有头部 + 兜底提示
-        assert chunks[0] == "头一段"
-        assert any("生成中断" in c for c in chunks)
+        assert len(chunks) == 1
+        assert chunks[0].startswith("{")
+        assert "生成中断" not in chunks[0]
 
     def test_stream_handles_chunks_without_content(self):
         """有些 chunk 只是 role/finish 信号，没 content；不能崩。"""
@@ -518,7 +520,20 @@ class TestComposerStreaming:
         with patch("agent.composer.get_client") as mock_client:
             mock_client.return_value.chat.completions.create.return_value = iter(chunks_in)
             chunks = list(AnswerComposer().compose_stream(sr, AgentSession()))
-        assert "".join(chunks) == "ab"
+        assert chunks == ["ab"]
+
+    def test_build_messages_includes_payload_and_hint(self):
+        from agent.composer import _build_messages
+
+        sr = ToolResult(
+            tool_name="recommend",
+            payload={"query": "x", "hits": [{"product_id": "p1", "title": "T"}]},
+            composer_hint="h",
+        )
+        messages = _build_messages(sr)
+        assert messages[-1]["role"] == "user"
+        assert "payload:" in messages[-1]["content"]
+        assert "hint: h" in messages[-1]["content"]
 
 
 # ---------- Orchestrator: 主流程 + 降级（非流式） ----------
