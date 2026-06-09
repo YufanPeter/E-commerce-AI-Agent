@@ -124,12 +124,82 @@ def test_resolves_title_keyword():
 
 
 def test_multiple_name_matches_asks_clarification():
+    session = _session_with_hits()
     result = ProductDetailTool(product_store=_FakeStore(), evidence_retriever=_EmptyRetriever()).run(
-        "小米那款详细说说", _session_with_hits(), {}
+        "小米那款详细说说", session, {}
     )
 
     assert result.needs_composer is False
     assert "哪一款" in (result.narrative_override or "")
+    # 追问时必须记住候选子集 + 用户原本想问的话，供下一轮把“第一款”正确归位。
+    pending = session.get("pending_detail")
+    assert pending is not None
+    assert [c["product_id"] for c in pending["candidates"]] == ["p2", "p3"]
+
+
+def test_pending_ordinal_reply_maps_to_candidate_subset_not_global_list():
+    """复现并验证截图 bug：澄清后回答“第一款”应命中候选子集第 1 个，而非 last_hits[0]。"""
+    session = _session_with_hits()
+    tool = ProductDetailTool(product_store=_FakeStore(), evidence_retriever=_EmptyRetriever())
+
+    first = tool.run("小米的续航怎么样", session, {})
+    assert first.needs_composer is False  # 先澄清
+    assert session.get("pending_detail") is not None
+
+    second = tool.run("第一款", session, {})
+    # 候选是 [p2, p3]，“第一款”=p2（小米平板），绝不是 last_hits[0]=p1（理肤泉）。
+    assert second.payload["product"]["product_id"] == "p2"
+    # 原始问的“续航”focus 必须被保留，而不是退化成 general。
+    assert second.payload["focus_aspect"] == "performance"
+    # 解析成功后待定态清空，避免粘住下一轮。
+    assert session.get("pending_detail") is None
+
+
+def test_pending_brand_reply_maps_to_candidate():
+    session = _session_with_hits()
+    tool = ProductDetailTool(product_store=_FakeStore(), evidence_retriever=_EmptyRetriever())
+
+    tool.run("小米的续航怎么样", session, {})
+    second = tool.run("第二款", session, {})
+    assert second.payload["product"]["product_id"] == "p3"
+
+
+def test_pending_topic_change_releases_clarification():
+    session = _session_with_hits()
+    tool = ProductDetailTool(product_store=_FakeStore(), evidence_retriever=_EmptyRetriever())
+
+    tool.run("小米的续航怎么样", session, {})
+    assert session.get("pending_detail") is not None
+
+    # 用户换了话题（点名另一商品的属性），不应再纠结在候选里。
+    third = tool.run("理肤泉那款敏感肌能用吗", session, {})
+    assert third.payload["product"]["product_id"] == "p1"
+    assert session.get("pending_detail") is None
+
+
+
+def test_focus_product_disambiguates_multiple_name_matches():
+    session = _session_with_hits()
+    session.set("last_focus_product_id", "p2")
+
+    result = ProductDetailTool(product_store=_FakeStore(), evidence_retriever=_EmptyRetriever()).run(
+        "小米的续航怎么样", session, {}
+    )
+
+    assert result.needs_composer is True
+    assert result.payload["product"]["product_id"] == "p2"
+    assert result.payload["focus_aspect"] == "performance"
+
+
+def test_bare_attribute_followup_uses_focused_product():
+    session = _session_with_hits()
+    session.set("last_focus_product_id", "p2")
+
+    result = ProductDetailTool(product_store=_FakeStore(), evidence_retriever=_EmptyRetriever()).run(
+        "续航怎么样", session, {}
+    )
+
+    assert result.payload["product"]["product_id"] == "p2"
 
 
 def test_review_focus_uses_review_evidence_fallback():

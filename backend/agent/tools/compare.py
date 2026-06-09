@@ -71,10 +71,18 @@ class CompareTool:
             product_ids = self._resolve_targets(query, last_hits)
 
         if len(product_ids) < 2:
+            # 定位不到 2 款 → 反问。记下「正在对比追问」，下一轮用户回答
+            # 「第一个和第三个」时 orchestrator 才能把它强制送回 compare，
+            # 而不是被 router 误判成 product_detail/refine。候选就是 last_hits
+            # 全集，所以无需另存子集，只需标记待定态。
+            session.set("pending_compare", {"hit_count": len(last_hits)})
             return self._plain(
                 "想对比哪几款呢？可以说「对比第一个和第三个」，"
                 "或者「对比华为和小米那两款」。"
             )
+
+        # 定位成功 → 清掉「对比追问」待定态，避免粘住下一轮。
+        session.set("pending_compare", None)
 
         details = []
         for pid in product_ids:
@@ -198,4 +206,32 @@ def _strip_generic_pair_words(query: str) -> str:
     for word in ("这两款", "这两个", "那两款", "那两个", "两款", "两个", "这俩", "俩", "二者"):
         text = text.replace(word, " ")
     return text
+
+
+# 明显的「开新检索/换品类」信号——出现这些词时，pending_compare 不再粘住。
+_COMPARE_NEW_SEARCH_WORDS: tuple[str, ...] = (
+    "推荐", "找", "有哪些", "有什么", "想买", "给我", "来几款", "换个", "换成", "看看别的",
+    "加入购物车", "加购", "下单", "结算",
+)
+
+# 连接两个被点名商品的关系词（"第一个和第三个" / "华为跟小米"）。
+_COMPARE_LINK_WORDS: tuple[str, ...] = ("和", "跟", "与", "还有", "以及", "对比", "比较", "vs", "VS")
+
+
+def is_compare_selection_reply(query: str, hit_count: int) -> bool:
+    """判断这句是否像在回答「想对比哪几款」，用于 pending_compare 的粘性判定。
+
+    命中条件：解析出 ≥2 个序号、命中 ≥2 个商品名、或含连接词（和/跟/对比）。
+    出现明显的开新检索词（推荐/找/加购…）则判否，让待定态及时释放。"""
+    text = (query or "").strip()
+    if not text:
+        return False
+    if any(word in text for word in _COMPARE_NEW_SEARCH_WORDS):
+        return False
+    if len(resolve_indices(text, max(hit_count, 1))) >= 2:
+        return True
+    if any(word in text for word in _COMPARE_LINK_WORDS):
+        return True
+    return False
+
 

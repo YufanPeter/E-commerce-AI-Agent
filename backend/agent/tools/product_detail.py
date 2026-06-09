@@ -86,25 +86,29 @@ class ProductDetailTool:
     ) -> ToolResult:
         last_hits = session.recall_hits()
         if not last_hits:
+            session.set("pending_detail", None)
             return self._plain(
                 query,
                 "想详细了解哪款商品呀？先让我推荐几款，然后说「第一个再详细点」就可以。",
             )
 
-        target_id, clarification = self._resolve_target_id(query, last_hits, session, slots)
+        target_id, clarification, focus_query = self._resolve_target_id(query, last_hits, session, slots)
         if not target_id:
             return self._plain(query, clarification or "想了解哪一款呢？可以说「第一个详细说说」。")
+
+        # 解析成功 → 清掉「澄清待定」态，避免下一轮被粘住。
+        session.set("pending_detail", None)
 
         detail = self._store.get_product_detail(target_id)
         if detail is None:
             return self._plain(query, "这款商品的详情资料暂时不完整，换一款我再帮你看看？")
 
-        focus = _detect_focus_aspect(query)
-        evidence = self._retrieve_evidence(detail, query, focus)
+        focus = _detect_focus_aspect(focus_query)
+        evidence = self._retrieve_evidence(detail, focus_query, focus)
         session.set("last_focus_product_id", detail.product_id)
 
         payload = {
-            "query": query,
+            "query": focus_query,
             "focus_aspect": focus,
             "product": _product_payload(detail),
             "evidence": evidence,
@@ -126,33 +130,90 @@ class ProductDetailTool:
         last_hits: list[dict[str, Any]],
         session: AgentSession,
         slots: dict[str, Any],
-    ) -> tuple[str | None, str | None]:
+    ) -> tuple[str | None, str | None, str]:
         explicit_id = slots.get("product_id")
         if explicit_id:
-            return str(explicit_id), None
+            return str(explicit_id), None, query
+
+        # ① 优先消费上一轮留下的「澄清待定」：用户正在回答“这几款里要哪一款”。
+        #    这步必须在通用 resolve_indices 之前——否则“第一款”会被映射到整张
+        #    last_hits 的第 0 项（可能是无关商品），而不是刚才追问的候选子集。
+        pending = session.get("pending_detail")
+        if pending and pending.get("candidates"):
+            return self._resolve_pending_detail(query, pending, session)
 
         indices = resolve_indices(query, len(last_hits))
         if indices:
             index = indices[0]
             if 0 <= index < len(last_hits):
-                return last_hits[index]["product_id"], None
+                return last_hits[index]["product_id"], None, query
 
         searchable_hits = self._hits_with_store_context(last_hits)
         name_matches = resolve_by_name(query, searchable_hits)
         if len(name_matches) == 1:
-            return last_hits[name_matches[0]]["product_id"], None
+            return last_hits[name_matches[0]]["product_id"], None, query
         if len(name_matches) > 1:
-            titles = "、".join(last_hits[i].get("title", f"第{i + 1}款")[:16] for i in name_matches[:3])
-            return None, f"你提到的商品有点多，是想了解「{titles}」里的哪一款？"
+            focus_id = session.get("last_focus_product_id")
+            if focus_id:
+                matched_ids = {last_hits[i]["product_id"] for i in name_matches}
+                if str(focus_id) in matched_ids:
+                    return str(focus_id), None, query
+            candidates = [
+                {
+                    "product_id": last_hits[i]["product_id"],
+                    "title": searchable_hits[i].get("title", f"第{i + 1}款"),
+                }
+                for i in name_matches[:3]
+            ]
+            # 记住「我们在哪几款里追问」+「用户原本想问的属性」，下一轮才能把
+            # “第一款”正确映射到候选子集，并保留 focus（如“续航”）。
+            session.set("pending_detail", {"candidates": candidates, "focus_query": query})
+            titles = "、".join(str(c["title"])[:16] for c in candidates)
+            return None, f"你提到的商品有点多，是想了解「{titles}」里的哪一款？", query
 
         focus_id = session.get("last_focus_product_id")
+        if _is_attribute_followup(query) and focus_id and any(hit["product_id"] == focus_id for hit in last_hits):
+            return str(focus_id), None, query
+
         if _has_deictic(query) and focus_id and any(hit["product_id"] == focus_id for hit in last_hits):
-            return str(focus_id), None
+            return str(focus_id), None, query
 
         if _has_deictic(query) or len(last_hits) == 1:
-            return last_hits[0]["product_id"], None
+            return last_hits[0]["product_id"], None, query
 
-        return None, "想了解哪一款呢？可以说「第一个评价怎么样」或「小米那款详细说说」。"
+        return None, "想了解哪一款呢？可以说「第一个评价怎么样」或「小米那款详细说说」。", query
+
+    def _resolve_pending_detail(
+        self,
+        query: str,
+        pending: dict[str, Any],
+        session: AgentSession,
+    ) -> tuple[str | None, str | None, str]:
+        """消费上一轮的澄清追问。用户这句要么选中某个候选，要么换了话题。"""
+        candidates = pending.get("candidates") or []
+        focus_query = f"{pending.get('focus_query', '')} {query}".strip()
+
+        # ① 先在候选子集里找唯一命中（序号优先，其次品牌名）。
+        resolved = _pick_from_candidates(query, candidates)
+        if resolved is not None:
+            return resolved, None, focus_query
+
+        # ② 没在候选里唯一命中：可能是换了话题、点名了候选之外的其他商品。
+        #    清掉 pending 防递归，用正常解析看看会落到谁。
+        candidate_ids = {str(c["product_id"]) for c in candidates}
+        last_hits = session.recall_hits()
+        session.set("pending_detail", None)
+        target_id, clarification, fallback_query = self._resolve_target_id(
+            query, last_hits, session, {}
+        )
+        if target_id and str(target_id) not in candidate_ids:
+            # 明确指向候选之外的另一款 → 用户确实换了话题，采用之。
+            return target_id, clarification, fallback_query
+
+        # ③ 仍指向候选内 / 解析不出 → 恢复 pending，继续在候选里追问。
+        session.set("pending_detail", pending)
+        titles = "、".join(str(c.get("title", ""))[:16] for c in candidates[:3])
+        return None, f"想了解「{titles}」里的哪一款呢？说「第一款」或直接报品牌名都行。", query
 
     def _hits_with_store_context(self, last_hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
         enriched: list[dict[str, Any]] = []
@@ -239,6 +300,60 @@ def _detect_focus_aspect(query: str) -> str:
 
 def _has_deictic(query: str) -> bool:
     return any(word in (query or "") for word in _DEICTIC_WORDS)
+
+
+# 明显的“开新检索/换品类”信号——出现这些词时，pending_detail 不再粘住。
+_NEW_SEARCH_WORDS: tuple[str, ...] = (
+    "推荐", "找", "有哪些", "有什么", "想买", "给我", "来几款", "换个", "换成", "看看别的",
+)
+
+# 对比意图词——出现时这句不是「选哪一款」的应答，而是想转去对比，不该粘在 detail。
+_COMPARE_INTENT_WORDS: tuple[str, ...] = (
+    "对比", "比较", "区别", "哪个好", "哪款好", "哪个更", "哪款更", "差异",
+)
+
+
+def _pick_from_candidates(query: str, candidates: list[dict[str, Any]]) -> str | None:
+    """把用户应答映射到澄清候选子集里的某个商品（序号优先，其次品牌名）。"""
+    if not candidates:
+        return None
+    indices = resolve_indices(query, len(candidates))
+    if indices:
+        index = indices[0]
+        if 0 <= index < len(candidates):
+            return str(candidates[index]["product_id"])
+    name_matches = resolve_by_name(query, candidates)
+    if len(name_matches) == 1:
+        return str(candidates[name_matches[0]]["product_id"])
+    return None
+
+
+def is_detail_selection_reply(query: str) -> bool:
+    """判断这句是否像在回答“这几款里要哪一款”，用于 pending_detail 的粘性判定。
+
+    命中条件：含序号/数字（“第一款”“第2个”）、含指代词、或是很短的应答（如品牌名）。
+    出现明显的开新检索词（推荐/找/换个…）或对比意图词则判否，让待定态及时释放。"""
+    text = (query or "").strip()
+    if not text:
+        return False
+    if any(word in text for word in _NEW_SEARCH_WORDS):
+        return False
+    if any(word in text for word in _COMPARE_INTENT_WORDS):
+        return False
+    if resolve_indices(text, 99):
+        return True
+    if _has_deictic(text):
+        return True
+    return len(text) <= 8
+
+
+
+def _is_attribute_followup(query: str) -> bool:
+    text = query or ""
+    has_attribute = any(keyword in text for _, keywords in _FOCUS_KEYWORDS for keyword in keywords)
+    has_question = any(word in text for word in ("怎么样", "如何", "好吗", "好不好", "有没有", "表现"))
+    is_new_search = any(word in text for word in ("推荐", "找", "有哪些", "有什么", "想买", "给我"))
+    return has_attribute and has_question and not is_new_search
 
 
 def _product_payload(detail: ProductDetail) -> dict[str, Any]:

@@ -631,6 +631,186 @@ class TestOrchestratorBlocking:
         assert resp.decision.tool == "compare"
         assert resp.tool_result.payload["comparison"] is not None
 
+    def test_attribute_followup_with_named_product_routes_to_product_detail(self):
+        agent = _make_agent()
+        session = AgentSession()
+        session.set("last_hits", [
+            {"product_id": "p1", "title": "Apple iPhone 17 Pro"},
+            {"product_id": "p2", "title": "小米 17 Ultra"},
+        ])
+        router_decision = IntentDecision(
+            tool="recommend",
+            rewritten_query="推荐续航表现优秀的小米手机",
+            confidence="high",
+            reasoning="router misroute",
+        )
+
+        with patch("agent.orchestrator.route", return_value=router_decision):
+            decision = agent._safe_route("小米的续航怎么样？", session, {"timings": {}})
+
+        assert decision.tool == "product_detail"
+        assert decision.rewritten_query == "小米的续航怎么样？"
+
+    def test_router_injected_compare_word_does_not_force_compare(self):
+        agent = _make_agent()
+        session = AgentSession()
+        session.set("last_hits", [
+            {"product_id": "p1", "title": "小米 17 Max 大屏长续航"},
+            {"product_id": "p2", "title": "小米 17 Ultra 影像手机"},
+        ])
+        router_decision = IntentDecision(
+            tool="recommend",
+            rewritten_query="对比刚才推荐的两款小米手机的续航表现",
+            confidence="high",
+            reasoning="router injected compare wording",
+        )
+
+        with patch("agent.orchestrator.route", return_value=router_decision):
+            decision = agent._safe_route("小米的续航怎么样？", session, {"timings": {}})
+
+        assert decision.tool == "product_detail"
+        assert decision.rewritten_query == "小米的续航怎么样？"
+
+    def test_group_attribute_followup_routes_to_compare(self):
+        agent = _make_agent()
+        session = AgentSession()
+        session.set("last_hits", [
+            {"product_id": "p1", "title": "Apple iPad Pro"},
+            {"product_id": "p2", "title": "小米平板 8 Pro"},
+        ])
+        router_decision = IntentDecision(
+            tool="recommend",
+            rewritten_query="推荐续航强的平板",
+            confidence="high",
+            reasoning="router misroute",
+        )
+
+        with patch("agent.orchestrator.route", return_value=router_decision):
+            decision = agent._safe_route("这几款平板哪个续航更好？", session, {"timings": {}})
+
+        assert decision.tool == "compare"
+
+    def test_new_attribute_search_stays_recommend(self):
+        agent = _make_agent()
+        session = AgentSession()
+        session.set("last_hits", [
+            {"product_id": "p1", "title": "Apple iPad Pro"},
+            {"product_id": "p2", "title": "小米平板 8 Pro"},
+        ])
+        router_decision = IntentDecision(
+            tool="recommend",
+            rewritten_query="推荐续航好的平板",
+            confidence="high",
+            reasoning="fresh search",
+        )
+
+        with patch("agent.orchestrator.route", return_value=router_decision):
+            decision = agent._safe_route("推荐续航好的平板", session, {"timings": {}})
+
+        assert decision.tool == "recommend"
+
+    def test_bare_attribute_followup_with_focus_routes_to_product_detail(self):
+        agent = _make_agent()
+        session = AgentSession()
+        session.set("last_hits", [
+            {"product_id": "p1", "title": "Apple iPad Pro"},
+            {"product_id": "p2", "title": "小米平板 8 Pro"},
+        ])
+        session.set("last_focus_product_id", "p2")
+        router_decision = IntentDecision(
+            tool="recommend",
+            rewritten_query="推荐续航好的平板",
+            confidence="high",
+            reasoning="router misroute",
+        )
+
+        with patch("agent.orchestrator.route", return_value=router_decision):
+            decision = agent._safe_route("续航怎么样？", session, {"timings": {}})
+
+        assert decision.tool == "product_detail"
+        assert decision.rewritten_query == "续航怎么样？"
+
+    def test_pending_detail_selection_forces_product_detail_without_router(self):
+        agent = _make_agent()
+        session = AgentSession()
+        session.set("last_hits", [
+            {"product_id": "p1", "title": "Apple iPad Pro"},
+            {"product_id": "p2", "title": "小米平板 8 Pro"},
+        ])
+        session.set("pending_detail", {
+            "candidates": [{"product_id": "p1", "title": "Apple"}, {"product_id": "p2", "title": "小米"}],
+            "focus_query": "续航怎么样",
+        })
+
+        # 不打 patch route——若被调用会抛错；这里应跳过 router 直接 product_detail。
+        decision = agent._safe_route("第一款", session, {"timings": {}})
+        assert decision.tool == "product_detail"
+        assert decision.rewritten_query == "第一款"
+
+    def test_pending_detail_topic_change_releases_and_routes_normally(self):
+        agent = _make_agent()
+        session = AgentSession()
+        session.set("last_hits", [{"product_id": "p1", "title": "Apple iPad Pro"}])
+        session.set("pending_detail", {"candidates": [{"product_id": "p1", "title": "A"}], "focus_query": "x"})
+        router_decision = IntentDecision(
+            tool="recommend", rewritten_query="推荐几款手机", confidence="high", reasoning="fresh",
+        )
+
+        with patch("agent.orchestrator.route", return_value=router_decision):
+            decision = agent._safe_route("推荐几款手机", session, {"timings": {}})
+
+        assert decision.tool == "recommend"
+        assert session.get("pending_detail") is None
+
+    def test_pending_compare_selection_forces_compare_without_router(self):
+        agent = _make_agent()
+        session = AgentSession()
+        session.set("last_hits", [
+            {"product_id": "p1", "title": "Apple iPhone"},
+            {"product_id": "p2", "title": "小米"},
+            {"product_id": "p3", "title": "华为"},
+        ])
+        session.set("pending_compare", {"hit_count": 3})
+
+        decision = agent._safe_route("第一个和第三个", session, {"timings": {}})
+        assert decision.tool == "compare"
+        assert decision.rewritten_query == "第一个和第三个"
+
+    def test_pending_cart_holds_for_spec_reply(self):
+        agent = _make_agent()
+        session = AgentSession()
+        session.set("pending_cart", {"product_id": "p1", "title": "x", "quantity": 1, "spec_text": ""})
+
+        # “暗夜黑 42码”是规格应答，必须留在 cart 完成加购。
+        decision = agent._safe_route("暗夜黑 42码", session, {"timings": {}})
+        assert decision.tool == "cart"
+        assert session.get("pending_cart") is not None
+
+    def test_pending_cart_releases_on_new_search_escape(self):
+        agent = _make_agent()
+        session = AgentSession()
+        session.set("pending_cart", {"product_id": "p1", "title": "x", "quantity": 1, "spec_text": ""})
+        router_decision = IntentDecision(
+            tool="recommend", rewritten_query="推荐几款笔记本", confidence="high", reasoning="fresh",
+        )
+
+        # 用户中途改口开新检索 → 释放 pending，交回正常路由。
+        with patch("agent.orchestrator.route", return_value=router_decision):
+            decision = agent._safe_route("推荐几款笔记本", session, {"timings": {}})
+        assert decision.tool == "recommend"
+        assert session.get("pending_cart") is None
+
+    def test_new_search_escape_detection(self):
+        from agent.orchestrator import _is_new_search_escape
+
+        assert _is_new_search_escape("推荐几款笔记本") is True
+        assert _is_new_search_escape("有没有便宜点的平板") is True
+        assert _is_new_search_escape("换成华为的看看") is True
+        # 规格应答 / 聚焦指代不算逃逸
+        assert _is_new_search_escape("暗夜黑 42码") is False
+        assert _is_new_search_escape("这个加进来") is False
+        assert _is_new_search_escape("第一个") is False
+
     def test_compare_uses_raw_query_for_first_and_last_reference(self):
         details = [
             _detail("hoodie", "李宁 运动生活系列 男子连帽套头卫衣", "李宁"),

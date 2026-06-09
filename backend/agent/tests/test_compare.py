@@ -161,6 +161,41 @@ class TestCompareRun:
         assert [h["product_id"] for h in sess.recall_hits()] == ["p1", "p2"]
 
 
+class TestPendingCompareClarification:
+    """对比定位不到 2 款时挂起追问，下一轮回答能正确接续。"""
+
+    def test_ambiguous_sets_pending_compare(self):
+        tool = CompareTool(product_store=_FakeStore(_DETAILS))
+        # 只点到一款（华为）→ 无法凑齐两款 → 反问并挂起。
+        sess = _session_with_hits(_HITS)
+        res = tool.run("对比华为", sess, {})
+        assert res.payload["comparison"] is None
+        assert sess.get("pending_compare") is not None
+
+    def test_followup_ordinals_complete_compare(self):
+        tool = CompareTool(product_store=_FakeStore(_DETAILS))
+        sess = _session_with_hits(_HITS)
+        sess.set("pending_compare", {"hit_count": 3})
+        with patch("agent.tools.compare.build_comparison", side_effect=_fake_build):
+            res = tool.run("第一个和第三个", sess, {})
+        comp = res.payload["comparison"]
+        assert [p["product_id"] for p in comp["products"]] == ["p1", "p3"]
+        # 成功后清掉待定态。
+        assert sess.get("pending_compare") is None
+
+    def test_selection_reply_detection(self):
+        from agent.tools.compare import is_compare_selection_reply
+
+        # 序号 / 连接词 / 点名两款 → 是选择应答
+        assert is_compare_selection_reply("第一个和第三个", 3) is True
+        assert is_compare_selection_reply("华为和小米", 3) is True
+        assert is_compare_selection_reply("小米跟苹果", 3) is True
+        # 开新检索 / 加购 → 不是
+        assert is_compare_selection_reply("推荐几款平板", 3) is False
+        assert is_compare_selection_reply("加入购物车", 3) is False
+        assert is_compare_selection_reply("", 3) is False
+
+
 class TestComparisonBuilder:
     def test_price_row_highlights_cheapest(self):
         from agent.comparison import _price_row

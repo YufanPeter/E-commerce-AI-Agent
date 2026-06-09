@@ -32,6 +32,7 @@ from __future__ import annotations
 """
 
 import logging
+import re
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -43,9 +44,10 @@ from agent.session import AgentSession
 from agent.tools.base import Tool, ToolResult
 from agent.tools.cart import CartTool
 from agent.tools.clarify import ClarifyTool
-from agent.tools.compare import CompareTool
+from agent.tools.compare import CompareTool, is_compare_selection_reply
 from agent.tools.fallback import FallbackTool
-from agent.tools.product_detail import ProductDetailTool
+from agent.tools.product_detail import ProductDetailTool, is_detail_selection_reply
+from agent.tools.reference import resolve_by_name, resolve_indices
 from agent.tools.recommend import RecommendTool
 from agent.tools.refine import RefineTool
 
@@ -86,6 +88,27 @@ class AgentResponse:
 # 这是后端内部协议；FastAPI 适配层负责把它序列化为 SSE 行。
 
 _DEFAULT_ROUTER_ERROR_TEXT = "（路由器调用失败，已退回到默认推荐流程）"
+
+_DETAIL_ATTRIBUTE_WORDS = (
+    "续航", "性能", "屏幕", "拍照", "降噪", "配置", "重量", "轻薄",
+    "评价", "口碑", "评论", "差评", "缺点", "问题",
+    "敏感肌", "刺激", "酒精", "过敏", "泛红",
+    "尺码", "偏大", "偏小", "合脚", "版型", "脚感",
+)
+_DETAIL_QUESTION_WORDS = (
+    "怎么样", "如何", "好吗", "好不好", "行不行", "能不能", "适合吗",
+    "有没有", "详细", "说说", "讲讲", "介绍", "表现",
+)
+_DETAIL_DEICTIC_WORDS = (
+    "这款", "这个", "这件", "这双", "那款", "那个", "刚才", "刚刚", "上面", "前面",
+)
+_GROUP_COMPARE_WORDS = (
+    "这些", "这几款", "这几个", "它们", "他们", "哪款", "哪个", "谁更", "哪个更", "哪款更",
+)
+_NEW_SEARCH_WORDS = (
+    "推荐", "找", "看看", "看一下", "有哪些", "有什么", "想买", "给我", "来几款",
+)
+_BRAND_OR_MODEL_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9]+|[\u4e00-\u9fff]{2,}")
 
 # 各工具对应的"正在工作中"提示文案
 _TOOL_WORKING_HINT = {
@@ -365,17 +388,56 @@ class Agent:
         logger.info("turn start: query=%r", query[:60])
         # 若上一轮 cart 正在等用户选规格或选商品，则本轮强制走 cart，跳过 router LLM——
         # 否则"暗夜黑 42码""第一个"这类回答会被路由误判为 refine/recommend。
+        # 例外：用户明确改口开新检索（“推荐几款笔记本”“有没有便宜点的平板”），这类话
+        # 带检索动词、不会是规格应答，应释放 pending 交回正常路由，而不是硬塞进 cart。
         if session.get("pending_cart") or session.get("pending_add"):
-            decision = IntentDecision(
-                tool="cart",
-                rewritten_query=query,
-                confidence="high",
-                reasoning="pending cart selection",
-            )
-            trace["timings"]["router_ms"] = 0
-            trace["decision"] = decision.to_dict()
-            logger.info("router skipped: pending cart selection → tool=cart")
-            return decision
+            if _is_new_search_escape(query):
+                session.set("pending_cart", None)
+                session.set("pending_add", None)
+                logger.info("pending cart released: new-search escape detected")
+            else:
+                decision = IntentDecision(
+                    tool="cart",
+                    rewritten_query=query,
+                    confidence="high",
+                    reasoning="pending cart selection",
+                )
+                trace["timings"]["router_ms"] = 0
+                trace["decision"] = decision.to_dict()
+                logger.info("router skipped: pending cart selection → tool=cart")
+                return decision
+        # 若上一轮 product_detail 正在追问“这几款里要哪一款”，且本轮像一次选择应答
+        # （“第一款”/品牌名/指代），强制走 product_detail，避免“第一款”被 router
+        # 误判成 recommend/refine 而把序号映射到无关商品。换了话题则释放待定态。
+        if session.get("pending_detail"):
+            if is_detail_selection_reply(query):
+                decision = IntentDecision(
+                    tool="product_detail",
+                    rewritten_query=query,
+                    confidence="high",
+                    reasoning="pending detail clarification",
+                )
+                trace["timings"]["router_ms"] = 0
+                trace["decision"] = decision.to_dict()
+                logger.info("router skipped: pending detail clarification → tool=product_detail")
+                return decision
+            session.set("pending_detail", None)
+        # 同理：上一轮 compare 追问“想对比哪几款”，本轮像“第一个和第三个”
+        # 这样的选择应答 → 强制走 compare，避免被误判成 product_detail/refine。
+        if session.get("pending_compare"):
+            hit_count = len(session.recall_hits())
+            if is_compare_selection_reply(query, hit_count):
+                decision = IntentDecision(
+                    tool="compare",
+                    rewritten_query=query,
+                    confidence="high",
+                    reasoning="pending compare clarification",
+                )
+                trace["timings"]["router_ms"] = 0
+                trace["decision"] = decision.to_dict()
+                logger.info("router skipped: pending compare clarification → tool=compare")
+                return decision
+            session.set("pending_compare", None)
         t0 = time.perf_counter()
         try:
             decision = route(query, session)
@@ -395,7 +457,7 @@ class Agent:
                 reasoning=f"router failure, keyword fallback to {fallback_tool}",
             )
         trace["timings"]["router_ms"] = int((time.perf_counter() - t0) * 1000)
-        decision = self._apply_post_route_guards(query, decision)
+        decision = self._apply_post_route_guards(query, session, decision)
         trace["decision"] = decision.to_dict()
         logger.info(
             "router done in %dms → tool=%s",
@@ -404,17 +466,25 @@ class Agent:
         return decision
 
     @staticmethod
-    def _apply_post_route_guards(query: str, decision: IntentDecision) -> IntentDecision:
+    def _apply_post_route_guards(
+        query: str,
+        session: AgentSession,
+        decision: IntentDecision,
+    ) -> IntentDecision:
         """对少数高确定性意图做路由后保护，压住 LLM 抖动。"""
-        text = f"{query or ''} {decision.rewritten_query or ''}"
+        raw_text = query or ""
         compare_words = ("对比", "比较", "区别", "哪个好", "哪款好", "哪个更", "哪款更")
-        if decision.tool == "recommend" and any(w in text for w in compare_words):
+        if decision.tool == "recommend" and any(w in raw_text for w in compare_words):
             return IntentDecision(
                 tool="compare",
                 rewritten_query=decision.rewritten_query or query,
                 confidence="high",
                 reasoning=f"post-route guard: compare intent detected; original={decision.tool}",
             )
+        if decision.tool in {"recommend", "refine"}:
+            guarded = _guard_attribute_followup(query, session, decision)
+            if guarded is not None:
+                return guarded
         return decision
 
     @staticmethod
@@ -446,7 +516,7 @@ class Agent:
             # compare/product_detail 这类强依赖“第一个/最后一个/这款”的工具，
             # 不能让 router 的 rewritten_query 改写掉用户原始指代；否则 LLM 一旦
             # 把“第一个”误补成错误商品名，工具就会对比错对象。
-            tool_query = raw_query if decision.tool == "compare" else decision.rewritten_query
+            tool_query = raw_query if decision.tool in {"compare", "product_detail"} else decision.rewritten_query
             tool_result = tool.run(tool_query, session, slots={})
         except Exception as exc:  # noqa: BLE001
             logger.exception("Tool %s failed", decision.tool)
@@ -488,3 +558,103 @@ class Agent:
             titles = "、".join(h.get("title", "") for h in hits[:3])
             return f"为你找到 {len(hits)} 款商品，包括：{titles}。"
         return tool_result.narrative_override or "好的。"
+
+
+def _guard_attribute_followup(
+    query: str,
+    session: AgentSession,
+    decision: IntentDecision,
+) -> IntentDecision | None:
+    """Route context-dependent attribute questions away from fresh recommendation.
+
+    Examples:
+    - ``小米的续航怎么样`` after a phone list -> product_detail (or clarification in tool)
+    - ``这几款哪个续航更好`` -> compare
+    - ``推荐续航好的平板`` -> keep recommend/refine
+    """
+    hits = session.recall_hits()
+    if not hits:
+        return None
+
+    raw_text = query or ""
+    text = f"{raw_text} {decision.rewritten_query or ''}"
+    if not any(word in text for word in _DETAIL_ATTRIBUTE_WORDS):
+        return None
+
+    if any(word in raw_text for word in _GROUP_COMPARE_WORDS):
+        return IntentDecision(
+            tool="compare",
+            rewritten_query=query,
+            confidence="high",
+            reasoning=f"post-route guard: group attribute follow-up; original={decision.tool}",
+        )
+
+    if _is_new_search_attribute_request(query or ""):
+        return None
+
+    has_question_signal = any(word in text for word in _DETAIL_QUESTION_WORDS)
+    if has_question_signal and _has_detail_target_signal(query, hits):
+        return IntentDecision(
+            tool="product_detail",
+            rewritten_query=query,
+            confidence="high",
+            reasoning=f"post-route guard: product attribute follow-up; original={decision.tool}",
+        )
+    focus_id = session.get("last_focus_product_id")
+    if has_question_signal and focus_id and any(hit.get("product_id") == focus_id for hit in hits):
+        return IntentDecision(
+            tool="product_detail",
+            rewritten_query=query,
+            confidence="high",
+            reasoning=f"post-route guard: focused product attribute follow-up; original={decision.tool}",
+        )
+    return None
+
+
+def _is_new_search_attribute_request(text: str) -> bool:
+    if not any(word in text for word in _NEW_SEARCH_WORDS):
+        return False
+    return not any(word in text for word in _DETAIL_DEICTIC_WORDS)
+
+
+def _has_detail_target_signal(query: str, hits: list[dict[str, Any]]) -> bool:
+    text = query or ""
+    if any(word in text for word in _DETAIL_DEICTIC_WORDS):
+        return True
+    if len(resolve_indices(text, len(hits))) == 1:
+        return True
+    if resolve_by_name(text, hits):
+        return True
+
+    query_tokens = set(_BRAND_OR_MODEL_TOKEN_RE.findall(text))
+    if not query_tokens:
+        return False
+    for hit in hits:
+        title_tokens = set(_BRAND_OR_MODEL_TOKEN_RE.findall(str(hit.get("title", ""))))
+        brand_tokens = set(_BRAND_OR_MODEL_TOKEN_RE.findall(str(hit.get("brand", ""))))
+        if query_tokens & (title_tokens | brand_tokens):
+            return True
+    return False
+
+
+# 明确的「开新检索/换品类」逃逸信号——用户在 pending（选规格/选商品）中途改口
+# 想找别的东西。要求出现强检索动词，且不是纯指代应答；这类话绝不会是
+# “暗夜黑/42码/第一个”这种 pending 应答，因此放宽逃逸不会误伤选规格/选商品流程。
+_ESCAPE_SEARCH_WORDS: tuple[str, ...] = (
+    "推荐", "有没有", "有什么", "想看", "想买", "看看别的", "换成", "换个", "再找", "找找",
+    "其他", "别的",
+)
+
+
+def _is_new_search_escape(query: str) -> bool:
+    """判断 pending 中途这句是否是“改口开新检索”，用于释放 cart 的 pending 态。
+
+    命中条件：含强检索动词（推荐/有没有/换成…）且不含「这款/这个」等聚焦指代。
+    纯指代应答（“这个”“第一个”）不算逃逸，继续留在 pending 让用户完成加购。"""
+    text = (query or "").strip()
+    if not text:
+        return False
+    if any(word in text for word in _DETAIL_DEICTIC_WORDS):
+        return False
+    return any(word in text for word in _ESCAPE_SEARCH_WORDS)
+
