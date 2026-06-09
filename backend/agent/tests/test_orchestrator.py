@@ -411,7 +411,7 @@ class TestComposerBlocking:
             payload={"query": "精华", "hits": []},
             composer_hint="正常推荐",
         )
-        wrapped = '好的，下面是推荐：\n{"opening":"为你推荐了几款","items":[],"questions":["需要更平价的选择？"]}\n希望有帮助。'
+        wrapped = '好的，下面是推荐：\n{"opening":"为你推荐了几款","items":[],"followup":["推荐一些更平价的选择"]}\n希望有帮助。'
         fake_resp = _fake_chat_response(wrapped)
         with patch("agent.composer.get_client") as mock_client:
             mock_client.return_value.chat.completions.create.return_value = fake_resp
@@ -484,7 +484,7 @@ class TestComposerStreaming:
             chunks = list(AnswerComposer().compose_stream(sr, AgentSession()))
         assert len(chunks) == 1
         assert chunks[0].startswith("{")
-        assert "questions" in chunks[0]
+        assert "followup" in chunks[0]
 
     def test_stream_mid_flight_error_yields_tail(self):
         sr = ToolResult(

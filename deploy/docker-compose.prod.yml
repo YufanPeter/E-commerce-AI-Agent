@@ -1,18 +1,17 @@
-# 本地开发：在仓库根目录执行
-#   docker compose -f deploy/docker-compose.yml up --build
+# 火山云 ECS 生产部署用 compose（无 build，仅运行镜像）
+# 部署目录示例：/opt/ecommerce-ai-agent/
+#   .env
+#   docker-compose.prod.yml
 #
-# 火山云 ECS 生产：仅使用已加载/拉取的镜像，不触发 build
-#   IMAGE_REF=cartpilot-backend:<tag> docker compose -f deploy/docker-compose.prod.yml up -d
+# 启动：
+#   IMAGE_REF=cartpilot-backend:<tag> docker compose -f docker-compose.prod.yml up -d
 
 services:
   backend:
-    image: ${IMAGE_REF:-cartpilot-backend:local}
-    build:
-      context: ..
-      dockerfile: deploy/Dockerfile
+    image: ${IMAGE_REF:-cartpilot-backend:latest}
     container_name: cartpilot-backend
     env_file:
-      - ${ENV_FILE:-../.env}
+      - .env
     environment:
       HOST: 0.0.0.0
       PORT: 8000
@@ -30,5 +29,5 @@ services:
         ]
       interval: 30s
       timeout: 5s
-      start_period: 30s
-      retries: 3
+      start_period: 45s
+      retries: 5

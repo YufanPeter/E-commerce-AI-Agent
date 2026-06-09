@@ -10,7 +10,7 @@ enum PreviewFixtures {
             {"productId": "p_beauty_010", "description": "安热沙金灿倍护防晒乳：防水防汗，户外暴晒首选"},
             {"productId": "p_beauty_006", "description": "欧莱雅多重防护隔离露：水感轻薄还带提亮，伪素颜很方便"}
         ],
-        "questions": ["需要更平价的防晒选择？", "想要专为敏感肌定制的防晒款？"]
+        "followup": ["推荐更平价的防晒", "推荐专为敏感肌定制的防晒"]
     }
     """
 

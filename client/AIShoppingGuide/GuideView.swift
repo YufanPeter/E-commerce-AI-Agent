@@ -245,7 +245,7 @@ struct GuideView: View {
                         onProductTap: { openProductDetail($0) },
                         onSpecSubmit: { send($0) },
                         onCompareTap: { comparisonContext = ComparisonContext(candidates: $0) },
-                        onFollowUpQuestionTap: { send($0) }
+                        onFollowUpTap: fillInputWithFollowUp
                     )
                     .id(message.id)
 
@@ -630,6 +630,14 @@ struct GuideView: View {
         .joined(separator: "|")
 
         return messageToken
+    }
+
+    /// 点击 followup 建议：填入输入框供用户编辑，不直接发送。
+    private func fillInputWithFollowUp(_ prompt: String) {
+        let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        inputText = trimmed
+        isInputFocused = true
     }
 
     private func sendCurrentInput() {
@@ -1150,7 +1158,7 @@ struct MessageRow: View {
     let onProductTap: (Product) -> Void
     let onSpecSubmit: (String) -> Void
     let onCompareTap: ([Product]) -> Void
-    let onFollowUpQuestionTap: (String) -> Void
+    let onFollowUpTap: (String) -> Void
     @State private var dotCount = 0
     
     private struct ProductSection: Identifiable, Equatable {
@@ -1197,19 +1205,12 @@ struct MessageRow: View {
         return textParagraphs.first
     }
     
-    private var followUpQuestions: [String] {
+    private var followups: [String] {
         guard message.sender == .ai else { return [] }
-        // 优先使用结构化内容
-        if let content = parsedStructuredContent {
-            return content.questions
+        guard let content = parsedStructuredContent else { return [] }
+        return content.followup.filter {
+            !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
-        // 降级：从文本中提取包含问号的段落
-        let questions = textParagraphs.filter { paragraph in
-            paragraph.contains("？") || paragraph.contains("?") || 
-            paragraph.contains("需要") || paragraph.contains("想要") ||
-            paragraph.contains("想看") || paragraph.contains("需要")
-        }
-        return questions
     }
     
     private var middleParagraphs: [String] {
@@ -1219,7 +1220,7 @@ struct MessageRow: View {
         }
         // 降级：从文本中提取中间段落
         guard let opening = openingText else { return textParagraphs }
-        var middle = textParagraphs.filter { $0 != opening && !followUpQuestions.contains($0) }
+        var middle = textParagraphs.filter { $0 != opening }
         if middle.count > message.products.count {
             middle = Array(middle.prefix(message.products.count))
         }
@@ -1249,31 +1250,6 @@ struct MessageRow: View {
                 product: product,
                 description: index < descriptions.count ? descriptions[index] : product.reason
             )
-        }
-    }
-    
-    private func refineFollowUpQuestion(_ question: String) -> String {
-        let cleaned = question.trimmingCharacters(in: CharacterSet(charactersIn: "？? "))
-        let lowercased = cleaned.lowercased()
-        
-        if lowercased.contains("平价") || lowercased.contains("更便宜") || lowercased.contains("低价") {
-            return "推荐一些更平价的选择"
-        } else if lowercased.contains("特定品牌") || lowercased.contains("品牌") {
-            return "推荐其他品牌的商品"
-        } else if lowercased.contains("对比") || lowercased.contains("比较") {
-            return "对比一下刚才推荐的商品"
-        } else if lowercased.contains("规格") || lowercased.contains("参数") || lowercased.contains("细节") {
-            return "想了解更多规格细节"
-        } else if lowercased.contains("大包装") || lowercased.contains("囤货") {
-            return "推荐更多大包装囤货选项"
-        } else if lowercased.contains("低价") || lowercased.contains("更低价") {
-            return "推荐更低价的款式"
-        } else if lowercased.contains("无糖") || lowercased.contains("零糖") {
-            return "推荐完全无糖的其他款式"
-        } else if lowercased.contains("更多") {
-            return cleaned.replacingOccurrences(of: "？", with: "").replacingOccurrences(of: "?", with: "")
-        } else {
-            return cleaned
         }
     }
     
@@ -1337,15 +1313,14 @@ struct MessageRow: View {
                         }
                     }
                     
-                    // 3. 追问方向
-                    if !followUpQuestions.isEmpty {
+                    // 3. 追问 Prompt（点击填入输入框，不直接发送）
+                    if !followups.isEmpty {
                         VStack(alignment: .leading, spacing: 6) {
-                            ForEach(followUpQuestions, id: \.self) { question in
+                            ForEach(followups, id: \.self) { prompt in
                                 Button(action: {
-                                    let refinedPrompt = refineFollowUpQuestion(question)
-                                    onFollowUpQuestionTap(refinedPrompt)
+                                    onFollowUpTap(prompt)
                                 }) {
-                                    Text(question)
+                                    Text(prompt)
                                         .font(.subheadline)
                                         .foregroundStyle(AppTheme.primary)
                                         .padding(.horizontal, 14)
@@ -1941,82 +1916,6 @@ struct CameraPicker: UIViewControllerRepresentable {
     }
 }
 
-struct ProductRemoteImage: View {
-    let url: URL?
-    let cornerRadius: CGFloat
-    let placeholderIcon: String
-    var contentMode: ContentMode = .fill
-
-    var body: some View {
-        AsyncImage(url: url, transaction: Transaction(animation: .easeOut(duration: 0.3))) { phase in
-            switch phase {
-            case .success(let image):
-                if contentMode == .fit {
-                    image
-                        .resizable()
-                        .scaledToFit()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .background(Color.white)
-                        .transition(.opacity)
-                } else {
-                    image
-                        .resizable()
-                        .scaledToFill()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .clipped()
-                        .transition(.opacity)
-                }
-            case .empty:
-                placeholderBox { ProgressView().tint(AppTheme.primary) }
-            case .failure:
-                placeholderBox { placeholderIconView }
-            @unknown default:
-                placeholderBox { placeholderIconView }
-            }
-        }
-        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-    }
-
-    @ViewBuilder
-    private func placeholderBox<Content: View>(@ViewBuilder content: () -> Content) -> some View {
-        ZStack {
-            background
-            content()
-        }
-        .modifier(PlaceholderSizing(isFit: contentMode == .fit))
-    }
-
-    @ViewBuilder
-    private var background: some View {
-        if contentMode == .fit {
-            Color.white
-        } else {
-            LinearGradient(colors: [AppTheme.softPurple, AppTheme.softBlue], startPoint: .topLeading, endPoint: .bottomTrailing)
-        }
-    }
-
-    private var placeholderIconView: some View {
-        Image(systemName: placeholderIcon)
-            .font(.system(size: 34, weight: .semibold))
-            .foregroundStyle(AppTheme.primary)
-    }
-}
-
-private struct PlaceholderSizing: ViewModifier {
-    let isFit: Bool
-
-    func body(content: Content) -> some View {
-        if isFit {
-            content
-                .aspectRatio(1, contentMode: .fit)
-                .frame(maxWidth: .infinity)
-        } else {
-            content
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-    }
-}
-
 struct HistorySheet: View {
     let conversations: [Conversation]
     let onSelect: (Conversation) -> Void
@@ -2252,7 +2151,7 @@ private extension AgentStatusPhase {
             onProductTap: { _ in },
             onSpecSubmit: { _ in },
             onCompareTap: { _ in },
-            onFollowUpQuestionTap: { _ in }
+            onFollowUpTap: { _ in }
         )
         .padding()
     }
@@ -2268,7 +2167,7 @@ private extension AgentStatusPhase {
         onProductTap: { _ in },
         onSpecSubmit: { _ in },
         onCompareTap: { _ in },
-        onFollowUpQuestionTap: { _ in }
+        onFollowUpTap: { _ in }
     )
     .padding()
     .background(AppTheme.background)

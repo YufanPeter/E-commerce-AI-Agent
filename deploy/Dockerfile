@@ -1,4 +1,8 @@
-FROM python:3.11-slim
+ARG BASE_IMAGE=python:3.11-slim
+FROM ${BASE_IMAGE}
+
+LABEL org.opencontainers.image.title="cartpilot-backend" \
+      org.opencontainers.image.description="E-commerce AI Agent backend (FastAPI + ChromaDB)"
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -7,17 +11,27 @@ ENV PYTHONUNBUFFERED=1 \
     CHROMA_TELEMETRY_IMPL=none \
     HF_HUB_OFFLINE=1 \
     TRANSFORMERS_OFFLINE=1 \
-    USE_RERANK=1
+    USE_RERANK=1 \
+    HOST=0.0.0.0 \
+    PORT=8000
 
 WORKDIR /app
 
-RUN apt-get update \
+# 火山云 ECS 内网 apt 源，避免 deb.debian.org 超时
+RUN set -eu; \
+    if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+      sed -i 's|deb.debian.org|mirrors.ivolces.com|g; s|security.debian.org|mirrors.ivolces.com|g' /etc/apt/sources.list.d/debian.sources; \
+    elif [ -f /etc/apt/sources.list ]; then \
+      sed -i 's|deb.debian.org|mirrors.ivolces.com|g; s|security.debian.org|mirrors.ivolces.com|g' /etc/apt/sources.list; \
+    fi; \
+    apt-get update \
     && apt-get install -y --no-install-recommends build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 COPY backend/requirements.txt /app/backend/requirements.txt
 RUN pip install --upgrade pip \
-    && pip install -r /app/backend/requirements.txt
+    && pip install -i https://mirrors.ivolces.com/pypi/simple/ --trusted-host mirrors.ivolces.com \
+       -r /app/backend/requirements.txt
 
 COPY backend /app/backend
 COPY data /app/data
