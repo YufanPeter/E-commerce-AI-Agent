@@ -19,14 +19,14 @@ struct PreferenceView: View {
                 .padding(.bottom, 104)
             }
             .background(AppTheme.background)
-            .navigationTitle("Preference")
+            .navigationTitle("个人偏好")
         }
     }
 
     private var profileCard: some View {
         HStack(spacing: 14) {
             Circle()
-                .fill(LinearGradient(colors: [AppTheme.primary, AppTheme.secondary], startPoint: .topLeading, endPoint: .bottomTrailing))
+                .fill(LinearGradient(colors: [AppTheme.primary, Color(hex: "2563EB")], startPoint: .topLeading, endPoint: .bottomTrailing))
                 .frame(width: 62, height: 62)
                 .overlay(Text("L").font(.title2.bold()).foregroundStyle(.white))
             VStack(alignment: .leading, spacing: 4) {
@@ -39,7 +39,7 @@ struct PreferenceView: View {
             Spacer()
         }
         .padding(16)
-        .floatingLiquidPanel(cornerRadius: 24)
+        .surfacePanel(cornerRadius: 24)
     }
 
     private var preferenceCard: some View {
@@ -65,7 +65,7 @@ struct PreferenceView: View {
                 .tint(AppTheme.primary)
         }
         .padding(16)
-        .floatingLiquidPanel(cornerRadius: 24)
+        .surfacePanel(cornerRadius: 24)
     }
 
     private var quickTags: some View {
@@ -75,7 +75,7 @@ struct PreferenceView: View {
             FlowTags(tags: ["护肤", "数码", "运动", "通勤", "母婴", "家居"])
         }
         .padding(16)
-        .floatingLiquidPanel(cornerRadius: 24)
+        .surfacePanel(cornerRadius: 24)
     }
 }
 
@@ -90,7 +90,7 @@ struct FlowTags: View {
                     .foregroundStyle(AppTheme.primary)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 10)
-                    .background(AppTheme.softPurple, in: Capsule())
+                    .background(AppTheme.secondary.opacity(0.78), in: Capsule())
             }
         }
     }

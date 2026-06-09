@@ -62,10 +62,19 @@ struct CartView: View {
                 VStack(spacing: 0) {
                     if items.isEmpty {
                         ContentUnavailableView("购物车为空", systemImage: "cart", description: Text("从导购推荐里加入商品后会显示在这里。"))
+                            .foregroundStyle(AppTheme.textSecondary)
+                            .padding(.horizontal, 28)
                             .padding(.bottom, 90)
                     } else {
                         ScrollView(showsIndicators: false) {
-                            VStack(spacing: 12) {
+                            VStack(alignment: .leading, spacing: 14) {
+                                cartOverviewCard
+
+                                Text("商品清单")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(AppTheme.textPrimary)
+                                    .padding(.horizontal, 2)
+
                                 ForEach($items) { $item in
                                     CartRow(
                                         item: $item,
@@ -138,6 +147,44 @@ struct CartView: View {
         .floatingLiquidPanel(cornerRadius: 26)
         .padding(.horizontal, 16)
         .padding(.bottom, AppTheme.cartCheckoutBottomPadding)
+    }
+
+    private var cartOverviewCard: some View {
+        HStack(spacing: 12) {
+            cartOverviewMetric(title: "清单", value: "\(currentItemIDs.count) 款")
+            Divider().frame(height: 34)
+            cartOverviewMetric(title: "数量", value: "\(itemCount) 件")
+            Divider().frame(height: 34)
+            cartOverviewMetric(title: "合计", value: selectedItemCount > 0 ? selectedTotalText : "未选择")
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity)
+        .background(
+            LinearGradient(
+                colors: [AppTheme.surface, AppTheme.secondary.opacity(0.56)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            ),
+            in: RoundedRectangle(cornerRadius: 22, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(AppTheme.border, lineWidth: 1)
+        )
+    }
+
+    private func cartOverviewMetric(title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(AppTheme.textSecondary)
+            Text(value)
+                .font(.subheadline.weight(.bold))
+                .foregroundStyle(AppTheme.textPrimary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.78)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func openSpecificationEditor(for item: CartItem) {
@@ -437,10 +484,10 @@ struct CartRow: View {
         }
         .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         .padding(12)
-        .floatingLiquidPanel(cornerRadius: 22)
+        .surfacePanel(cornerRadius: 22)
         .overlay(
             RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .stroke(isSelected ? AppTheme.primary.opacity(0.42) : Color.clear, lineWidth: 1.2)
+                .stroke(isSelected ? AppTheme.primary.opacity(0.52) : Color.clear, lineWidth: 1.4)
         )
         .animation(.easeOut(duration: 0.16), value: isSelected)
     }
@@ -472,7 +519,7 @@ private struct CartSelectionButton: View {
             .frame(minWidth: title == nil ? 38 : 0, minHeight: 38)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.tactile)
         .accessibilityLabel(accessibilityLabel)
     }
 
@@ -527,7 +574,7 @@ private struct CartCheckoutBar: View {
                         in: Capsule()
                     )
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.tactile)
             .disabled(!hasSelection)
         }
     }
@@ -559,6 +606,7 @@ private struct CartSpecificationEditorSheet: View {
                         .padding(.vertical, 15)
                         .background(AppTheme.primary, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                 }
+                .buttonStyle(.tactile)
                 .padding(.horizontal, 20)
                 .padding(.top, 12)
                 .padding(.bottom, 12)
@@ -595,7 +643,7 @@ private struct CartSpecificationEditorSheet: View {
             }
         }
         .padding(14)
-        .floatingLiquidPanel(cornerRadius: 20)
+        .surfacePanel(cornerRadius: 20)
     }
 
     private var specificationControls: some View {
@@ -620,7 +668,7 @@ private struct CartSpecificationEditorSheet: View {
             }
         }
         .padding(16)
-        .floatingLiquidPanel(cornerRadius: 20)
+        .surfacePanel(cornerRadius: 20)
     }
 
     private var selectedSpecificationSummary: String {
@@ -653,7 +701,7 @@ private struct CartSpecificationOptionButton: View {
                         .stroke(isSelected ? AppTheme.primary : AppTheme.border, lineWidth: isSelected ? 1.2 : 0.7)
                 )
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.tactile)
     }
 }
 
@@ -744,7 +792,7 @@ struct QuantityControl: View {
                 .foregroundStyle(AppTheme.textPrimary)
                 .frame(width: 36, height: 32)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.tactile)
     }
 
     private func beginEditing() {

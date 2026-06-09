@@ -33,21 +33,7 @@ struct ComparisonView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                slotPickers
-
-                Button(action: { Task { await loadComparison() } }) {
-                    Text(isLoading ? "对比中…" : "开始对比")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                        .background(
-                            canCompare ? AppTheme.primary : AppTheme.textSecondary.opacity(0.4),
-                            in: RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        )
-                }
-                .buttonStyle(.plain)
-                .disabled(!canCompare || isLoading)
+                comparisonSetupPanel
 
                 if isLoading {
                     loadingState
@@ -71,6 +57,28 @@ struct ComparisonView: View {
     }
 
     // MARK: - 下拉选择器（仿苹果机型选择器，固定两件）
+
+    private var comparisonSetupPanel: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            slotPickers
+
+            Button(action: { Task { await loadComparison() } }) {
+                Text(isLoading ? "对比中…" : "开始对比")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(
+                        canCompare ? AppTheme.primary : AppTheme.textSecondary.opacity(0.4),
+                        in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    )
+            }
+            .buttonStyle(.tactile)
+            .disabled(!canCompare || isLoading)
+        }
+        .padding(16)
+        .surfacePanel(cornerRadius: 22)
+    }
 
     private var slotPickers: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -117,6 +125,7 @@ struct ComparisonView: View {
                     .stroke(AppTheme.border, lineWidth: 1)
             )
         }
+        .buttonStyle(.tactile)
     }
 
     // MARK: - 状态视图
@@ -142,7 +151,7 @@ struct ComparisonView: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .floatingLiquidPanel(cornerRadius: 18)
+        .surfacePanel(cornerRadius: 18)
     }
 
     private func messageCard(_ text: String, isError: Bool = false) -> some View {
@@ -185,11 +194,7 @@ struct ComparisonTable: View {
                 rowView(row, zebra: index % 2 == 1)
             }
         }
-        .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(AppTheme.border, lineWidth: 1)
-        )
+        .surfacePanel(cornerRadius: 18)
     }
 
     private var header: some View {
@@ -210,7 +215,7 @@ struct ComparisonTable: View {
             }
         }
         .padding(.top, 10)
-        .background(AppTheme.softPurple.opacity(0.5))
+        .background(AppTheme.secondary.opacity(0.65))
     }
 
     private func rowView(_ row: ComparisonRowPayload, zebra: Bool) -> some View {
@@ -241,7 +246,7 @@ struct ComparisonTable: View {
                     }
             }
         }
-        .background(zebra ? AppTheme.softPurple.opacity(0.18) : Color.clear)
+        .background(zebra ? AppTheme.softBlue.opacity(0.42) : Color.clear)
     }
 }
 

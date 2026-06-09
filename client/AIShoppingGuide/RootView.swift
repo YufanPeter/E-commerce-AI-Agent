@@ -4,7 +4,7 @@ import UIKit
 enum AppTab: String, CaseIterable {
     case guide = "导购"
     case cart = "购物车"
-    case preference = "Preference"
+    case preference = "偏好"
 
     var icon: String {
         switch self {

@@ -159,9 +159,14 @@ struct GuideView: View {
 
     private var header: some View {
         HStack {
-            Text("CartPilot 智能导购")
-                .font(.title3.bold())
-                .foregroundStyle(AppTheme.textPrimary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("CartPilot")
+                    .font(.system(size: 26, weight: .bold, design: .rounded))
+                    .foregroundStyle(AppTheme.textPrimary)
+                Text("智能导购 · 实时推荐")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(AppTheme.textSecondary)
+            }
             Spacer()
             Button {
                 startNewConversation()
@@ -175,8 +180,9 @@ struct GuideView: View {
                 .foregroundStyle(AppTheme.primary)
                 .padding(.horizontal, 14)
                 .frame(height: 40)
-                .floatingLiquidPanel(cornerRadius: 20)
+                .surfacePanel(cornerRadius: 20)
             }
+            .buttonStyle(.tactile)
             Button {
                 showHistory = true
             } label: {
@@ -184,8 +190,9 @@ struct GuideView: View {
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(AppTheme.primary)
                     .frame(width: 40, height: 40)
-                    .floatingLiquidPanel(cornerRadius: 20)
+                    .surfacePanel(cornerRadius: 20)
             }
+            .buttonStyle(.tactile)
         }
         .padding(.horizontal, 20)
         .padding(.top, 18)
@@ -337,15 +344,63 @@ struct GuideView: View {
     /// 空态：分类入口色块 + 动态热门搜索。仅在当前会话还没有任何消息时显示，
     /// 数据来自后端 /suggestions（真实库存），点哪条都一定有结果；用户发起检索后随消息出现而隐去。
     private var emptyState: some View {
-        VStack(alignment: .leading, spacing: 22) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("想买点什么？")
-                    .font(.title3.bold())
-                    .foregroundStyle(AppTheme.textPrimary)
-                Text("挑个分类逛逛，或直接说说你的需求")
-                    .font(.subheadline)
-                    .foregroundStyle(AppTheme.textSecondary)
+        VStack(alignment: .leading, spacing: 16) {
+            guideIntroPanel
+            categorySection
+
+            if !displayedHotSearches.isEmpty {
+                hotSearchSection
             }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var guideIntroPanel: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 14) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(AppTheme.primary)
+                    .frame(width: 44, height: 44)
+                    .background(AppTheme.secondary, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("想买点什么？")
+                        .font(.system(size: 28, weight: .bold, design: .rounded))
+                        .foregroundStyle(AppTheme.textPrimary)
+                    Text("挑个分类逛逛，或直接说说你的需求")
+                        .font(.subheadline)
+                        .foregroundStyle(AppTheme.textSecondary)
+                }
+            }
+
+            HStack(spacing: 8) {
+                intentPill("预算偏好")
+                intentPill("拍照线索")
+                intentPill("对比决策")
+            }
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            LinearGradient(
+                colors: [AppTheme.surface, AppTheme.softBlue.opacity(0.72)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            ),
+            in: RoundedRectangle(cornerRadius: 26, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 26, style: .continuous)
+                .stroke(AppTheme.border, lineWidth: 1)
+        )
+    }
+
+    private var categorySection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("逛分类")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(AppTheme.textPrimary)
 
             LazyVGrid(
                 columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)],
@@ -357,55 +412,69 @@ struct GuideView: View {
                     } label: {
                         categoryCard(category)
                     }
-                    .buttonStyle(.plain)
-                }
-            }
-
-            if !displayedHotSearches.isEmpty {
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        Label("大家都在搜", systemImage: "flame.fill")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(AppTheme.textPrimary)
-                            .labelStyle(.titleAndIcon)
-                            .symbolRenderingMode(.multicolor)
-                        Spacer()
-                        Button {
-                            Task { await refreshHotSearches() }
-                        } label: {
-                            HStack(spacing: 4) {
-                                Image(systemName: "arrow.triangle.2.circlepath")
-                                    .rotationEffect(.degrees(isRefreshingHot ? 360 : 0))
-                                    .animation(isRefreshingHot ? .linear(duration: 0.6) : .default, value: isRefreshingHot)
-                                Text("换一批")
-                            }
-                            .font(.caption.weight(.medium))
-                            .foregroundStyle(AppTheme.textSecondary)
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(isRefreshingHot)
-                    }
-
-                    FlowLayout(spacing: 8) {
-                        ForEach(displayedHotSearches, id: \.self) { term in
-                            Button {
-                                send(term)
-                            } label: {
-                                Text(term)
-                                    .font(.subheadline.weight(.medium))
-                                    .foregroundStyle(AppTheme.textPrimary)
-                                    .padding(.horizontal, 14)
-                                    .padding(.vertical, 9)
-                                    .background(AppTheme.surface, in: Capsule())
-                                    .overlay(Capsule().stroke(AppTheme.border, lineWidth: 1))
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
+                    .buttonStyle(.tactile)
                 }
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .surfacePanel(cornerRadius: 22)
+    }
+
+    private var hotSearchSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label("大家都在搜", systemImage: "flame.fill")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(AppTheme.textPrimary)
+                    .labelStyle(.titleAndIcon)
+                    .symbolRenderingMode(.multicolor)
+                Spacer()
+                Button {
+                    Task { await refreshHotSearches() }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .rotationEffect(.degrees(isRefreshingHot ? 360 : 0))
+                            .animation(isRefreshingHot ? .linear(duration: 0.6) : .default, value: isRefreshingHot)
+                        Text("换一批")
+                    }
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(AppTheme.textSecondary)
+                }
+                .buttonStyle(.tactile)
+                .disabled(isRefreshingHot)
+            }
+
+            FlowLayout(spacing: 8) {
+                ForEach(displayedHotSearches, id: \.self) { term in
+                    Button {
+                        send(term)
+                    } label: {
+                        Text(term)
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(AppTheme.textPrimary)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 9)
+                            .background(AppTheme.secondary.opacity(0.72), in: Capsule())
+                            .overlay(Capsule().stroke(AppTheme.border, lineWidth: 1))
+                    }
+                    .buttonStyle(.tactile)
+                }
+            }
+        }
+        .padding(16)
+        .surfacePanel(cornerRadius: 22)
+    }
+
+    private func intentPill(_ title: String) -> some View {
+        Text(title)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(AppTheme.primary)
+            .lineLimit(1)
+            .minimumScaleFactor(0.82)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(AppTheme.secondary.opacity(0.82), in: Capsule())
     }
 
     /// 单个分类色块：图标 + 名称 + 渐变底色。
@@ -430,7 +499,7 @@ struct GuideView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             LinearGradient(
-                colors: [category.tint.opacity(0.14), category.tint.opacity(0.04)],
+                colors: [category.tint.opacity(0.16), AppTheme.surface.opacity(0.72)],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             ),
@@ -474,7 +543,7 @@ struct GuideView: View {
                     }
                     .padding(14)
                     .frame(width: 156, alignment: .leading)
-                    .floatingLiquidPanel(cornerRadius: 22)
+                    .surfacePanel(cornerRadius: 22)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
@@ -521,9 +590,10 @@ struct GuideView: View {
                         .foregroundStyle(.white)
                         .frame(width: 38, height: 38)
                         .background(AppTheme.primary, in: Circle())
+                        .shadow(color: AppTheme.accentGlow, radius: 10, y: 3)
                         .rotationEffect(.degrees(isComposerExpanded ? 45 : 0))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.tactile)
 
                 TextField(composerPlaceholder, text: $inputText)
                     .lineLimit(1)
@@ -543,7 +613,7 @@ struct GuideView: View {
                         .foregroundStyle(speechInput.isListening ? AppTheme.primary : AppTheme.textSecondary)
                         .frame(width: 32, height: 32)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.tactile)
 
                 Button(action: sendCurrentInput) {
                     Image(systemName: "arrow.up")
@@ -555,13 +625,13 @@ struct GuideView: View {
                             in: Circle()
                         )
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.tactile)
                 .disabled(!canSend)
                 .animation(.easeOut(duration: 0.18), value: canSend)
             }
             .padding(.vertical, 8)
             .padding(.horizontal, 10)
-            .floatingLiquidPanel(cornerRadius: 28)
+            .floatingLiquidPanel(cornerRadius: 24)
 
             if let error = speechInput.errorMessage {
                 Text(error)
@@ -1352,6 +1422,7 @@ struct MessageRow: View {
                                         .padding(.vertical, 8)
                                         .background(AppTheme.softPurple.opacity(0.5), in: Capsule())
                                 }
+                                .buttonStyle(.tactile)
                             }
                         }
                         .padding(.top, 8)
@@ -1371,6 +1442,7 @@ struct MessageRow: View {
                                 .padding(.vertical, 10)
                                 .frame(maxWidth: 220, alignment: .leading)
                                 .background(AppTheme.softPurple, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                .buttonStyle(.tactile)
                         }
                     }
                 }
@@ -1425,7 +1497,7 @@ struct MessageRow: View {
                             .padding(.vertical, 8)
                             .background(AppTheme.softPurple, in: Capsule())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.tactile)
                 }
             }
 
@@ -1714,11 +1786,16 @@ struct ProductCard: View {
         VStack(alignment: .leading, spacing: 12) {
             ProductRemoteImage(url: product.imageURL, cornerRadius: 16, placeholderIcon: "shippingbox", contentMode: .fit)
                 .frame(maxWidth: .infinity)
-                .frame(height: 300)
+                .frame(height: 248)
+                .background(Color.white, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(AppTheme.border, lineWidth: 1)
+                )
 
             if !product.tags.isEmpty {
                 HStack(spacing: 8) {
-                    ForEach(product.tags, id: \.self) { tag in
+                    ForEach(Array(product.tags.prefix(3)), id: \.self) { tag in
                         Text(tag)
                             .font(.caption.weight(.medium))
                             .foregroundStyle(AppTheme.primary)
@@ -1732,21 +1809,28 @@ struct ProductCard: View {
             Text(product.title)
                 .font(.headline)
                 .foregroundStyle(AppTheme.textPrimary)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
             Text(product.priceDisplay(for: product.defaultSpecificationSelection))
                 .font(.title3.bold())
                 .foregroundStyle(AppTheme.error)
 
             Button(action: onDetail) {
-                Text("查看详情")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 11)
-                    .background(AppTheme.primary, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                HStack(spacing: 6) {
+                    Text("查看详情")
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.bold))
+                }
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 11)
+                .background(AppTheme.primary, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
+            .buttonStyle(.tactile)
         }
         .padding(14)
-        .floatingLiquidPanel(cornerRadius: 22)
+        .surfacePanel(cornerRadius: 22)
     }
 }
 
@@ -1794,11 +1878,12 @@ struct SpecSelectionCard: View {
                         in: RoundedRectangle(cornerRadius: 14, style: .continuous)
                     )
             }
+            .buttonStyle(.tactile)
             .disabled(!allChosen || submitted)
         }
         .padding(14)
         .frame(maxWidth: 320, alignment: .leading)
-        .floatingLiquidPanel(cornerRadius: 22)
+        .surfacePanel(cornerRadius: 22)
     }
 
     private func chip(dimension: String, value: String) -> some View {
@@ -1815,6 +1900,7 @@ struct SpecSelectionCard: View {
                 .background(isSelected ? AppTheme.primary : AppTheme.softPurple, in: Capsule())
         }
         .disabled(submitted)
+        .buttonStyle(.tactile)
     }
 
     private func submit() {

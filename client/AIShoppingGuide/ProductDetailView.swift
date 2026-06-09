@@ -39,25 +39,10 @@ struct ProductDetailView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     productHeroImage
-                    productInfo
+                    productSummaryPanel
 
                     if !product.reviews.isEmpty {
                         ProductReviewsSection(reviews: product.reviews)
-                    }
-
-                    if !product.tags.isEmpty {
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 82), spacing: 8, alignment: .leading)], alignment: .leading, spacing: 8) {
-                            ForEach(product.tags, id: \.self) { tag in
-                                Text(tag)
-                                    .font(.caption.weight(.medium))
-                                    .foregroundStyle(AppTheme.primary)
-                                    .lineLimit(1)
-                                    .minimumScaleFactor(0.82)
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 7)
-                                    .background(AppTheme.softPurple, in: Capsule())
-                            }
-                        }
                     }
                 }
                 .padding(20)
@@ -97,14 +82,19 @@ struct ProductDetailView: View {
         Button {
             openSpecificationSheet()
         } label: {
-            Text("加入购物车")
-                .font(.headline)
-                .foregroundStyle(.white)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 15)
-                .background(AppTheme.primary, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            HStack(spacing: 8) {
+                Image(systemName: "cart.badge.plus")
+                    .font(.headline.weight(.semibold))
+                Text("加入购物车")
+                    .font(.headline)
+            }
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 15)
+            .background(AppTheme.primary, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .shadow(color: AppTheme.accentGlow, radius: 14, y: 5)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.tactile)
         .padding(.horizontal, 20)
         .padding(.bottom, stickyButtonBottomPadding)
     }
@@ -134,8 +124,29 @@ struct ProductDetailView: View {
                     RoundedRectangle(cornerRadius: 24, style: .continuous)
                         .stroke(AppTheme.border, lineWidth: 1)
                 )
+                .shadow(color: AppTheme.shadow.opacity(0.42), radius: 16, y: 8)
         }
         .aspectRatio(1, contentMode: .fit)
+    }
+
+    private var productSummaryPanel: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            productInfo
+
+            if !product.reason.isEmpty {
+                productTextBlock(title: "推荐依据", text: product.reason, icon: "sparkles")
+            }
+
+            if !product.details.isEmpty {
+                productTextBlock(title: "商品资料", text: product.details, icon: "doc.text")
+            }
+
+            if !product.tags.isEmpty {
+                productTags
+            }
+        }
+        .padding(16)
+        .surfacePanel(cornerRadius: 22)
     }
 
     private var productInfo: some View {
@@ -152,6 +163,37 @@ struct ProductDetailView: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func productTextBlock(title: String, text: String, icon: String) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Label(title, systemImage: icon)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(AppTheme.primary)
+            Text(text)
+                .font(.subheadline)
+                .foregroundStyle(AppTheme.textSecondary)
+                .lineSpacing(4)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AppTheme.secondary.opacity(0.48), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    private var productTags: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 82), spacing: 8, alignment: .leading)], alignment: .leading, spacing: 8) {
+            ForEach(product.tags, id: \.self) { tag in
+                Text(tag)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(AppTheme.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .background(AppTheme.secondary.opacity(0.78), in: Capsule())
+            }
+        }
     }
 
     private var selectedSpecificationSummary: String {
@@ -238,12 +280,12 @@ private struct ProductReviewsSection: View {
                     .padding(.vertical, 9)
                     .background(AppTheme.softPurple.opacity(0.55), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.tactile)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
-        .floatingLiquidPanel(cornerRadius: 20)
+        .surfacePanel(cornerRadius: 20)
     }
 }
 
@@ -314,6 +356,7 @@ private struct AddToCartSheet: View {
                         .padding(.vertical, 15)
                         .background(AppTheme.primary, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                 }
+                .buttonStyle(.tactile)
                 .padding(.horizontal, 20)
                 .padding(.top, 12)
                 .padding(.bottom, 12)
@@ -344,7 +387,7 @@ private struct AddToCartSheet: View {
             }
         }
         .padding(14)
-        .floatingLiquidPanel(cornerRadius: 20)
+        .surfacePanel(cornerRadius: 20)
     }
 
     private var specificationControls: some View {
@@ -369,7 +412,7 @@ private struct AddToCartSheet: View {
             }
         }
         .padding(16)
-        .floatingLiquidPanel(cornerRadius: 20)
+        .surfacePanel(cornerRadius: 20)
     }
 
     private var quantityControl: some View {
@@ -380,7 +423,7 @@ private struct AddToCartSheet: View {
             QuantityControl(quantity: $quantity)
         }
         .padding(16)
-        .floatingLiquidPanel(cornerRadius: 20)
+        .surfacePanel(cornerRadius: 20)
     }
 
     private var selectedSpecificationSummary: String {
@@ -413,7 +456,7 @@ private struct SpecificationOptionButton: View {
                         .stroke(isSelected ? AppTheme.primary : AppTheme.border, lineWidth: isSelected ? 1.2 : 0.7)
                 )
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.tactile)
     }
 }
 
@@ -440,7 +483,7 @@ private struct AddToCartSuccessToast: View {
             Spacer(minLength: 0)
         }
         .padding(14)
-        .floatingLiquidPanel(cornerRadius: 20)
+        .surfacePanel(cornerRadius: 20)
     }
 
     private var detailText: String {
