@@ -70,6 +70,14 @@ class TestHealthz:
         assert r.status_code == 200
         assert r.json() == {"status": "ok"}
 
+    def test_warmup_status_shape(self, client):
+        c, _ = client
+        r = c.get("/warmup")
+        assert r.status_code == 200
+        body = r.json()
+        assert "status" in body
+        assert "message" in body
+
 
 class TestChatBlocking:
     def test_happy_path(self, client):

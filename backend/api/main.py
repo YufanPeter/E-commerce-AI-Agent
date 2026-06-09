@@ -16,6 +16,7 @@ import asyncio
 import json
 import logging
 import os
+import threading
 from typing import Any
 
 # 必须在 import chromadb / sentence_transformers 之前完成环境设置
@@ -28,8 +29,6 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from agent.orchestrator import Agent
-from agent.session import AgentSession
 from api import products as products_router
 from store.cart_store import CartStore
 from store.session_store import SqliteSessionStore
@@ -107,14 +106,24 @@ async def http_exception_handler(_request: Request, exc: HTTPException) -> JSONR
 
 
 _sessions = SqliteSessionStore()
-_agent: Agent | None = None  # 懒加载，避免 import 时就触发 SearchService 初始化
+_agent: Any | None = None  # 懒加载，避免 import 时就触发 SearchService/OpenAI 初始化
+_agent_lock = threading.Lock()
+_warmup_status: dict[str, str] = {
+    "status": "disabled",
+    "message": "Startup warmup is disabled.",
+}
 
 
-def _get_agent() -> Agent:
+def _get_agent() -> Any:
     global _agent
-    if _agent is None:
-        logger.info("Initializing Agent (will load search service & embeddings)")
-        _agent = Agent()
+    if _agent is not None:
+        return _agent
+    with _agent_lock:
+        if _agent is None:
+            logger.info("Initializing Agent (will load search service & embeddings)")
+            from agent.orchestrator import Agent
+
+            _agent = Agent()
     return _agent
 
 
@@ -129,7 +138,15 @@ def _warmup() -> None:
     立即绑定端口、/health 立即可用；模型在后台加热，首条查询若赶在加热
     完成前到达，也只是退化为原来的懒加载行为，不会让整个服务起不来。
     """
-    import threading
+    if os.getenv("BACKEND_WARMUP", "0").strip().lower() not in {"1", "true", "yes", "on"}:
+        _warmup_status.update(
+            status="disabled",
+            message="Startup warmup is disabled. Set BACKEND_WARMUP=1 to preload Agent/SearchService.",
+        )
+        logger.info("Startup warmup skipped; set BACKEND_WARMUP=1 to preload Agent/SearchService.")
+        return
+
+    _warmup_status.update(status="warming", message="Preloading Agent/SearchService in background.")
 
     def _run() -> None:
         try:
@@ -140,8 +157,10 @@ def _warmup() -> None:
             svc = get_search_service()
             # 跑一次真实检索，强制 embedding + API rerank HTTP client 完成初始化
             svc.search("预热查询", top_k_products=1)
+            _warmup_status.update(status="ready", message="Agent/SearchService warmup completed.")
             logger.info("Warmup done: models are hot.")
-        except Exception:  # noqa: BLE001 - 预热失败不应阻止服务运行
+        except Exception as exc:  # noqa: BLE001 - 预热失败不应阻止服务运行
+            _warmup_status.update(status="failed", message=f"Warmup failed: {type(exc).__name__}: {exc}")
             logger.exception("Warmup failed (服务仍可用，首条查询会较慢)")
 
     threading.Thread(target=_run, name="warmup", daemon=True).start()
@@ -154,6 +173,11 @@ def _warmup() -> None:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/warmup")
+def warmup_status() -> dict[str, str]:
+    return dict(_warmup_status)
 
 
 @app.post("/chat", response_model=ChatResponse)

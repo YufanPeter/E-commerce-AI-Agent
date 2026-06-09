@@ -9,6 +9,7 @@
 #   HOST=0.0.0.0 ./scripts/start_backend.sh     # 监听局域网，供 iOS 真机连接
 #   PORT=8000 ./scripts/start_backend.sh        # 自定义端口
 #   USE_RERANK=0 ./scripts/start_backend.sh     # 禁用 API 精排（链路只走向量召回排序）
+#   BACKEND_WARMUP=0 ./scripts/start_backend.sh # 跳过后台预热（启动更安静，但首轮查询会慢）
 #   ./scripts/start_backend.sh --reload         # venv 模式：开发热重载（额外参数透传给 uvicorn）
 #   ./scripts/dev.sh                            # 推荐：开发模式（自动 --reload + 重启占用端口的旧进程）
 #   ./scripts/stop_backend.sh                   # 停止占用端口的进程
@@ -25,6 +26,7 @@ set -euo pipefail
 HOST="${HOST:-127.0.0.1}"
 PORT="${PORT:-8000}"
 BACKEND_RUNTIME="${BACKEND_RUNTIME:-venv}"
+export BACKEND_WARMUP="${BACKEND_WARMUP:-1}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -163,6 +165,11 @@ fi
 
 # 4) 启动 + 健康检查 -----------------------------------------------------------
 log "启动 uvicorn：http://${HOST}:${PORT}  (workdir=${BACKEND_DIR})"
+if [ "${BACKEND_WARMUP}" = "1" ] || [ "${BACKEND_WARMUP}" = "true" ]; then
+  log "后台预热已开启：/health 会先就绪，Agent/SearchService 会继续后台加载"
+else
+  log "后台预热已关闭：首轮真实查询会触发 Agent/SearchService 懒加载"
+fi
 
 (
   wait_for_health "${HOST}" "${PORT}" || true

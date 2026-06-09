@@ -11,10 +11,13 @@ Ark 协议完全兼容 OpenAI SDK，因此直接复用 ``openai.OpenAI`` 即可�
 import os
 from functools import lru_cache
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import httpx
 from dotenv import load_dotenv
-from openai import OpenAI
+
+if TYPE_CHECKING:
+    from openai import OpenAI
 
 DEFAULT_RERANK_BASE_URL = "https://open.bigmodel.cn/api/paas/v4/rerank"
 
@@ -30,6 +33,8 @@ def _load_env_once() -> None:
 @lru_cache(maxsize=1)
 def get_client() -> OpenAI:
     """进程内单例。首次调用时建立 HTTP 连接池。"""
+    from openai import OpenAI
+
     _load_env_once()
     api_key = os.getenv("ARK_API_KEY")
     base_url = os.getenv("ARK_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3/")
@@ -68,6 +73,8 @@ def get_embedding_client() -> OpenAI:
     - API Key：ARK_EMBEDDING_API_KEY → ARK_API_KEY
     - base_url：ARK_EMBEDDING_BASE_URL → ARK_BASE_URL → 默认 Ark 地址
     """
+    from openai import OpenAI
+
     _load_env_once()
     api_key = os.getenv("ARK_EMBEDDING_API_KEY") or os.getenv("ARK_API_KEY")
     if not api_key:
