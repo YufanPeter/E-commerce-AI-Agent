@@ -59,6 +59,11 @@ struct GuideView: View {
     private let nearBottomThreshold: CGFloat = 96
     private let questionAnchorCharacterLimit = 220
     private let autoFollowTimer = Timer.publish(every: 0.12, on: .main, in: .common).autoconnect()
+    private let streamDefaultDelay: UInt64 = 16_000_000
+    private let streamWhitespaceDelay: UInt64 = 6_000_000
+    private let streamPunctuationDelay: UInt64 = 70_000_000
+    private let streamLineBreakDelay: UInt64 = 110_000_000
+    private let streamCardRevealDelay: UInt64 = 180_000_000
 
     /// 示例 query 池：每次空态出现时随机取 4 条，避免每次都是同样几个。
     private static let examplePool = [
@@ -792,6 +797,8 @@ struct GuideView: View {
     private func runAgent(for query: String, imageBase64: String? = nil) {
         Task { @MainActor in
             var narrative = ""
+            var visibleNarrative = ""
+            var isStructuredNarrative = false
             var hydrated: [Product] = []
             var statusText = imageBase64 == nil ? "正在理解你的需求" : "正在识别图片"
 
@@ -831,7 +838,17 @@ struct GuideView: View {
                     case .textDelta:
                         if let piece = event.textDelta {
                             narrative += piece
-                            updateLastAI(text: narrative, state: .generating)
+                            let trimmedNarrative = narrative.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if isStructuredNarrative || trimmedNarrative.first == "{" {
+                                isStructuredNarrative = true
+                                updateLastAI(text: statusText, state: .generating)
+                            } else {
+                                visibleNarrative = await revealTextDelta(
+                                    piece,
+                                    currentText: visibleNarrative,
+                                    fallbackText: statusText
+                                )
+                            }
                         }
 
                     case .specSelection:
@@ -845,9 +862,10 @@ struct GuideView: View {
                         }
 
                     case .done:
-                        updateLastAI(
-                            text: narrative.isEmpty ? statusText : narrative,
-                            state: .ready,
+                        await finishStreamingResponse(
+                            rawText: narrative.isEmpty ? statusText : narrative,
+                            visibleText: visibleNarrative,
+                            fallbackText: statusText,
                             products: hydrated
                         )
 
@@ -859,9 +877,10 @@ struct GuideView: View {
                 // 流正常结束但未收到 done 时的兜底
                 if let index = messages.lastIndex(where: { $0.sender == .ai }),
                    messages[index].state != .ready, messages[index].state != .failed {
-                    updateLastAI(
-                        text: narrative.isEmpty ? statusText : narrative,
-                        state: .ready,
+                    await finishStreamingResponse(
+                        rawText: narrative.isEmpty ? statusText : narrative,
+                        visibleText: visibleNarrative,
+                        fallbackText: statusText,
                         products: hydrated
                     )
                 }
@@ -872,6 +891,113 @@ struct GuideView: View {
                 persistCurrent()
             }
         }
+    }
+
+    private func revealTextDelta(
+        _ piece: String,
+        currentText: String,
+        fallbackText: String
+    ) async -> String {
+        var nextText = currentText
+        for character in piece {
+            guard !Task.isCancelled else { return nextText }
+            nextText.append(character)
+            updateLastAI(
+                text: nextText.isEmpty ? fallbackText : nextText,
+                state: .generating
+            )
+            try? await Task.sleep(nanoseconds: streamDelay(for: character))
+        }
+        return nextText
+    }
+
+    private func finishStreamingResponse(
+        rawText: String,
+        visibleText: String,
+        fallbackText: String,
+        products: [Product]
+    ) async {
+        if let content = StructuredContent.parse(from: rawText) {
+            await revealStructuredResponse(content, rawText: rawText, products: products)
+            return
+        }
+
+        var finalVisibleText = visibleText
+        if finalVisibleText.isEmpty, rawText != fallbackText {
+            finalVisibleText = await revealTextDelta(
+                rawText,
+                currentText: "",
+                fallbackText: fallbackText
+            )
+        }
+        withAnimation(.easeOut(duration: 0.18)) {
+            updateLastAI(
+                text: finalVisibleText.isEmpty ? rawText : finalVisibleText,
+                state: .ready,
+                products: products
+            )
+        }
+    }
+
+    private func revealStructuredResponse(
+        _ content: StructuredContent,
+        rawText: String,
+        products: [Product]
+    ) async {
+        var opening = ""
+        for character in content.opening {
+            guard !Task.isCancelled else { return }
+            opening.append(character)
+            updateLastAI(
+                text: rawText,
+                state: .generating,
+                products: [],
+                structuredContent: StructuredContent(opening: opening, items: [], questions: [])
+            )
+            try? await Task.sleep(nanoseconds: streamDelay(for: character))
+        }
+
+        if !products.isEmpty {
+            try? await Task.sleep(nanoseconds: streamCardRevealDelay)
+        }
+
+        for index in products.indices {
+            guard !Task.isCancelled else { return }
+            let visibleProducts = Array(products.prefix(index + 1))
+            withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.86)) {
+                updateLastAI(
+                    text: rawText,
+                    state: .generating,
+                    products: visibleProducts,
+                    structuredContent: StructuredContent(opening: content.opening, items: content.items, questions: [])
+                )
+            }
+            if index < (products.indices.last ?? index) {
+                try? await Task.sleep(nanoseconds: streamCardRevealDelay)
+            }
+        }
+
+        withAnimation(.easeOut(duration: 0.18)) {
+            updateLastAI(
+                text: rawText,
+                state: .ready,
+                products: products,
+                structuredContent: content
+            )
+        }
+    }
+
+    private func streamDelay(for character: Character) -> UInt64 {
+        if character == "\n" {
+            return streamLineBreakDelay
+        }
+        if character.isWhitespace {
+            return streamWhitespaceDelay
+        }
+        if "，。！？、；：,.!?;:".contains(character) {
+            return streamPunctuationDelay
+        }
+        return streamDefaultDelay
     }
 
     // MARK: - 会话历史
@@ -1159,13 +1285,17 @@ struct GuideView: View {
         text: String,
         state: MessageState,
         products: [Product] = [],
-        canRetry: Bool = false
+        canRetry: Bool = false,
+        structuredContent: StructuredContent? = nil
     ) {
         guard let index = messages.lastIndex(where: { $0.sender == .ai }) else { return }
         messages[index].text = text
         messages[index].state = state
         messages[index].products = products
         messages[index].canRetry = canRetry
+        if let structuredContent {
+            messages[index].structuredContent = structuredContent
+        }
     }
 
     /// 把后端「请选择规格」的可交互卡片挂到当前 AI 消息上；后续 token/done
@@ -1240,10 +1370,10 @@ struct MessageRow: View {
     }
     
     private var parsedStructuredContent: StructuredContent? {
-        guard message.state == .ready else {
-            return nil
-        }
         guard let structured = message.structuredContent else {
+            guard message.state == .ready else {
+                return nil
+            }
             return tryParseStructuredContent(from: message.text)
         }
         return structured
@@ -1364,7 +1494,7 @@ struct MessageRow: View {
                         )
                 }
 
-                if message.state == .ready {
+                if message.state == .ready || isRevealingStructuredContent {
                     if message.sender == .user {
                         Text(message.text)
                             .font(.subheadline)
@@ -1428,6 +1558,18 @@ struct MessageRow: View {
                         .padding(.top, 8)
                     }
                     }
+                } else if shouldShowStreamingPlainText {
+                    Text(message.text)
+                        .font(.subheadline)
+                        .foregroundStyle(AppTheme.textPrimary)
+                        .lineSpacing(6)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 11)
+                        .background(bubbleColor, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .stroke(AppTheme.border, lineWidth: message.sender == .ai ? 1 : 0)
+                        )
                 } else if !displayText.isEmpty {
                     loadingText
                 }
@@ -1600,6 +1742,18 @@ struct MessageRow: View {
         default:
             return message.text
         }
+    }
+
+    private var isRevealingStructuredContent: Bool {
+        message.sender == .ai && message.state == .generating && message.structuredContent != nil
+    }
+
+    private var shouldShowStreamingPlainText: Bool {
+        guard message.sender == .ai, message.state == .generating else { return false }
+        let trimmed = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        guard message.structuredContent == nil else { return false }
+        return !trimmed.hasPrefix("正在")
     }
 
     private var bubbleColor: Color {
