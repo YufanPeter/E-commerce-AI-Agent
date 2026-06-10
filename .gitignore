@@ -30,7 +30,7 @@ pip-wheel-metadata/
 instance/
 *.sqlite3
 *.db
-backend/storage/
+# backend/storage/
 
 # Node / frontend if added later
 node_modules/
