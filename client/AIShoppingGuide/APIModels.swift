@@ -249,38 +249,6 @@ struct AgentStatusPayload: Codable, Hashable {
     let message: String
 }
 
-struct AgentTimingsPayload: Codable, Hashable {
-    let routerMS: Int?
-    let toolMS: Int?
-    let firstTokenMS: Int?
-    let composerMS: Int?
-    let visionMS: Int?
-
-    enum CodingKeys: String, CodingKey {
-        case routerMS = "router_ms"
-        case toolMS = "tool_ms"
-        case firstTokenMS = "first_token_ms"
-        case composerMS = "composer_ms"
-        case visionMS = "vision_ms"
-    }
-
-    var isEmpty: Bool {
-        routerMS == nil && toolMS == nil && firstTokenMS == nil && composerMS == nil && visionMS == nil
-    }
-
-    var consoleDescription: String {
-        [
-            routerMS.map { "router=\($0)ms" },
-            toolMS.map { "tool=\($0)ms" },
-            firstTokenMS.map { "firstToken=\($0)ms" },
-            composerMS.map { "composer=\($0)ms" },
-            visionMS.map { "vision=\($0)ms" }
-        ]
-        .compactMap { $0 }
-        .joined(separator: " ")
-    }
-}
-
 enum AgentToolActionKind: String, Codable, Hashable {
     case addToCart
     case updateCartItem
@@ -326,7 +294,6 @@ struct AgentStreamEventPayload: Identifiable, Codable, Hashable {
     let toolAction: AgentToolActionPayload?
     let cartSnapshot: CartSnapshotPayload?
     let error: APIErrorPayload?
-    let timings: AgentTimingsPayload?
     let traceID: String?
 
     init(
@@ -341,7 +308,6 @@ struct AgentStreamEventPayload: Identifiable, Codable, Hashable {
         toolAction: AgentToolActionPayload? = nil,
         cartSnapshot: CartSnapshotPayload? = nil,
         error: APIErrorPayload? = nil,
-        timings: AgentTimingsPayload? = nil,
         traceID: String? = nil
     ) {
         self.id = id
@@ -355,7 +321,6 @@ struct AgentStreamEventPayload: Identifiable, Codable, Hashable {
         self.toolAction = toolAction
         self.cartSnapshot = cartSnapshot
         self.error = error
-        self.timings = timings
         self.traceID = traceID
     }
 }

@@ -94,6 +94,7 @@ struct RootView: View {
     @StateObject private var healthMonitor = BackendHealthMonitor()
     @State private var selectedTab: AppTab = .guide
     @State private var cartItems: [CartItem] = []
+    @State private var keyboardOffset: CGFloat = 0
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -118,33 +119,6 @@ struct RootView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .animation(.easeOut(duration: 0.16), value: selectedTab)
 
-            BottomNavigationLayer(selectedTab: $selectedTab)
-        }
-        .safeAreaInset(edge: .top) {
-            BackendStatusBanner(monitor: healthMonitor)
-        }
-        .task {
-            healthMonitor.startMonitoring()
-            await loadBackendCartOnLaunch()
-        }
-    }
-
-    /// App 冷启动：从后端加载已有购物车（GET /cart），让购物车跨启动保留。
-    /// 购物车在后端 SQLite 持久化，启动即拉取真实状态，避免"启动空车 + 首次加购回灌历史"导致的总价错乱。
-    private func loadBackendCartOnLaunch() async {
-        let service = RESTProductService()
-        guard let snapshot = try? await service.fetchAgentCart() else { return }
-        cartItems = snapshot.items.map(CartItem.init(payload:))
-    }
-
-}
-
-private struct BottomNavigationLayer: View {
-    @Binding var selectedTab: AppTab
-    @State private var keyboardOffset: CGFloat = 0
-
-    var body: some View {
-        ZStack(alignment: .bottom) {
             // 底部模糊遮罩：卡片滑到导航栏区域时自然淡出，保证导航栏清晰可读
             Rectangle()
                 .fill(AppTheme.surface.opacity(0.94))
@@ -166,12 +140,27 @@ private struct BottomNavigationLayer: View {
                 .padding(.bottom, AppTheme.bottomTabBarBottomPadding)
                 .offset(y: keyboardOffset)
         }
+        .safeAreaInset(edge: .top) {
+            BackendStatusBanner(monitor: healthMonitor)
+        }
+        .task {
+            healthMonitor.startMonitoring()
+            await loadBackendCartOnLaunch()
+        }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { notification in
             updateKeyboardOffset(from: notification)
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { notification in
             updateKeyboardOffset(from: notification)
         }
+    }
+
+    /// App 冷启动：从后端加载已有购物车（GET /cart），让购物车跨启动保留。
+    /// 购物车在后端 SQLite 持久化，启动即拉取真实状态，避免"启动空车 + 首次加购回灌历史"导致的总价错乱。
+    private func loadBackendCartOnLaunch() async {
+        let service = RESTProductService()
+        guard let snapshot = try? await service.fetchAgentCart() else { return }
+        cartItems = snapshot.items.map(CartItem.init(payload:))
     }
 
     private func updateKeyboardOffset(from notification: Notification) {
@@ -184,7 +173,6 @@ private struct BottomNavigationLayer: View {
             .compactMap { ($0 as? UIWindowScene)?.screen.bounds.height }
             .first ?? frame.maxY
         let offset = max(0, screenHeight - frame.minY)
-        guard abs(keyboardOffset - offset) > 0.5 else { return }
         let duration = notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double ?? 0.25
 
         withAnimation(.easeOut(duration: duration)) {

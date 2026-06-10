@@ -68,17 +68,6 @@ PRODUCT_DETAIL_SYSTEM_PROMPT = """你是一位专业的单品导购问答助手�
 - 证据不足时要坦诚，不要硬夸。"""
 
 
-STREAM_TEXT_SYSTEM_PROMPT = """你是一位友好、专业的电商导购助手。你正在通过流式接口实时回复用户。
-
-严格规则：
-- 只输出自然中文，绝对不要输出 JSON、Markdown 表格或字段名。
-- 回答控制在 80-140 字，先给一句明确结论，再补充关键挑选理由。
-- 前端会单独展示商品卡片、价格和标签；你不要逐项复述完整商品列表，也不要重复价格。
-- 可以概括不同商品适合的人群、场景或决策思路。
-- 如果没有找到商品，坦诚说明，并给出 2-3 个具体放宽方向。
-- 语气像导购在即时回复，简洁、有帮助、不卡顿。"""
-
-
 # Few-shot 示例：用真实对话演示"导购口吻"远比文字规则有效。
 # 模型会直接模仿 assistant 的归并表达、场景化卖点和总括开场。
 # 注意：示例里的商品/价格是虚构的演示数据，仅用于教格式，不会进入真实回答。
@@ -233,23 +222,6 @@ def _build_messages(tool_result: ToolResult) -> list[dict[str, str]]:
     ]
 
 
-def _build_stream_messages(tool_result: ToolResult) -> list[dict[str, str]]:
-    if tool_result.tool_name == "product_detail":
-        return _build_messages(tool_result)
-
-    trimmed = _trim_payload_for_llm(tool_result.payload)
-    user_msg_parts = [
-        f"tool: {tool_result.tool_name}",
-        f"payload: {json.dumps(trimmed, ensure_ascii=False)}",
-    ]
-    if tool_result.composer_hint:
-        user_msg_parts.append(f"hint: {tool_result.composer_hint}")
-    return [
-        {"role": "system", "content": STREAM_TEXT_SYSTEM_PROMPT},
-        {"role": "user", "content": "\n".join(user_msg_parts)},
-    ]
-
-
 def _extract_json_object(text: str) -> str | None:
     """Extract the first balanced JSON object, tolerating model preface/trailing text."""
     start: int | None = None
@@ -324,19 +296,6 @@ def _fallback_json_response(tool_result: ToolResult) -> str:
     )
 
 
-def _fallback_text_response(tool_result: ToolResult) -> str:
-    payload = tool_result.payload or {}
-    if tool_result.tool_name == "product_detail":
-        product = payload.get("product") or {}
-        title = product.get("title") or "这款商品"
-        return f"{title}的资料我已经看到了，但生成说明时有点慢；你可以先看卡片信息，也可以继续问我具体参数或评价。"
-
-    hits = payload.get("products") or payload.get("hits") or []
-    if hits:
-        return f"我先为你筛出了 {min(len(hits), 5)} 款比较匹配的商品，可以先看卡片里的核心信息，再按预算、品牌或使用场景继续缩小范围。"
-    return "暂时没有找到特别匹配的商品，可以放宽预算、换个品类关键词，或者告诉我更具体的使用场景。"
-
-
 class AnswerComposer:
     def compose(
         self,
@@ -382,12 +341,12 @@ class AnswerComposer:
         try:
             stream = client.chat.completions.create(
                 model=get_model_id(),
-                messages=_build_stream_messages(tool_result),
+                messages=_build_messages(tool_result),
                 temperature=0.4,
                 timeout=timeout,
                 stream=True,
             )
-            emitted = False
+            pieces: list[str] = []
             for chunk in stream:
                 # OpenAI SDK：chunk.choices[0].delta.content；豆包 Ark 一致。
                 try:
@@ -396,11 +355,12 @@ class AnswerComposer:
                     continue
                 piece = getattr(delta, "content", None)
                 if piece:
-                    emitted = True
-                    yield piece
-            if not emitted:
+                    pieces.append(piece)
+            if pieces:
+                yield _normalize_json_response("".join(pieces))
+            else:
                 # 模型一个 token 都没吐（理论极少见），给个保底
-                yield _fallback_text_response(tool_result)
+                yield _fallback_json_response(tool_result)
         except Exception as exc:  # noqa: BLE001 - 流式中任何异常都要兜住
             logger.exception("Streaming compose failed mid-flight")
-            yield _fallback_text_response(tool_result)
+            yield _fallback_json_response(tool_result)

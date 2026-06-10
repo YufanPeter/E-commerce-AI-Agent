@@ -683,13 +683,7 @@ final class RESTAgentService: AgentServicing {
             }
 
         case "done":
-            let done = try? JSONDecoder().decode(AgentDonePayload.self, from: bytes)
-            continuation.yield(
-                AgentStreamEventPayload(
-                    type: .done,
-                    timings: done?.timings?.isEmpty == false ? done?.timings : nil
-                )
-            )
+            continuation.yield(AgentStreamEventPayload(type: .done))
 
         case "error":
             let message = (try? JSONSerialization.jsonObject(with: bytes) as? [String: Any])?["message"] as? String
@@ -706,7 +700,6 @@ final class RESTAgentService: AgentServicing {
 
     private static func mapPhase(_ raw: String) -> AgentStatusPhase {
         switch raw {
-        case "startup": return .understanding
         case "routing": return .understanding
         case "tool": return .retrieving
         case "compose": return .generating
@@ -899,10 +892,6 @@ final class RESTAgentService: AgentServicing {
         if let string = value as? String { return string == "1" || string.lowercased() == "true" }
         return defaultValue
     }
-}
-
-private struct AgentDonePayload: Codable {
-    let timings: AgentTimingsPayload?
 }
 
 /// 一条已切分好的原始 SSE 事件（event 名 + 合并后的 data 文本）。

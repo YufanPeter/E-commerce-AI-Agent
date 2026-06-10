@@ -231,8 +231,6 @@ struct ChatMessage: Identifiable, Codable {
     var localImageData: Data? = nil
     /// AI 返回的结构化内容（JSON 格式）
     var structuredContent: StructuredContent? = nil
-    /// 本轮 Agent 各阶段耗时，用于定位理解/检索/生成慢点。
-    var timings: AgentTimingsPayload? = nil
 }
 
 struct StructuredContent: Codable {
@@ -356,14 +354,6 @@ enum RecommendationCopy {
 }
 
 extension ChatMessage {
-    mutating func hydrateStructuredContentIfNeeded() {
-        guard sender == .ai,
-              state == .ready,
-              structuredContent == nil
-        else { return }
-        structuredContent = StructuredContent.parse(from: text)
-    }
-
     /// 从本条 AI 消息的结构化 JSON 里取某商品的专属解说（与列表页逻辑一致）。
     func recommendationDescription(for productID: String) -> String? {
         guard sender == .ai, state == .ready else { return nil }
@@ -457,11 +447,5 @@ struct Conversation: Identifiable, Codable {
         dayFormatter.locale = Locale(identifier: "zh_CN")
         dayFormatter.dateFormat = "M月d日 HH:mm"
         return dayFormatter.string(from: date)
-    }
-
-    mutating func hydrateStructuredContentIfNeeded() {
-        for index in messages.indices {
-            messages[index].hydrateStructuredContentIfNeeded()
-        }
     }
 }
