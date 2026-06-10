@@ -197,7 +197,3 @@ client/AIShoppingGuide/
   python -m store.import_image_manifest
   python -m rag.build_chroma --reset
   ```
-
-- **设计文档**：详见 [docs/](docs/)，包含 PRD、关系型数据库设计、RAG 检索流程、前端调用接口设计、交互流程 UML、Docker / Jenkins 部署等。
-
-更多后端数据层细节见 [backend/README.md](backend/README.md)，客户端细节见 [client/README.md](client/README.md)。
