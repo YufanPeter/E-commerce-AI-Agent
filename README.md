@@ -129,20 +129,6 @@ open client/AIShoppingGuide.xcodeproj
 
 ---
 
-## 🐳 Docker 部署
-
-```bash
-# 本地构建并运行（仓库根目录执行）
-docker compose -f deploy/docker-compose.yml up --build
-
-# 生产（火山云 ECS，使用已加载/拉取的镜像）
-IMAGE_REF=cartpilot-backend:<tag> docker compose -f deploy/docker-compose.prod.yml up -d
-```
-
-容器默认监听 `8000` 端口，并通过 `/health` 做健康检查。详见 [docs/backend_docker_deploy.md](docs/backend_docker_deploy.md) 与 [docs/jenkins_cicd.md](docs/jenkins_cicd.md)。
-
----
-
 ## 📂 代码结构与规范
 
 ### 后端 (Python + FastAPI + ChromaDB)
