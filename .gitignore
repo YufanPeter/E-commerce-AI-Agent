@@ -70,3 +70,6 @@ Thumbs.db
 # Downloaded agent skills (taste-skill)
 .agents/
 skills-lock.json
+
+# Debug logs
+*-debug.log
