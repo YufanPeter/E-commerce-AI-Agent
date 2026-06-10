@@ -171,11 +171,12 @@ class CartTool:
         brand_hits = self._products.match_brands_in_text(query)
         brand_ids = {c.product_id for c in brand_hits}
 
-        # 1) 显式序号：args.index 或 query 里的"第N个"
-        idx = args.get("index")
-        if idx is None:
-            parsed = resolve_indices(query, len(last_hits))
-            idx = (parsed[0] + 1) if parsed else None
+        # 1) 显式序号：只采信用户原句里真的出现的"第N个/最后一个"。
+        # dispatch_action 的 args.index 可能来自 router/LLM 对上下文的猜测；
+        # 用户只说"帮我加入购物车"时若上一轮刚聚焦了小米，不能让这个猜测
+        # 覆盖 last_focus_product_id，错加成列表第一个 iPad。
+        parsed = resolve_indices(query, len(last_hits))
+        idx = (parsed[0] + 1) if parsed else None
         if idx is not None:
             i = int(idx) - 1
             if 0 <= i < len(last_hits):
@@ -183,19 +184,19 @@ class CartTool:
                 # 仅当 index 与原句点名的品牌不矛盾时才采信：原句没点品牌（纯说"第N个"）
                 # 或点的就是这件商品 → 用 index；否则判定 index 是改写句注入的幻觉，弃用。
                 if not brand_ids or target_id in brand_ids:
-                    return self._begin_add(target_id, qty, session, query)
+                    return self._begin_add(target_id, qty, session, query, source="explicit_index")
 
         # 2) 当前推荐列表里名称/品牌命中（快路径：屏幕上就有，直接定位）
         named = resolve_by_name(query, last_hits)
         if len(named) == 1:
-            return self._begin_add(last_hits[named[0]]["product_id"], qty, session, query)
+            return self._begin_add(last_hits[named[0]]["product_id"], qty, session, query, source="context_name")
         if len(named) > 1:
             # 同品牌多品类（「华为耳机」命中华为耳机+华为手机）→ 先让 LLM 按子品类
             # 语义挑唯一一款，挑不出再列候选反问，避免反复追问。
             subset = [last_hits[i] for i in named]
             picked = resolve_one(query, self._enrich_candidates(subset))
             if picked is not None:
-                return self._begin_add(subset[picked]["product_id"], qty, session, query)
+                return self._begin_add(subset[picked]["product_id"], qty, session, query, source="semantic_context_match")
             return self._ask_which_product(subset, session)
 
         # 3) 全库点名检索（text2sql 思路）：先拿原句直接和库里品牌名做子串匹配，
@@ -206,7 +207,8 @@ class CartTool:
         if not found and keyword:
             found = self._products.search_by_keyword(keyword)
         if len(found) == 1:
-            return self._begin_add(found[0].product_id, qty, session, query)
+            source = "brand_match" if brand_hits else "keyword_match"
+            return self._begin_add(found[0].product_id, qty, session, query, source=source)
         if len(found) > 1:
             hits = [{"product_id": c.product_id, "title": c.title} for c in found]
             # 把检索结果回写工作记忆，使后续"第N个/某品牌"能接着定位。
@@ -216,7 +218,7 @@ class CartTool:
         # 4) 上一轮详情聚焦的商品（"这个加进来"——没有任何点名词时才用）
         focus = session.get("last_focus_product_id")
         if focus and not keyword:
-            return self._begin_add(focus, qty, session, query)
+            return self._begin_add(focus, qty, session, query, source="focus")
 
         # 5) 用户明确点了名（有 keyword/品牌词）却全库都没找到 → 不要静默回退成
         #    屏幕上那件无关商品，如实告知没找到，避免"加小米却加成 OPPO"。
@@ -228,7 +230,7 @@ class CartTool:
 
         # 6) 只有一个候选时才默认加；多个候选无法定位 → 反问列出，避免误加
         if len(last_hits) == 1:
-            return self._begin_add(last_hits[0]["product_id"], qty, session, query)
+            return self._begin_add(last_hits[0]["product_id"], qty, session, query, source="only_candidate")
         if last_hits:
             return self._ask_which_product(last_hits, session)
 
@@ -306,7 +308,7 @@ class CartTool:
             return self._ask_which_product(candidates, session)
 
         session.set("pending_add", None)
-        return self._begin_add(candidates[picked]["product_id"], 1, session, query)
+        return self._begin_add(candidates[picked]["product_id"], 1, session, query, source="pending_add")
 
     def _switch_intent(
         self, query: str, session: AgentSession, current_ids: list[str]
@@ -328,21 +330,27 @@ class CartTool:
         return self._add(query, session, {})
 
     def _begin_add(
-        self, product_id: str, qty: int, session: AgentSession, query: str
+        self,
+        product_id: str,
+        qty: int,
+        session: AgentSession,
+        query: str,
+        source: str = "unknown",
     ) -> ToolResult:
         """加购入口：单规格直接加；多规格先尝试从这句话解析规格，
         仍无法唯一确定则记录待选状态并反问用户。"""
+        resolution = self._build_resolution(product_id, query, source)
         skus = self._store.list_skus(product_id)
         if not skus:
             return self._plain("这款暂时没有可购买的规格了，换一款看看？")
 
         if len(skus) == 1:
-            return self._commit_add(product_id, skus[0]["sku_id"], qty)
+            return self._commit_add(product_id, skus[0]["sku_id"], qty, resolution=resolution)
 
         # 多规格：先看用户这句话里是否已经点明了规格（如"暗夜黑 42码"）
         matched = self._filter_skus(query, skus)
         if len(matched) == 1:
-            return self._commit_add(product_id, matched[0]["sku_id"], qty)
+            return self._commit_add(product_id, matched[0]["sku_id"], qty, resolution=resolution)
 
         # 仍不能唯一确定 → 记录待选状态，按维度反问。
         # spec_text 累积用户已经说过的规格词，供后续逐维度追问时叠加过滤。
@@ -352,8 +360,20 @@ class CartTool:
             "title": title,
             "quantity": qty,
             "spec_text": query,
+            "resolution": resolution,
         })
-        return self._ask_spec(product_id, title, matched if matched else skus)
+        return self._ask_spec(product_id, title, matched if matched else skus, resolution=resolution)
+
+    def _build_resolution(self, product_id: str, query: str, source: str) -> dict[str, Any]:
+        """记录本轮隐式/显式指代最终解析到哪款商品，供 debug 和文案确认。"""
+        title = self._store.product_title(product_id)
+        return {
+            "original_query": query,
+            "resolved_query": f"把「{title}」加入购物车",
+            "product_id": product_id,
+            "title": title,
+            "source": source,
+        }
 
     def _resolve_pending_sku(
         self, query: str, session: AgentSession, pending: dict[str, Any]
@@ -386,14 +406,30 @@ class CartTool:
 
         if len(matched) == 1:
             session.set("pending_cart", None)
-            return self._commit_add(product_id, matched[0]["sku_id"], qty)
+            return self._commit_add(
+                product_id,
+                matched[0]["sku_id"],
+                qty,
+                resolution=pending.get("resolution"),
+            )
 
         # 还没缩到唯一：记住累积规格，基于已过滤集合继续追问剩余维度
         pending = {**pending, "spec_text": combined}
         session.set("pending_cart", pending)
-        return self._ask_spec(product_id, pending["title"], matched if matched else skus)
+        return self._ask_spec(
+            product_id,
+            pending["title"],
+            matched if matched else skus,
+            resolution=pending.get("resolution"),
+        )
 
-    def _commit_add(self, product_id: str, sku_id: str, qty: int) -> ToolResult:
+    def _commit_add(
+        self,
+        product_id: str,
+        sku_id: str,
+        qty: int,
+        resolution: dict[str, Any] | None = None,
+    ) -> ToolResult:
         """确定 SKU 后真正写入购物车并产出确认结果。
 
         加购是确定性操作，无需 LLM 再润色一段话——直接给简短确认，
@@ -409,13 +445,22 @@ class CartTool:
         )
         return ToolResult(
             tool_name=self.name,
-            payload={"action": "add", "added": line.to_dict(), **snapshot},
+            payload={
+                "action": "add",
+                "added": line.to_dict(),
+                **({"resolution": resolution} if resolution else {}),
+                **snapshot,
+            },
             narrative_override=text,
             needs_composer=False,
         )
 
     def _ask_spec(
-        self, product_id: str, title: str, skus: list[dict[str, Any]]
+        self,
+        product_id: str,
+        title: str,
+        skus: list[dict[str, Any]],
+        resolution: dict[str, Any] | None = None,
     ) -> ToolResult:
         """按"可变维度"反问用户选规格（避免罗列几十个 SKU 组合）。"""
         dims = self._varying_dims(skus)
@@ -424,7 +469,7 @@ class CartTool:
             return self._commit_add(product_id, skus[0]["sku_id"], 1)
 
         # 选项交给前端的交互卡片渲染，文案只保留一句引导语，避免文字与卡片重复罗列。
-        text = f"「{title}」有多个规格可选，下面选一下你想要的款式吧～"
+        text = f"已理解为把「{title}」加入购物车。这款有多个规格可选，下面选一下你想要的款式吧～"
         # dimensions：有序数组（name + values），前端按此顺序稳定渲染可点击 chip。
         # 同时保留 options（dict）做向后兼容。
         dimensions = [{"name": dim, "values": values} for dim, values in dims.items()]
@@ -436,6 +481,7 @@ class CartTool:
                 "title": title,
                 "dimensions": dimensions,
                 "options": dims,
+                **({"resolution": resolution} if resolution else {}),
             },
             narrative_override=text,
             needs_composer=False,

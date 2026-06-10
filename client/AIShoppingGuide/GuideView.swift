@@ -549,7 +549,7 @@ struct GuideView: View {
     }
 
     private var chatListBottomPadding: CGFloat {
-        composerHeight + composerBottomPadding + (isKeyboardPresented ? 16 : 24)
+        composerHeight + composerBottomPadding + (isKeyboardPresented ? 48 : 104)
     }
 
     private var jumpButtonBottomPadding: CGFloat {
@@ -607,8 +607,8 @@ struct GuideView: View {
         isNearChatBottom = true
         isUserInteractingWithChat = false
         shouldShowJumpToLatest = false
-        shouldHoldLatestQuestionAnchor = true
-        pendingQuestionAnchorID = userMessage.id
+        shouldHoldLatestQuestionAnchor = false
+        pendingQuestionAnchorID = nil
         let placeholder = imageData != nil ? "正在识别图片并匹配商品" : "正在为你匹配商品"
         // 用户气泡 + 助手占位一起以弹性动画淡入，避免"啪"地直接出现。
         withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
@@ -625,6 +625,7 @@ struct GuideView: View {
         pendingAutoFollowWorkItem?.cancel()
         isAutoFollowEnabled = true
         shouldHoldLatestQuestionAnchor = false
+        pendingQuestionAnchorID = nil
         shouldShowJumpToLatest = false
         messages.append(ChatMessage(sender: .ai, text: "正在重新匹配商品", state: .understanding))
         bumpScrollAnchor()
@@ -867,6 +868,7 @@ struct GuideView: View {
                 timings: timings
             )
         }
+        markAssistantResponseReadyForScroll()
     }
 
     private func revealStructuredResponse(
@@ -917,6 +919,15 @@ struct GuideView: View {
                 timings: timings
             )
         }
+        markAssistantResponseReadyForScroll()
+    }
+
+    private func markAssistantResponseReadyForScroll() {
+        shouldHoldLatestQuestionAnchor = false
+        pendingQuestionAnchorID = nil
+        isAutoFollowEnabled = true
+        shouldShowJumpToLatest = false
+        bumpScrollAnchor()
     }
 
     private func streamDelay(for character: Character) -> UInt64 {
@@ -1140,10 +1151,6 @@ struct GuideView: View {
     }
 
     private func handleContentChange(_ proxy: ScrollViewProxy) {
-        if shouldKeepLatestQuestionVisible {
-            return
-        }
-
         shouldHoldLatestQuestionAnchor = false
         if isAutoFollowEnabled {
             scheduleAutoFollowScroll(proxy, animated: true)
@@ -1156,8 +1163,8 @@ struct GuideView: View {
     /// - 刚发送（短回复流式中）：把用户这条问题滚到顶部，让用户从头读，AI 回复在下方展开。
     /// - 其它情况（长回复、出商品卡、已就绪）：跟随到最新内容底部，确保新内容不被输入框遮住。
     private func driveAutoScroll(_ proxy: ScrollViewProxy) {
-        if shouldKeepLatestQuestionVisible, let anchorID = pendingQuestionAnchorID {
-            scrollToQuestion(anchorID, proxy: proxy)
+        if let message = latestAssistantMessage, message.state == .ready || message.state == .failed {
+            forceScrollToLatestMessage(proxy)
             return
         }
         handleContentChange(proxy)
@@ -1203,6 +1210,20 @@ struct GuideView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
     }
 
+    private func forceScrollToLatestMessage(_ proxy: ScrollViewProxy) {
+        pendingAutoFollowWorkItem?.cancel()
+        shouldHoldLatestQuestionAnchor = false
+        isAutoFollowEnabled = true
+        shouldShowJumpToLatest = false
+
+        let delays: [TimeInterval] = [0.01, 0.16, 0.36]
+        for delay in delays {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                scrollToLatestMessage(proxy, animated: true)
+            }
+        }
+    }
+
     private func scrollToLatestMessage(_ proxy: ScrollViewProxy, animated: Bool) {
         guard let latestMessageID = messages.last?.id else { return }
         let targetID = messageTailAnchorID(for: latestMessageID)
@@ -1218,7 +1239,7 @@ struct GuideView: View {
     }
 
     private var latestContentAnchor: UnitPoint {
-        UnitPoint(x: 0.5, y: isKeyboardPresented ? 0.62 : 0.78)
+        UnitPoint(x: 0.5, y: isKeyboardPresented ? 0.46 : 0.58)
     }
 
     private func messageTailAnchorID(for messageID: UUID) -> String {
@@ -1383,7 +1404,7 @@ struct MessageRow: View {
         // 降级：从文本中提取中间段落
         guard let opening = openingText else { return textParagraphs }
         var middle = textParagraphs.filter { $0 != opening }
-        if middle.count > message.products.count {
+        if !message.products.isEmpty && middle.count > message.products.count {
             middle = Array(middle.prefix(message.products.count))
         }
         return middle
@@ -1455,6 +1476,22 @@ struct MessageRow: View {
                                 RoundedRectangle(cornerRadius: 18, style: .continuous)
                                     .stroke(AppTheme.border, lineWidth: message.sender == .ai ? 1 : 0)
                             )
+                    }
+
+                    if parsedStructuredContent == nil && message.products.isEmpty {
+                        ForEach(Array(middleParagraphs.enumerated()), id: \.offset) { _, paragraph in
+                            Text(paragraph)
+                                .font(.subheadline)
+                                .foregroundStyle(AppTheme.textPrimary)
+                                .lineSpacing(6)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 11)
+                                .background(bubbleColor, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                        .stroke(AppTheme.border, lineWidth: message.sender == .ai ? 1 : 0)
+                                )
+                        }
                     }
                     
                     // 2. 商品卡片 + 解说交替展示

@@ -551,8 +551,33 @@ class TestComposerStreaming:
         messages = _build_messages(sr)
         assert "单品导购问答" in messages[0]["content"]
         assert "不要输出 JSON" in messages[0]["content"]
+        assert "✨ 总结" in messages[0]["content"]
+        assert "🌟 优点" in messages[0]["content"]
+        assert "🔍 缺点" in messages[0]["content"]
+        assert "每段不超过 70 个中文字符" in messages[0]["content"]
+        assert "2-3 个核心点" in messages[0]["content"]
         assert "评价很好" in messages[-1]["content"]
         assert "items" not in messages[0]["content"]
+
+    def test_product_detail_prompt_includes_general_single_paragraph_format(self):
+        from agent.composer import _build_messages
+
+        sr = ToolResult(
+            tool_name="product_detail",
+            payload={
+                "query": "这款怎么样",
+                "focus_aspect": "general",
+                "product": {"product_id": "p1", "title": "T"},
+                "evidence": [{"source_type": "product_profile", "text": "降噪强，续航长"}],
+            },
+            composer_hint="基于详情回答",
+        )
+        messages = _build_messages(sr)
+        assert "1 个自然段" in messages[0]["content"]
+        assert "不要分点" in messages[0]["content"]
+        assert "不要 emoji" in messages[0]["content"]
+        assert "90 个中文字符" in messages[0]["content"]
+        assert "禁止写成长段参数介绍" in messages[0]["content"]
 
 
 # ---------- Orchestrator: 主流程 + 降级（非流式） ----------

@@ -50,7 +50,10 @@ _DEICTIC_WORDS = (
 
 _FOCUS_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("negative_reviews", ("差评", "缺点", "吐槽", "踩雷", "问题", "不好", "翻车")),
-    ("reviews", ("评价", "口碑", "评论", "大家怎么说", "真实体验", "用户说")),
+    ("reviews", (
+        "评价", "口碑", "评论", "评论区", "大家怎么说", "大家觉得", "用户说",
+        "用户反馈", "买家反馈", "买家怎么说", "真实体验", "真实感受", "使用体验",
+    )),
     ("sensitive_skin", ("敏感肌", "刺激", "酒精", "过敏", "泛红", "刺痛", "温和")),
     ("size_fit", ("尺码", "偏大", "偏小", "合脚", "版型", "脚感", "码数")),
     ("performance", ("续航", "性能", "屏幕", "拍照", "降噪", "配置", "重量", "轻薄")),
@@ -492,14 +495,44 @@ def _source_title(source_type: str) -> str:
 
 
 def _composer_hint(focus: str, has_evidence: bool) -> str:
+    if focus in {"general", "performance"}:
+        evidence_rule = "证据不足时要说目前资料有限，不要编造。" if not has_evidence else "必须基于 payload.evidence 回答，不要编造。"
+        focus_rule = (
+            "用户关心性能/配置/屏幕/续航等，请优先引用规格和 FAQ。"
+            if focus == "performance"
+            else "用户想了解这款整体怎么样，请给出适合快速决策的短结论。"
+        )
+        return (
+            "这是 product_detail 单品介绍问答。请只输出 1 个自然段，"
+            "不要输出 JSON，不要分点，不要换行，不要 emoji。"
+            "控制在 90 个中文字符以内，包含产品定位、1-2 个核心卖点，"
+            "以及适合人群或购买前注意点；禁止写成长段参数介绍。"
+            "注意：这是了解产品本身，不要写成用户评价总结。"
+            f"{focus_rule}{evidence_rule}"
+        )
+
+    if focus in {"reviews", "negative_reviews"}:
+        evidence_rule = "证据不足时要说目前资料有限，不要编造。" if not has_evidence else "必须基于 payload.evidence 回答，不要编造。"
+        focus_rule = (
+            "用户想了解差评或缺点，请在缺点段优先总结负面证据；如果负面证据不足，要明确说明。"
+            if focus == "negative_reviews"
+            else "用户想了解真实评价和口碑，请优先总结 review 证据里的共性，兼顾正负两面。"
+        )
+        return (
+            "这是 product_detail 单品评价问答。请只输出 3 个独立段落，每段单独一行，"
+            "不要输出 JSON，不要额外加开场或结尾。每段写 1-2 句，"
+            "每段不超过 70 个中文字符；优点和缺点各总结 2-3 个核心点，不要写成大段流水账。固定格式为："
+            "✨ 总结：...\n🌟 优点：...\n🔍 缺点：...\n"
+            "注意：这是看用户评价/口碑，不要写成商品参数介绍。"
+            f"{focus_rule}{evidence_rule}"
+        )
+
     focus_text = {
         "reviews": "用户想了解真实评价和口碑，请优先总结 review 证据里的共性。",
         "negative_reviews": "用户想了解差评或缺点，请优先说负面证据；如果负面证据不足，要明确说明。",
         "sensitive_skin": "用户关心敏感肌/刺激风险，请只基于 evidence 判断，不要做医疗承诺。",
         "size_fit": "用户关心尺码/版型/脚感，请优先引用评价和 FAQ。",
-        "performance": "用户关心性能/配置/屏幕/续航等，请优先引用规格和 FAQ。",
         "usage": "用户关心使用方法或注意事项，请优先引用 FAQ 和商品描述。",
-        "general": "用户想深入了解单品，请做简洁总览。",
     }[focus]
     evidence_rule = "证据不足时要说目前资料有限，不要编造。" if not has_evidence else "必须基于 payload.evidence 回答，不要编造。"
     return (

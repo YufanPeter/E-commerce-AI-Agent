@@ -211,6 +211,33 @@ def test_bare_attribute_followup_uses_focused_product():
     assert result.payload["product"]["product_id"] == "p2"
 
 
+def test_general_detail_uses_single_paragraph_intro_hint():
+    result = ProductDetailTool(product_store=_FakeStore(), evidence_retriever=_EmptyRetriever()).run(
+        "第一个怎么样", _session_with_hits(), {}
+    )
+
+    assert result.payload["focus_aspect"] == "general"
+    assert result.composer_hint is not None
+    assert "1 个自然段" in result.composer_hint
+    assert "不要分点" in result.composer_hint
+    assert "不要 emoji" in result.composer_hint
+    assert "90 个中文字符" in result.composer_hint
+    assert "禁止写成长段参数介绍" in result.composer_hint
+    assert "不要写成用户评价总结" in result.composer_hint
+
+
+def test_review_intent_keywords_use_review_focus():
+    result = ProductDetailTool(product_store=_FakeStore(), evidence_retriever=_EmptyRetriever()).run(
+        "第一个用户反馈怎么样", _session_with_hits(), {}
+    )
+
+    assert result.payload["focus_aspect"] == "reviews"
+    assert result.composer_hint is not None
+    assert "🌟 优点" in result.composer_hint
+    assert "🔍 缺点" in result.composer_hint
+    assert "不要写成商品参数介绍" in result.composer_hint
+
+
 def test_review_focus_uses_review_evidence_fallback():
     result = ProductDetailTool(product_store=_FakeStore(), evidence_retriever=_EmptyRetriever()).run(
         "第一个评价怎么样", _session_with_hits(), {}
@@ -218,6 +245,12 @@ def test_review_focus_uses_review_evidence_fallback():
 
     evidence = result.payload["evidence"]
     assert result.payload["focus_aspect"] == "reviews"
+    assert result.composer_hint is not None
+    assert "✨ 总结" in result.composer_hint
+    assert "🌟 优点" in result.composer_hint
+    assert "🔍 缺点" in result.composer_hint
+    assert "每段不超过 70 个中文字符" in result.composer_hint
+    assert "2-3 个核心点" in result.composer_hint
     assert evidence[0]["source_type"] == "user_review"
     assert any("清爽" in item["text"] for item in evidence)
 
@@ -229,6 +262,8 @@ def test_negative_review_focus_prefers_negative_reviews():
 
     evidence = result.payload["evidence"]
     assert result.payload["focus_aspect"] == "negative_reviews"
+    assert result.composer_hint is not None
+    assert "缺点段" in result.composer_hint
     assert evidence[0]["source_type"] == "user_review"
     assert evidence[0]["metadata"]["polarity"] == "negative"
 

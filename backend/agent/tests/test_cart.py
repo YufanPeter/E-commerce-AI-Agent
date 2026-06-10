@@ -127,6 +127,8 @@ def test_cart_add_resolves_index(monkeypatch, store: CartStore):
     r = tool.run("把第二个加进来", _session_with_hits(), {})
     assert r.payload["action"] == "add"
     assert r.payload["added"]["title"] == "兰蔻小黑瓶"
+    assert r.payload["resolution"]["source"] == "explicit_index"
+    assert r.payload["resolution"]["resolved_query"] == "把「兰蔻小黑瓶」加入购物车"
     assert r.payload["cart"]["item_count"] == 1
 
 
@@ -136,6 +138,59 @@ def test_cart_add_uses_focus_when_no_index(monkeypatch, store: CartStore):
     sess.set("last_focus_product_id", "p2")  # 上一轮 detail 聚焦了第二款
     r = CartTool(cart_store=store).run("把刚才那款加进来", sess, {})
     assert r.payload["added"]["product_id"] == "p2"
+    assert r.payload["resolution"]["source"] == "focus"
+
+
+def test_cart_add_prefers_focus_over_hallucinated_index(monkeypatch, store: CartStore):
+    """用户没说序号时，dispatch 幻觉出的 index 不能覆盖上一轮详情聚焦商品。"""
+    monkeypatch.setattr(cart_module, "dispatch_action", _stub_dispatch("add", index=1))
+    sess = _session_with_hits()
+    sess.set("last_focus_product_id", "p2")
+
+    r = CartTool(cart_store=store).run("帮我加入购物车吧", sess, {})
+
+    assert r.payload["added"]["product_id"] == "p2"
+    assert r.payload["resolution"]["source"] == "focus"
+
+
+def test_cart_add_pronoun_uses_focus(monkeypatch, store: CartStore):
+    """“把它加入购物车”里的“它”是指代词，不应当成商品关键词去全库搜索。"""
+    monkeypatch.setattr(cart_module, "dispatch_action", _stub_dispatch("add"))
+    sess = _session_with_hits()
+    sess.set("last_focus_product_id", "p2")
+
+    r = CartTool(cart_store=store).run("把它加入购物车", sess, {})
+
+    assert r.payload["added"]["product_id"] == "p2"
+    assert r.payload["resolution"]["source"] == "focus"
+
+
+def test_cart_add_spec_prompt_confirms_resolved_product(monkeypatch, store: CartStore):
+    """多规格商品进入规格卡前，应先明确系统把“它”理解成了哪款商品。"""
+    with sqlite3.connect(store.db_path) as conn:
+        conn.execute(
+            "INSERT INTO products(product_id,title,brand,category,sub_category,base_price) VALUES (?,?,?,?,?,?)",
+            ("p3", "测试旗舰手机", "测试", "数码电子", "智能手机", 3999),
+        )
+        conn.executemany(
+            "INSERT INTO product_skus(sku_id,product_id,properties_json,price) VALUES (?,?,?,?)",
+            [
+                ("p3_black", "p3", '{"颜色":"黑色"}', 3999),
+                ("p3_white", "p3", '{"颜色":"白色"}', 3999),
+            ],
+        )
+        conn.commit()
+
+    monkeypatch.setattr(cart_module, "dispatch_action", _stub_dispatch("add"))
+    sess = AgentSession()
+    sess.set("last_focus_product_id", "p3")
+
+    r = CartTool(cart_store=store).run("把它加入购物车", sess, {})
+
+    assert r.payload["action"] == "ask_spec"
+    assert r.payload["resolution"]["source"] == "focus"
+    assert r.payload["resolution"]["resolved_query"] == "把「测试旗舰手机」加入购物车"
+    assert "已理解为把「测试旗舰手机」加入购物车" in (r.narrative_override or "")
 
 
 def test_cart_remove_by_cart_index(monkeypatch, store: CartStore):
