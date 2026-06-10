@@ -57,6 +57,7 @@ struct GuideView: View {
     @State private var showPhotoPicker = false
     @State private var showCamera = false
     @State private var chatListIdentity = UUID()
+    @State private var scrollAnchorVersion = 0
     /// 待发送的图片草稿：选/拍图后先挂在输入区，待用户配上文字一起发送；nil 表示无附件。
     @State private var pendingImageData: Data?
     @StateObject private var speechInput = SpeechInputController()
@@ -67,11 +68,12 @@ struct GuideView: View {
     private let nearBottomThreshold: CGFloat = 96
     private let questionAnchorCharacterLimit = 220
     private let autoFollowTimer = Timer.publish(every: 0.12, on: .main, in: .common).autoconnect()
-    private let streamDefaultDelay: UInt64 = 16_000_000
-    private let streamWhitespaceDelay: UInt64 = 6_000_000
-    private let streamPunctuationDelay: UInt64 = 70_000_000
-    private let streamLineBreakDelay: UInt64 = 110_000_000
-    private let streamCardRevealDelay: UInt64 = 180_000_000
+    private let streamDefaultDelay: UInt64 = 24_000_000
+    private let streamWhitespaceDelay: UInt64 = 8_000_000
+    private let streamPunctuationDelay: UInt64 = 90_000_000
+    private let streamLineBreakDelay: UInt64 = 130_000_000
+    private let streamCardRevealDelay: UInt64 = 240_000_000
+    private let composerMaxInputLines = 4
 
     /// 示例 query 池：每次空态出现时随机取 4 条，避免每次都是同样几个。
     private static let examplePool = [
@@ -220,7 +222,7 @@ struct GuideView: View {
                     .onChange(of: currentConversationID) { _, _ in
                         scrollToEmptyState(proxy)
                     }
-                    .onChange(of: scrollAnchorToken) { _, _ in
+                    .onChange(of: scrollAnchorVersion) { _, _ in
                         driveAutoScroll(proxy)
                     }
 
@@ -458,7 +460,7 @@ struct GuideView: View {
                 .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
 
-            HStack(spacing: 10) {
+            HStack(alignment: .center, spacing: 10) {
                 Button {
                     withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
                         isComposerExpanded.toggle()
@@ -474,12 +476,15 @@ struct GuideView: View {
                 }
                 .buttonStyle(.tactile)
 
-                TextField(composerPlaceholder, text: $inputText)
-                    .lineLimit(1)
+                TextField(composerPlaceholder, text: $inputText, axis: .vertical)
+                    .lineLimit(1...composerMaxInputLines)
                     .submitLabel(.send)
                     .onSubmit(sendCurrentInput)
                     .font(.callout)
                     .foregroundStyle(AppTheme.textPrimary)
+                    .textFieldStyle(.plain)
+                    .frame(minHeight: 38, alignment: .center)
+                    .fixedSize(horizontal: false, vertical: true)
                     .focused($isInputFocused)
 
                 Button {
@@ -567,20 +572,6 @@ struct GuideView: View {
             && message.products.isEmpty
     }
 
-    private var scrollAnchorToken: String {
-        let messageToken = messages.map { message in
-            [
-                message.id.uuidString,
-                message.state.rawValue,
-                "\(message.products.count)",
-                "\(message.canRetry)"
-            ].joined(separator: ":")
-        }
-        .joined(separator: "|")
-
-        return messageToken
-    }
-
     /// 点击 followup 建议：填入输入框供用户编辑，不直接发送。
     private func fillInputWithFollowUp(_ prompt: String) {
         let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -624,6 +615,7 @@ struct GuideView: View {
             messages.append(userMessage)
             messages.append(ChatMessage(sender: .ai, text: placeholder, state: .understanding))
         }
+        bumpScrollAnchor()
         runAgent(for: query, imageBase64: imageData?.base64EncodedString())
     }
 
@@ -635,6 +627,7 @@ struct GuideView: View {
         shouldHoldLatestQuestionAnchor = false
         shouldShowJumpToLatest = false
         messages.append(ChatMessage(sender: .ai, text: "正在重新匹配商品", state: .understanding))
+        bumpScrollAnchor()
         runAgent(for: query)
     }
 
@@ -686,6 +679,7 @@ struct GuideView: View {
             var visibleNarrative = ""
             var isStructuredNarrative = false
             var hydrated: [Product] = []
+            var timings: AgentTimingsPayload?
             var statusText = imageBase64 == nil ? "正在匹配商品" : "正在识别图片并匹配商品"
 
             do {
@@ -748,11 +742,18 @@ struct GuideView: View {
                         }
 
                     case .done:
+                        timings = event.timings
+                        #if DEBUG
+                        if let timings, !timings.consoleDescription.isEmpty {
+                            print("[Agent timings] \(timings.consoleDescription)")
+                        }
+                        #endif
                         await finishStreamingResponse(
                             rawText: narrative.isEmpty ? statusText : narrative,
                             visibleText: visibleNarrative,
                             fallbackText: statusText,
-                            products: hydrated
+                            products: hydrated,
+                            timings: timings
                         )
 
                     default:
@@ -767,7 +768,8 @@ struct GuideView: View {
                         rawText: narrative.isEmpty ? statusText : narrative,
                         visibleText: visibleNarrative,
                         fallbackText: statusText,
-                        products: hydrated
+                        products: hydrated,
+                        timings: timings
                     )
                 }
                 persistCurrent()
@@ -801,10 +803,11 @@ struct GuideView: View {
         rawText: String,
         visibleText: String,
         fallbackText: String,
-        products: [Product]
+        products: [Product],
+        timings: AgentTimingsPayload? = nil
     ) async {
         if let content = StructuredContent.parse(from: rawText) {
-            await revealStructuredResponse(content, rawText: rawText, products: products)
+            await revealStructuredResponse(content, rawText: rawText, products: products, timings: timings)
             return
         }
 
@@ -819,8 +822,49 @@ struct GuideView: View {
         withAnimation(.easeOut(duration: 0.18)) {
             updateLastAI(
                 text: finalVisibleText.isEmpty ? rawText : finalVisibleText,
+                state: products.isEmpty ? .ready : .generating,
+                products: [],
+                timings: timings
+            )
+        }
+
+        guard !products.isEmpty else { return }
+        await revealPlainProductCards(
+            text: finalVisibleText.isEmpty ? rawText : finalVisibleText,
+            products: products,
+            timings: timings
+        )
+    }
+
+    private func revealPlainProductCards(
+        text: String,
+        products: [Product],
+        timings: AgentTimingsPayload?
+    ) async {
+        try? await Task.sleep(nanoseconds: streamCardRevealDelay)
+
+        for index in products.indices {
+            guard !Task.isCancelled else { return }
+            let visibleProducts = Array(products.prefix(index + 1))
+            withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.86)) {
+                updateLastAI(
+                    text: text,
+                    state: .generating,
+                    products: visibleProducts,
+                    timings: timings
+                )
+            }
+            if index < (products.indices.last ?? index) {
+                try? await Task.sleep(nanoseconds: streamCardRevealDelay)
+            }
+        }
+
+        withAnimation(.easeOut(duration: 0.18)) {
+            updateLastAI(
+                text: text,
                 state: .ready,
-                products: products
+                products: products,
+                timings: timings
             )
         }
     }
@@ -828,7 +872,8 @@ struct GuideView: View {
     private func revealStructuredResponse(
         _ content: StructuredContent,
         rawText: String,
-        products: [Product]
+        products: [Product],
+        timings: AgentTimingsPayload? = nil
     ) async {
         var opening = ""
         for character in content.opening {
@@ -868,7 +913,8 @@ struct GuideView: View {
                 text: rawText,
                 state: .ready,
                 products: products,
-                structuredContent: content
+                structuredContent: content,
+                timings: timings
             )
         }
     }
@@ -1058,6 +1104,7 @@ struct GuideView: View {
             .compactMap { ($0 as? UIWindowScene)?.screen.bounds.height }
             .first ?? frame.maxY
         let height = max(0, screenHeight - frame.minY)
+        guard abs(keyboardHeight - height) > 0.5 else { return }
         let duration = notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double ?? 0.25
 
         withAnimation(.easeOut(duration: duration)) {
@@ -1178,20 +1225,36 @@ struct GuideView: View {
         "guide-message-tail-\(messageID.uuidString)"
     }
 
+    private func bumpScrollAnchor() {
+        scrollAnchorVersion &+= 1
+    }
+
     private func updateLastAI(
         text: String,
         state: MessageState,
         products: [Product] = [],
         canRetry: Bool = false,
-        structuredContent: StructuredContent? = nil
+        structuredContent: StructuredContent? = nil,
+        timings: AgentTimingsPayload? = nil
     ) {
         guard let index = messages.lastIndex(where: { $0.sender == .ai }) else { return }
+        let previousState = messages[index].state
+        let previousProductCount = messages[index].products.count
+        let previousCanRetry = messages[index].canRetry
         messages[index].text = text
         messages[index].state = state
         messages[index].products = products
         messages[index].canRetry = canRetry
         if let structuredContent {
             messages[index].structuredContent = structuredContent
+        }
+        if let timings {
+            messages[index].timings = timings
+        }
+        if previousState != state
+            || previousProductCount != products.count
+            || previousCanRetry != canRetry {
+            bumpScrollAnchor()
         }
     }
 
@@ -1200,12 +1263,14 @@ struct GuideView: View {
     private func attachSpecSelection(_ spec: SpecSelection) {
         guard let index = messages.lastIndex(where: { $0.sender == .ai }) else { return }
         messages[index].specSelection = spec
+        bumpScrollAnchor()
     }
 
     /// 把对比结果挂到当前 AI 消息上，对话流里直接渲染对比卡片。
     private func attachComparison(_ comparison: ProductComparisonPayload) {
         guard let index = messages.lastIndex(where: { $0.sender == .ai }) else { return }
         messages[index].comparison = comparison
+        bumpScrollAnchor()
     }
 
     private func openProductDetail(_ product: Product) {
@@ -1265,19 +1330,16 @@ struct MessageRow: View {
             lhs.product.id == rhs.product.id && lhs.description == rhs.description
         }
     }
-    
-    private var parsedStructuredContent: StructuredContent? {
-        guard let structured = message.structuredContent else {
-            guard message.state == .ready else {
-                return nil
-            }
-            return tryParseStructuredContent(from: message.text)
-        }
-        return structured
+
+    private struct TimingItem: Identifiable {
+        let label: String
+        let value: Int
+
+        var id: String { label }
     }
     
-    private func tryParseStructuredContent(from text: String) -> StructuredContent? {
-        StructuredContent.parse(from: text)
+    private var parsedStructuredContent: StructuredContent? {
+        message.structuredContent
     }
     
     private var textParagraphs: [String] {
@@ -1300,18 +1362,17 @@ struct MessageRow: View {
         return content.followup.filter {
             !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
-        // 降级：从文本中提取真正像「追问方向」的段落。
-        // 注意：必须排除已作为开场白渲染的段落，否则像 cart 选规格这类单段确定性
-        // 文案（含「想要」字样）会被同一段既渲染成开场白气泡、又渲染成追问胶囊 →
-        // 屏幕上出现一模一样的两个气泡。开场白已经展示过，不再重复当追问。
-        let opening = openingText
-        let questions = textParagraphs.filter { paragraph in
-            guard paragraph != opening else { return false }
-            return paragraph.contains("？") || paragraph.contains("?") ||
-                paragraph.contains("需要") || paragraph.contains("想要") ||
-                paragraph.contains("想看")
-        }
-        return questions
+    }
+
+    private var timingItems: [TimingItem] {
+        guard message.sender == .ai, let timings = message.timings else { return [] }
+        return [
+            timings.visionMS.map { TimingItem(label: "视觉", value: $0) },
+            timings.routerMS.map { TimingItem(label: "理解", value: $0) },
+            timings.toolMS.map { TimingItem(label: "检索", value: $0) },
+            timings.firstTokenMS.map { TimingItem(label: "首字", value: $0) },
+            timings.composerMS.map { TimingItem(label: "生成", value: $0) }
+        ].compactMap { $0 }
     }
     
     private var middleParagraphs: [String] {
@@ -1371,7 +1432,7 @@ struct MessageRow: View {
                         )
                 }
 
-                if message.state == .ready || isRevealingStructuredContent {
+                if message.state == .ready || isRevealingStructuredContent || isRevealingProductCards {
                     if message.sender == .user {
                         Text(message.text)
                             .font(.subheadline)
@@ -1498,6 +1559,10 @@ struct MessageRow: View {
                     ComparisonCard(comparison: comparison)
                 }
 
+                if !timingItems.isEmpty {
+                    timingStrip
+                }
+
                 // 对话结束、推荐了 ≥2 件商品时，给个小按钮进对比页（页内下拉选商品）。
                 if message.sender == .ai, message.state == .ready, message.products.count >= 2 {
                     Button {
@@ -1516,6 +1581,24 @@ struct MessageRow: View {
 
             if message.sender == .ai { Spacer(minLength: 44) }
         }
+    }
+
+    private var timingStrip: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "speedometer")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(AppTheme.textSecondary)
+
+            ForEach(timingItems) { item in
+                Text("\(item.label) \(item.value)ms")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(AppTheme.textSecondary)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(AppTheme.secondary.opacity(0.55), in: Capsule())
+        .overlay(Capsule().stroke(AppTheme.border.opacity(0.8), lineWidth: 1))
     }
     
     @ViewBuilder
@@ -1619,11 +1702,16 @@ struct MessageRow: View {
         message.sender == .ai && message.state == .generating && message.structuredContent != nil
     }
 
+    private var isRevealingProductCards: Bool {
+        message.sender == .ai && message.state == .generating && !message.products.isEmpty
+    }
+
     private var shouldShowStreamingPlainText: Bool {
         guard message.sender == .ai, message.state == .generating else { return false }
         let trimmed = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
         guard message.structuredContent == nil else { return false }
+        guard message.products.isEmpty else { return false }
         return !trimmed.hasPrefix("正在")
     }
 

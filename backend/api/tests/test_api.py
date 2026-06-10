@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from time import perf_counter
 from typing import Iterator
 from unittest.mock import patch
 
@@ -166,6 +167,27 @@ class TestChatStream:
         import json as _json
         sid = _json.loads(events[0][1])["session_id"]
         assert sid
+
+    def test_stream_startup_events_do_not_wait_for_agent(self, client):
+        _, m = client
+        from agent.session import AgentSession
+
+        req = m.ChatRequest(query="hello")
+        session = AgentSession()
+        with patch.object(
+            m,
+            "_get_agent",
+            side_effect=AssertionError("agent loaded too early"),
+        ) as get_agent:
+            gen = m._chat_event_generator(req, session, request_started_at=perf_counter())
+            first = next(gen)
+            second = next(gen)
+            gen.close()
+
+        assert "event: session" in first
+        assert "event: status" in second
+        assert '"phase": "startup"' in second
+        get_agent.assert_not_called()
 
 
 class TestCartReset:
@@ -369,4 +391,3 @@ class TestTitleEndpoint:
             r = c.post("/title", json={"user_text": "推荐油皮洗面奶", "assistant_text": "给你推荐几款"})
         assert r.status_code == 200
         assert r.json()["title"] == "油皮洗面奶"
-

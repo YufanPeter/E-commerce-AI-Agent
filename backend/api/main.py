@@ -17,6 +17,8 @@ import json
 import logging
 import os
 import threading
+import time
+from collections.abc import Iterator
 from typing import Any
 
 # 必须在 import chromadb / sentence_transformers 之前完成环境设置
@@ -212,6 +214,48 @@ def _resolve_image(req: ChatRequest) -> str | None:
     return None
 
 
+def _format_sse(event: str, payload: Any) -> str:
+    data = json.dumps(payload, ensure_ascii=False)
+    return f"event: {event}\ndata: {data}\n\n"
+
+
+def _chat_event_generator(
+    req: ChatRequest,
+    session: Any,
+    request_started_at: float,
+) -> Iterator[str]:
+    # 首包不依赖 Agent/SearchService：让客户端立刻拿到 session 和可展示的状态。
+    yield _format_sse("session", {"session_id": session.session_id})
+    yield _format_sse(
+        "status",
+        {
+            "phase": "startup",
+            "message": "正在连接导购引擎…",
+            "elapsed_ms": int((time.perf_counter() - request_started_at) * 1000),
+        },
+    )
+
+    try:
+        agent = _get_agent()
+        image = _resolve_image(req)
+        # 有图 → 走图搜（拍照找货）；query 作为随图附带文字（可空）
+        if image:
+            stream = agent.handle_image_turn_stream(
+                image, session, hint_text=req.query
+            )
+        else:
+            stream = agent.handle_turn_stream(req.query, session)
+        for ev in stream:
+            yield _format_sse(ev["type"], ev["data"])
+    except Exception as exc:  # noqa: BLE001 - 流式中任何异常都要给前端
+        logger.exception("Stream pipeline crashed")
+        yield _format_sse("error", {"message": f"{type(exc).__name__}: {exc}"})
+    finally:
+        # 流结束（含正常/异常）后持久化会话，history + working_memory 都已在
+        # 生成器内部更新完毕，此时落盘保证重启可恢复。
+        _sessions.save(session)
+
+
 @app.post("/chat/stream")
 def chat_stream(req: ChatRequest) -> StreamingResponse:
     """SSE 流式端点。
@@ -221,42 +265,16 @@ def chat_stream(req: ChatRequest) -> StreamingResponse:
         data: <json>
 
     事件顺序：
-        session → status(routing) → meta → status(tool) → tool_result
-                → status(compose)? → token* → done
+        session → status(startup) → status(routing) → meta → status(tool)
+                → tool_result → status(compose)? → token* → done
 
     `status.data.message` 是给用户看的"识别中…/检索中…/生成中…"提示，
     前端可显示成 loading 胶囊；`meta`/`tool_result` 是结构化数据。
 
     客户端用 `EventSource` 或 `requests.get(stream=True)` 消费。
     """
+    request_started_at = time.perf_counter()
     session = _sessions.get_or_create(req.session_id)
-    agent = _get_agent()
-    image = _resolve_image(req)
-
-    def _format_sse(event: str, payload: Any) -> str:
-        data = json.dumps(payload, ensure_ascii=False)
-        return f"event: {event}\ndata: {data}\n\n"
-
-    def _generator():
-        # 首条：先把 session_id 告诉客户端（便于客户端持久化）
-        yield _format_sse("session", {"session_id": session.session_id})
-        try:
-            # 有图 → 走图搜（拍照找货）；query 作为随图附带文字（可空）
-            if image:
-                stream = agent.handle_image_turn_stream(
-                    image, session, hint_text=req.query
-                )
-            else:
-                stream = agent.handle_turn_stream(req.query, session)
-            for ev in stream:
-                yield _format_sse(ev["type"], ev["data"])
-        except Exception as exc:  # noqa: BLE001 - 流式中任何异常都要给前端
-            logger.exception("Stream pipeline crashed")
-            yield _format_sse("error", {"message": f"{type(exc).__name__}: {exc}"})
-        finally:
-            # 流结束（含正常/异常）后持久化会话，history + working_memory 都已在
-            # 生成器内部更新完毕，此时落盘保证重启可恢复。
-            _sessions.save(session)
 
     headers = {
         "Cache-Control": "no-cache, no-transform",
@@ -264,7 +282,11 @@ def chat_stream(req: ChatRequest) -> StreamingResponse:
         "X-Accel-Buffering": "no",
         "Connection": "keep-alive",
     }
-    return StreamingResponse(_generator(), media_type="text/event-stream", headers=headers)
+    return StreamingResponse(
+        _chat_event_generator(req, session, request_started_at),
+        media_type="text/event-stream",
+        headers=headers,
+    )
 
 
 @app.post("/sessions/{session_id}/reset")

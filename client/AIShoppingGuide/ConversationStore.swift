@@ -33,6 +33,7 @@ final class ConversationStore: ObservableObject {
     func upsert(_ conversation: Conversation) {
         guard conversation.hasUserMessage else { return }
         var updated = conversation
+        updated.hydrateStructuredContentIfNeeded()
         updated.updatedAt = Date()
         if let index = conversations.firstIndex(where: { $0.id == updated.id }) {
             conversations[index] = updated
@@ -77,7 +78,10 @@ final class ConversationStore: ObservableObject {
         guard FileManager.default.fileExists(atPath: fileURL.path) else { return }
         do {
             let data = try Data(contentsOf: fileURL)
-            let decoded = try decoder.decode([Conversation].self, from: data)
+            var decoded = try decoder.decode([Conversation].self, from: data)
+            for index in decoded.indices {
+                decoded[index].hydrateStructuredContentIfNeeded()
+            }
             conversations = decoded.sorted { $0.updatedAt > $1.updatedAt }
         } catch {
             // 损坏或不兼容的历史文件不应阻断 App 启动；丢弃即可。

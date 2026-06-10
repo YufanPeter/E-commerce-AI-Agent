@@ -243,6 +243,8 @@ class Agent:
         narrative_parts: list[str] = []
         try:
             for piece in self._composer.compose_stream(tool_result, session):
+                if "first_token_ms" not in trace["timings"]:
+                    trace["timings"]["first_token_ms"] = int((time.perf_counter() - t2) * 1000)
                 narrative_parts.append(piece)
                 yield {"type": "token", "data": piece}
         except Exception as exc:  # noqa: BLE001 - 兜底，理论 composer_stream 已经吞了
@@ -250,6 +252,7 @@ class Agent:
             trace["composer_error"] = repr(exc)
             fallback = self._fallback_narrative(tool_result)
             if not narrative_parts:
+                trace["timings"].setdefault("first_token_ms", int((time.perf_counter() - t2) * 1000))
                 narrative_parts.append(fallback)
                 yield {"type": "token", "data": fallback}
         trace["timings"]["composer_ms"] = int((time.perf_counter() - t2) * 1000)
@@ -258,10 +261,12 @@ class Agent:
         if not narrative:
             # 极端情况下流没产出任何 token，给个兜底
             narrative = self._fallback_narrative(tool_result)
+            trace["timings"].setdefault("first_token_ms", int((time.perf_counter() - t2) * 1000))
             yield {"type": "token", "data": narrative}
 
         session.add_assistant(narrative)
 
+        _log_turn_timings(trace, decision.tool)
         yield {"type": "done", "data": {
             "timings": trace["timings"],
             "narrative": narrative,
@@ -357,6 +362,8 @@ class Agent:
         narrative_parts: list[str] = []
         try:
             for piece in self._composer.compose_stream(tool_result, session):
+                if "first_token_ms" not in trace["timings"]:
+                    trace["timings"]["first_token_ms"] = int((time.perf_counter() - t2) * 1000)
                 narrative_parts.append(piece)
                 yield {"type": "token", "data": piece}
         except Exception as exc:  # noqa: BLE001
@@ -364,6 +371,7 @@ class Agent:
             trace["composer_error"] = repr(exc)
             fallback = self._fallback_narrative(tool_result)
             if not narrative_parts:
+                trace["timings"].setdefault("first_token_ms", int((time.perf_counter() - t2) * 1000))
                 narrative_parts.append(fallback)
                 yield {"type": "token", "data": fallback}
         trace["timings"]["composer_ms"] = int((time.perf_counter() - t2) * 1000)
@@ -371,9 +379,11 @@ class Agent:
         narrative = "".join(narrative_parts).strip()
         if not narrative:
             narrative = self._fallback_narrative(tool_result)
+            trace["timings"].setdefault("first_token_ms", int((time.perf_counter() - t2) * 1000))
             yield {"type": "token", "data": narrative}
 
         session.add_assistant(narrative)
+        _log_turn_timings(trace, "image_search")
         yield {"type": "done", "data": {
             "timings": trace["timings"],
             "narrative": narrative,
@@ -611,6 +621,19 @@ def _guard_attribute_followup(
     return None
 
 
+def _log_turn_timings(trace: dict[str, Any], tool: str) -> None:
+    timings = trace.get("timings") or {}
+    logger.info(
+        "turn timings tool=%s router=%sms tool_ms=%sms first_token=%sms composer=%sms vision=%sms",
+        tool,
+        timings.get("router_ms", "-"),
+        timings.get("tool_ms", "-"),
+        timings.get("first_token_ms", "-"),
+        timings.get("composer_ms", "-"),
+        timings.get("vision_ms", "-"),
+    )
+
+
 def _is_new_search_attribute_request(text: str) -> bool:
     if not any(word in text for word in _NEW_SEARCH_WORDS):
         return False
@@ -657,4 +680,3 @@ def _is_new_search_escape(query: str) -> bool:
     if any(word in text for word in _DETAIL_DEICTIC_WORDS):
         return False
     return any(word in text for word in _ESCAPE_SEARCH_WORDS)
-

@@ -469,7 +469,7 @@ class TestComposerStreaming:
                 ["你好", "，我", "推荐 T。"]
             )
             chunks = list(AnswerComposer().compose_stream(sr, AgentSession()))
-        assert chunks == ["你好，我推荐 T。"]
+        assert chunks == ["你好", "，我", "推荐 T。"]
         assert "".join(chunks) == "你好，我推荐 T。"
 
     def test_stream_empty_emits_placeholder(self):
@@ -483,8 +483,7 @@ class TestComposerStreaming:
             mock_client.return_value.chat.completions.create.return_value = iter([])
             chunks = list(AnswerComposer().compose_stream(sr, AgentSession()))
         assert len(chunks) == 1
-        assert chunks[0].startswith("{")
-        assert "followup" in chunks[0]
+        assert "放宽预算" in chunks[0]
 
     def test_stream_mid_flight_error_yields_tail(self):
         sr = ToolResult(
@@ -500,8 +499,9 @@ class TestComposerStreaming:
         with patch("agent.composer.get_client") as mock_client:
             mock_client.return_value.chat.completions.create.return_value = _gen()
             chunks = list(AnswerComposer().compose_stream(sr, AgentSession()))
-        assert len(chunks) == 1
-        assert chunks[0].startswith("{")
+        assert len(chunks) == 2
+        assert chunks[0] == "头一段"
+        assert "放宽预算" in chunks[1]
         assert "生成中断" not in chunks[0]
 
     def test_stream_handles_chunks_without_content(self):
@@ -520,7 +520,7 @@ class TestComposerStreaming:
         with patch("agent.composer.get_client") as mock_client:
             mock_client.return_value.chat.completions.create.return_value = iter(chunks_in)
             chunks = list(AnswerComposer().compose_stream(sr, AgentSession()))
-        assert chunks == ["ab"]
+        assert chunks == ["a", "b"]
 
     def test_build_messages_includes_payload_and_hint(self):
         from agent.composer import _build_messages
