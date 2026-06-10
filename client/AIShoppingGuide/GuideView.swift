@@ -881,7 +881,6 @@ struct GuideView: View {
         pendingQuestionAnchorID = nil
         isAutoFollowEnabled = true
         shouldShowJumpToLatest = false
-        bumpScrollAnchor()
     }
 
     private func streamDelay(for character: Character) -> UInt64 {
@@ -1444,6 +1443,7 @@ struct MessageRow: View {
                             Text(description)
                                 .font(.subheadline)
                                 .foregroundStyle(AppTheme.textSecondary)
+                                .lineLimit(2)
                                 .lineSpacing(4)
                                 .padding(.horizontal, 14)
                                 .padding(.vertical, 8)

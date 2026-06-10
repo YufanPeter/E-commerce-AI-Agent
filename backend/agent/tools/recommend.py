@@ -433,7 +433,7 @@ class RecommendTool:
         elif not hits:
             hint = "本次未命中任何商品，请坦诚告知用户并给出可能放宽的方向建议。"
         else:
-            hint = f"已为用户找到 {len(hits)} 款商品，请按推荐理由+对比维度的方式简明介绍。"
+            hint = f"已为用户找到 {len(hits)} 款商品，请为每款写一句约 30 字的总结，说清核心卖点并补上适用人群或场景，不要只写一个短语。"
 
         return ToolResult(
             tool_name=self.name,
@@ -519,8 +519,8 @@ class RecommendTool:
         else:
             hint = (
                 f"用户一次提了多个需求（{labels}），已分别检索。"
-                "请【按需求分组】依次介绍，每组先点出需求名再说推荐理由，"
-                "让用户清楚每类各挑了什么、为什么适合。"
+                "请【按需求分组】依次介绍，每组先点出需求名，"
+                "然后极简地指出每款商品的核心卖点（15字以内，绝不重复商品名或价格）。"
             )
 
         return ToolResult(
