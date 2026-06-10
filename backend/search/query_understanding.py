@@ -152,6 +152,10 @@ BRAND_ALIASES: dict[str, tuple[str, ...]] = {
     "The North Face":  ("The North Face", "北面"),
 }
 
+_EXTRA_BRAND_ALIASES: dict[str, tuple[str, ...]] = {
+    "Apple 苹果": ("Apple", "apple", "iphone", "iPhone"),
+}
+
 
 @lru_cache(maxsize=1)
 def load_taxonomy(db_path: Path = DEFAULT_DB_PATH) -> dict[str, object]:
@@ -214,10 +218,22 @@ def expand_brands(canonical_brands: list[str]) -> list[str]:
     """把 canonical 品牌列表展开成 Chroma 实际存的所有变体，喂给 $in / $nin。"""
     taxonomy = load_taxonomy()
     expand: dict[str, list[str]] = taxonomy["brand_expand"]  # type: ignore[assignment]
+    variant_to_canonical: dict[str, str] = {}
+    for canonical, variants in BRAND_ALIASES.items():
+        for variant in variants:
+            variant_to_canonical[variant] = canonical
+    for canonical, variants in _EXTRA_BRAND_ALIASES.items():
+        for variant in variants:
+            variant_to_canonical[variant] = canonical
     out: list[str] = []
     seen: set[str] = set()
-    for canonical in canonical_brands:
-        for variant in expand.get(canonical, [canonical]):
+    for raw in canonical_brands:
+        canonical = variant_to_canonical.get(raw, raw)
+        variants = list(expand.get(canonical, [canonical]))
+        for extra in BRAND_ALIASES.get(canonical, ()) + _EXTRA_BRAND_ALIASES.get(canonical, ()):
+            if extra not in variants:
+                variants.append(extra)
+        for variant in variants:
             if variant not in seen:
                 seen.add(variant)
                 out.append(variant)
@@ -269,7 +285,8 @@ def understand_query(query: str) -> ParsedQuery:
     if not normalized:
         return ParsedQuery(original_query=query, needs_clarification=True)
     try:
-        return _cached_understand(normalized)
+        parsed = _cached_understand(normalized)
+        return _merge_regex_brand_excludes(parsed, query)
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "LLM query understanding failed, degrade to vector-only recall: %r", exc
@@ -278,9 +295,11 @@ def understand_query(query: str) -> ParsedQuery:
         # 但【否定/反选】是用户的硬性诉求，不能因 LLM 挂了就完全失效——这里用
         # 确定性正则 + taxonomy 兜底抽取「不要X品类」，至少保住品类反选。
         sub_excl, cat_excl = _regex_extract_excludes(query)
+        brand_excl = _regex_extract_brand_excludes(query)
         return ParsedQuery(
             original_query=query,
             retrieval_query=normalized,
+            brand_exclude=brand_excl,
             sub_category_exclude=sub_excl,
             category_exclude=cat_excl,
             needs_clarification=False,
@@ -294,7 +313,7 @@ def clear_cache() -> None:
 
 
 # 否定意图触发词：用户表达"不要/不含/排除"时的常见说法。
-_NEGATION_CUES = ("不要", "不想要", "不想", "不含", "不带", "没有", "无", "除了", "排除", "拒绝", "讨厌")
+_NEGATION_CUES = ("不要", "不想要", "不想", "不含", "不带", "没有", "无", "非", "除了", "排除", "拒绝", "讨厌")
 
 # 品类同义词 → taxonomy 官方 sub_category（确定性兜底，覆盖全部一级类目的高频反选目标）。
 # LLM 挂掉时靠这张表保住品类反选；命中后走 where $nin 召回阶段排除。
@@ -429,6 +448,67 @@ def _regex_extract_excludes(query: str) -> tuple[list[str], list[str]]:
                 cat_excl.append(cat)
 
     return sub_excl, cat_excl
+
+
+def _regex_extract_brand_excludes(query: str) -> list[str]:
+    """确定性品牌反选兜底，覆盖「非华为非苹果」这类紧凑表达。"""
+    text = query or ""
+    if not any(cue in text for cue in _NEGATION_CUES):
+        return []
+
+    taxonomy = load_taxonomy()
+    brands = list(taxonomy.get("brands", []) or [])
+    for canonical, variants in BRAND_ALIASES.items():
+        if canonical not in brands:
+            brands.append(canonical)
+        for variant in variants:
+            if variant not in brands:
+                brands.append(variant)
+    for canonical, variants in _EXTRA_BRAND_ALIASES.items():
+        if canonical not in brands:
+            brands.append(canonical)
+        for variant in variants:
+            if variant not in brands:
+                brands.append(variant)
+
+    excludes: list[str] = []
+    for cue in _NEGATION_CUES:
+        start = 0
+        while True:
+            idx = text.find(cue, start)
+            if idx < 0:
+                break
+            window = text[idx + len(cue): idx + len(cue) + 18]
+            for brand in brands:
+                if brand and brand in window and brand not in excludes:
+                    excludes.append(brand)
+            start = idx + len(cue)
+    return excludes
+
+
+def _merge_regex_brand_excludes(parsed: ParsedQuery, query: str) -> ParsedQuery:
+    brand_excludes = list(parsed.brand_exclude or [])
+    for brand in _regex_extract_brand_excludes(query):
+        if brand not in brand_excludes:
+            brand_excludes.append(brand)
+    if brand_excludes == list(parsed.brand_exclude or []):
+        return parsed
+    return ParsedQuery(
+        original_query=parsed.original_query,
+        intent=parsed.intent,
+        category=parsed.category,
+        sub_category=parsed.sub_category,
+        category_exclude=parsed.category_exclude,
+        sub_category_exclude=parsed.sub_category_exclude,
+        max_price=parsed.max_price,
+        min_price=parsed.min_price,
+        brand_include=parsed.brand_include,
+        brand_exclude=brand_excludes,
+        negative_ingredients=parsed.negative_ingredients,
+        soft_terms=parsed.soft_terms,
+        retrieval_query=parsed.retrieval_query,
+        needs_clarification=parsed.needs_clarification,
+    )
 
 
 # ---------------------------------------------------------------------------

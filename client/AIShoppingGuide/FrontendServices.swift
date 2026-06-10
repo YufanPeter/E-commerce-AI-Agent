@@ -127,6 +127,12 @@ protocol UserProfileServicing {
     func fetchAddresses() async throws -> [AddressPayload]
 }
 
+protocol PreferenceServicing {
+    func fetchPreference(userID: String) async throws -> UserPreferencePayload
+    func updatePreference(_ preference: UserPreferencePayload) async throws -> UserPreferencePayload
+    func undoPreference(userID: String, undoToken: String) async throws -> UserPreferencePayload
+}
+
 protocol MediaUploadServicing {
     func createUploadTicket(
         intent: UploadIntent,
@@ -151,6 +157,7 @@ struct FrontendServiceContainer {
     let products: any ProductServicing
     let cart: any CartServicing
     let profile: any UserProfileServicing
+    let preference: any PreferenceServicing
     let mediaUpload: any MediaUploadServicing
     let analytics: any AnalyticsServicing
 
@@ -160,6 +167,7 @@ struct FrontendServiceContainer {
             products: MockProductService(),
             cart: MockCartService(),
             profile: MockUserProfileService(),
+            preference: MockPreferenceService(),
             mediaUpload: MockMediaUploadService(),
             analytics: MockAnalyticsService()
         )
@@ -513,6 +521,73 @@ private struct APIErrorEnvelope: Decodable {
     let detail: APIErrorPayload?
 }
 
+private struct PreferenceUndoResponse: Codable {
+    let preference: UserPreferencePayload
+}
+
+final class RESTPreferenceService: PreferenceServicing {
+    private let baseURL: URL
+    private let session: URLSession
+    private let decoder = JSONDecoder()
+    private let encoder = JSONEncoder()
+
+    init(baseURL: URL = BackendConfig.defaultBaseURL, session: URLSession = .shared) {
+        self.baseURL = baseURL
+        self.session = session
+    }
+
+    func fetchPreference(userID: String = UserIdentity.defaultUserID) async throws -> UserPreferencePayload {
+        let url = baseURL.appendingPathComponent("preferences/\(userID)")
+        let (data, response) = try await session.data(from: url)
+        try validate(response: response, data: data, fallback: "偏好服务请求失败。")
+        return try decoder.decode(UserPreferencePayload.self, from: data)
+    }
+
+    func updatePreference(_ preference: UserPreferencePayload) async throws -> UserPreferencePayload {
+        var request = URLRequest(url: baseURL.appendingPathComponent("preferences/\(preference.userID)"))
+        request.httpMethod = "PUT"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try encoder.encode(preference)
+        let (data, response) = try await session.data(for: request)
+        try validate(response: response, data: data, fallback: "偏好保存失败。")
+        return try decoder.decode(UserPreferencePayload.self, from: data)
+    }
+
+    func undoPreference(userID: String, undoToken: String) async throws -> UserPreferencePayload {
+        var request = URLRequest(url: baseURL.appendingPathComponent("preferences/\(userID)/undo"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try encoder.encode(PreferenceUndoRequest(undoToken: undoToken))
+        let (data, response) = try await session.data(for: request)
+        try validate(response: response, data: data, fallback: "撤销偏好失败。")
+        return try decoder.decode(PreferenceUndoResponse.self, from: data).preference
+    }
+
+    private func validate(response: URLResponse, data: Data, fallback: String) throws {
+        guard let http = response as? HTTPURLResponse else {
+            throw RESTServiceError.invalidResponse
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            let payload = decodePreferenceError(from: data)
+            throw RESTServiceError.requestFailed(
+                statusCode: http.statusCode,
+                code: payload?.code ?? "API_HTTP_\(http.statusCode)",
+                message: payload?.message ?? fallback
+            )
+        }
+    }
+
+    private func decodePreferenceError(from data: Data) -> APIErrorPayload? {
+        if let payload = try? decoder.decode(APIErrorPayload.self, from: data) {
+            return payload
+        }
+        if let envelope = try? decoder.decode(APIErrorEnvelope.self, from: data) {
+            return envelope.detail
+        }
+        return nil
+    }
+}
+
 /// 跨轮复用 session_id 的线程安全存储。
 private actor SessionIDStore {
     private var sessionID: String?
@@ -582,7 +657,7 @@ final class RESTAgentService: AgentServicing {
 
         let storedSession = await sessionStore.current()
         let resolvedSession = payload.sessionID ?? storedSession
-        var body: [String: Any] = ["query": payload.text]
+        var body: [String: Any] = ["query": payload.text, "user_id": payload.userID]
         if let resolvedSession { body["session_id"] = resolvedSession }
         if let image = payload.imageBase64 { body["image_base64"] = image }
         urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body)
@@ -680,6 +755,13 @@ final class RESTAgentService: AgentServicing {
                 continuation.yield(AgentStreamEventPayload(type: .textDelta, textDelta: piece))
             } else if !data.isEmpty {
                 continuation.yield(AgentStreamEventPayload(type: .textDelta, textDelta: data))
+            }
+
+        case "memory_update":
+            if let update = try? JSONDecoder().decode(MemoryUpdatePayload.self, from: bytes) {
+                continuation.yield(
+                    AgentStreamEventPayload(type: .memoryUpdate, memoryUpdate: update)
+                )
             }
 
         case "done":

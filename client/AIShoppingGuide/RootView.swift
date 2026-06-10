@@ -92,6 +92,7 @@ struct SegmentedTabControl: UIViewRepresentable {
 
 struct RootView: View {
     @StateObject private var healthMonitor = BackendHealthMonitor()
+    @StateObject private var preferenceStore = PreferenceStore()
     @State private var selectedTab: AppTab = .guide
     @State private var cartItems: [CartItem] = []
 
@@ -100,7 +101,7 @@ struct RootView: View {
             AppTheme.background.ignoresSafeArea()
 
             ZStack {
-                GuideView(cartItems: $cartItems)
+                GuideView(cartItems: $cartItems, preferenceStore: preferenceStore)
                     .opacity(selectedTab == .guide ? 1 : 0)
                     .allowsHitTesting(selectedTab == .guide)
                     .zIndex(selectedTab == .guide ? 1 : 0)
@@ -110,7 +111,7 @@ struct RootView: View {
                     .allowsHitTesting(selectedTab == .cart)
                     .zIndex(selectedTab == .cart ? 1 : 0)
 
-                PreferenceView()
+                PreferenceView(preferenceStore: preferenceStore)
                     .opacity(selectedTab == .preference ? 1 : 0)
                     .allowsHitTesting(selectedTab == .preference)
                     .zIndex(selectedTab == .preference ? 1 : 0)

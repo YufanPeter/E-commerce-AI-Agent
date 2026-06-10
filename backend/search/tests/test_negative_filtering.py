@@ -17,7 +17,10 @@ if str(BACKEND_DIR) not in sys.path:
 
 from search.query_understanding import (
     ParsedQuery,
+    _regex_extract_brand_excludes,
+    expand_brands,
     _regex_extract_excludes,
+    understand_query,
 )
 from search.where_builder import build_chroma_where
 from search.search_service import _normalize_negatives
@@ -47,6 +50,42 @@ def test_category_exclude_becomes_nin():
     )
     where = build_chroma_where(parsed)
     assert where == {"category": {"$nin": ["美妆护肤"]}}
+
+
+def test_brand_exclude_alias_expands_variants():
+    parsed = ParsedQuery(
+        original_query="非华为非苹果的手机",
+        brand_exclude=["华为", "苹果"],
+    )
+    where = build_chroma_where(parsed)
+    excluded = where["brand"]["$nin"]
+    assert "华为" in excluded
+    assert "Apple 苹果" in excluded
+    assert "苹果" in excluded
+
+
+def test_expand_brands_accepts_alias_variant():
+    expanded = expand_brands(["苹果", "Apple"])
+    assert "Apple 苹果" in expanded
+    assert "苹果" in expanded
+
+
+def test_regex_extracts_compact_brand_excludes():
+    excludes = _regex_extract_brand_excludes("非华为非苹果的优质数码好物")
+    assert "华为" in excludes
+    assert "苹果" in excludes
+
+
+def test_successful_llm_parse_still_merges_regex_brand_excludes(monkeypatch):
+    monkeypatch.setattr(
+        "search.query_understanding._cached_understand",
+        lambda query: ParsedQuery(original_query=query, retrieval_query=query),
+    )
+
+    parsed = understand_query("非华为非苹果的手机")
+
+    assert "华为" in parsed.brand_exclude
+    assert "苹果" in parsed.brand_exclude
 
 
 def test_multiple_sub_excludes():

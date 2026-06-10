@@ -9,6 +9,7 @@ from time import perf_counter
 from typing import Iterator
 from unittest.mock import patch
 
+import sqlite3
 import pytest
 from fastapi.testclient import TestClient
 
@@ -105,6 +106,45 @@ class TestChatBlocking:
         r2 = c.post("/chat", json={"query": "second", "session_id": sid})
         assert r2.json()["session_id"] == sid
 
+    def test_chat_loads_user_preference_into_session(self, client, tmp_path):
+        c, m = client
+        from store.user_memory_store import UserMemoryStore, UserPreference
+
+        db = tmp_path / "memory.sqlite3"
+        sqlite3.connect(db).close()
+        m._user_memory = UserMemoryStore(db_path=db)
+        m._user_memory.put_preference(UserPreference(user_id="u1", brand_exclude=["Apple"]))
+
+        class _CaptureAgent(_FakeAgent):
+            def handle_turn(self, query, session):
+                self.profile = session.user_profile
+                return super().handle_turn(query, session)
+
+        agent = _CaptureAgent()
+        m._agent = agent
+
+        r = c.post("/chat", json={"query": "推荐手机", "user_id": "u1"})
+
+        assert r.status_code == 200
+        assert agent.profile["brand_exclude"] == ["Apple"]
+
+    def test_chat_auto_writes_memory_update_trace(self, client, tmp_path):
+        c, m = client
+        from store.user_memory_store import UserMemoryStore
+
+        db = tmp_path / "memory.sqlite3"
+        sqlite3.connect(db).close()
+        m._user_memory = UserMemoryStore(db_path=db)
+        m._agent = _FakeAgent()
+
+        r = c.post("/chat", json={"query": "以后不要给我推荐苹果", "user_id": "u1"})
+
+        assert r.status_code == 200
+        assert m._user_memory.get_preference("u1").brand_exclude == ["Apple"]
+        updates = r.json()["trace"]["memory_updates"]
+        assert updates[0]["field"] == "brand_exclude"
+        assert updates[0]["undo_token"].startswith("undo_")
+
 
 class TestChatStream:
     def _parse_sse(self, raw: str) -> list[tuple[str, str]]:
@@ -188,6 +228,75 @@ class TestChatStream:
         assert "event: status" in second
         assert '"phase": "startup"' in second
         get_agent.assert_not_called()
+
+    def test_stream_emits_memory_update_before_done(self, client, tmp_path):
+        c, m = client
+        from store.user_memory_store import UserMemoryStore
+
+        db = tmp_path / "memory.sqlite3"
+        sqlite3.connect(db).close()
+        m._user_memory = UserMemoryStore(db_path=db)
+        m._agent = _FakeAgent()
+
+        with c.stream(
+            "POST",
+            "/chat/stream",
+            json={"query": "以后推荐轻一点的", "user_id": "u1"},
+        ) as r:
+            body = "".join(chunk for chunk in r.iter_text())
+
+        events = self._parse_sse(body)
+        types = [e for e, _ in events]
+        assert "memory_update" in types
+        assert types.index("memory_update") < types.index("done")
+        assert m._user_memory.get_preference("u1").preference_keywords == ["轻量"]
+
+
+class TestPreferences:
+    def test_preferences_round_trip_and_undo(self, client, tmp_path):
+        c, m = client
+        from store.user_memory_store import PreferenceUpdate, UserMemoryStore
+
+        db = tmp_path / "memory.sqlite3"
+        sqlite3.connect(db).close()
+        m._user_memory = UserMemoryStore(db_path=db)
+
+        r = c.get("/preferences/u1")
+        assert r.status_code == 200
+        assert r.json()["user_id"] == "u1"
+        assert r.json()["brand_exclude"] == []
+
+        r = c.put(
+            "/preferences/u1",
+            json={
+                "budget_min": 100,
+                "budget_max": 500,
+                "personalization_enabled": False,
+                "price_tier": "balanced",
+                "favorite_categories": ["数码电子"],
+                "brand_include": ["Nike"],
+                "brand_exclude": ["Apple"],
+                "preference_keywords": ["通勤"],
+                "style_tags": ["轻量"],
+                "category_specific": {},
+                "preference_note": "补充偏好",
+                "notes": "旧备注",
+            },
+        )
+        assert r.status_code == 200
+        assert r.json()["brand_exclude"] == ["Apple"]
+        assert r.json()["personalization_enabled"] is False
+        assert r.json()["preference_keywords"] == ["通勤"]
+        assert r.json()["preference_note"] == "补充偏好"
+
+        event = m._user_memory.apply_update(
+            "u1",
+            PreferenceUpdate(field="preference_keywords", value="送礼", message="已记住：偏好送礼"),
+        )
+        assert event is not None
+        undo = c.post("/preferences/u1/undo", json={"undo_token": event["undo_token"]})
+        assert undo.status_code == 200
+        assert undo.json()["preference"]["preference_keywords"] == ["通勤"]
 
 
 class TestCartReset:

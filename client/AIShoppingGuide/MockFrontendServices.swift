@@ -367,6 +367,27 @@ final class MockUserProfileService: UserProfileServicing {
     }
 }
 
+final class MockPreferenceService: PreferenceServicing {
+    private var preference = UserPreferencePayload.empty()
+
+    func fetchPreference(userID: String) async throws -> UserPreferencePayload {
+        if preference.userID == userID {
+            return preference
+        }
+        preference = UserPreferencePayload.empty(userID: userID)
+        return preference
+    }
+
+    func updatePreference(_ preference: UserPreferencePayload) async throws -> UserPreferencePayload {
+        self.preference = preference
+        return preference
+    }
+
+    func undoPreference(userID: String, undoToken: String) async throws -> UserPreferencePayload {
+        preference
+    }
+}
+
 final class MockMediaUploadService: MediaUploadServicing {
     func createUploadTicket(
         intent: UploadIntent,

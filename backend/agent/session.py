@@ -1,20 +1,21 @@
 from __future__ import annotations
 
-"""会话状态：对话历史 + 工作记忆。
+"""会话状态：长期 Preference 挂载 + session history + working memory。
 
-三层记忆的最小实现（Phase 1 只做短期 + 工作记忆，长期记忆留到 Phase 5）：
+V1 记忆分层：
+
+    Preference Core Memory
+        - 每个 user_id 一份，跨 session 留存
+        - 由 API 层加载后挂到 user_profile，本类不负责持久化长期偏好
 
     工作记忆 (working_memory)
         - 当前 turn 内 tool/composer 都能读写的临时字典
         - 典型字段：last_parsed_query（RefineTool 用）、last_hits
-        - 不持久化，每个 turn 开始时由 orchestrator 重置 turn 级字段
 
-    短期记忆 (history)
+    Session 记忆 (history + session_summary)
         - 当前 session 的对话原文，滑动窗口截断
         - 让 router 知道"再便宜点"指什么、"对比第一个和第二个"指哪些商品
-
-    长期记忆（未实现）
-        - 跨 session 的用户偏好，存 SQLite，Phase 5 接入
+        - 超出窗口的旧消息压成轻量 session_summary，只服务当前 session
 
 注意：Phase 1 不做并发安全；FastAPI 单 worker / 每 session 串行调用足够。
 """
@@ -57,6 +58,8 @@ class WorkingMemory(TypedDict, total=False):
 
     last_parsed_query: dict[str, Any]
     last_hits: list[HitRef]
+    session_summary: str
+    summary_updated_at_turn: int
 
 
 # 历史滑窗大小：保留最近 N 条 user/assistant 消息。
@@ -77,6 +80,8 @@ class AgentSession:
     """单个用户会话。"""
 
     session_id: str = field(default_factory=lambda: uuid4().hex)
+    user_id: str | None = None
+    user_profile: dict[str, Any] = field(default_factory=dict)
     history: list[Message] = field(default_factory=list)
     # 工作记忆：跨 turn 累积的轻量上下文。键名见各 tool 文档。
     # 典型键：last_parsed_query / last_hits / pinned_filters
@@ -93,17 +98,38 @@ class AgentSession:
         self.history.append(msg)
         # 滑窗只在 user/assistant 上生效，system 消息不在这里维护。
         if len(self.history) > self.history_window:
-            # 一次截掉一条，保持窗口大小；不做摘要（Phase 2 再加）。
+            overflow = self.history[: len(self.history) - self.history_window]
+            self._update_session_summary(overflow)
             self.history = self.history[-self.history_window:]
 
     def recent_text(self, n: int = 4) -> str:
         """取最近 n 轮文本，给 router / composer 当上下文用。"""
         recent = self.history[-n:]
         lines = []
+        summary = self.working_memory.get("session_summary")
+        if summary:
+            lines.append(f"会话摘要: {summary}")
         for m in recent:
             prefix = "用户" if m.role == "user" else "助手"
             lines.append(f"{prefix}: {m.content}")
         return "\n".join(lines)
+
+    def _update_session_summary(self, overflow: list[Message]) -> None:
+        if not overflow:
+            return
+        existing = str(self.working_memory.get("session_summary") or "").strip()
+        snippets = []
+        for msg in overflow:
+            prefix = "用户" if msg.role == "user" else "助手"
+            content = " ".join((msg.content or "").split())
+            if content:
+                snippets.append(f"{prefix}:{content[:80]}")
+        combined = "；".join([s for s in [existing, *snippets] if s])
+        # 轻量确定性摘要：不调用 LLM，避免 session 持久化路径引入额外失败点。
+        self.working_memory["session_summary"] = combined[-500:]
+        self.working_memory["summary_updated_at_turn"] = (
+            int(self.working_memory.get("summary_updated_at_turn") or 0) + len(overflow)
+        )
 
     def set(self, key: str, value: Any) -> None:
         self.working_memory[key] = value

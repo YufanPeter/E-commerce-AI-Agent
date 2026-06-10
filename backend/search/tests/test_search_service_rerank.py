@@ -29,6 +29,22 @@ def _chunk(pid: str, distance: float) -> RetrievedChunk:
     )
 
 
+def _brand_chunk(pid: str, brand: str, distance: float = 0.2) -> RetrievedChunk:
+    return RetrievedChunk(
+        chunk_id=f"{pid}-chunk",
+        document=f"{brand} document",
+        metadata={
+            "product_id": pid,
+            "title": f"{brand} 商品",
+            "brand": brand,
+            "category": "数码电子",
+            "sub_category": "智能手机",
+            "base_price": 100,
+        },
+        distance=distance,
+    )
+
+
 class _FakeRetriever:
     def search(self, query: str, top_k: int = 10, where=None):
         return [_chunk("a", 0.4), _chunk("b", 0.2)]
@@ -214,3 +230,26 @@ def test_synonym_negative_normalized_then_excludes(monkeypatch):
     assert "rb" not in pids
     assert "tea" in pids
 
+
+def test_brand_exclude_postfilter_blocks_leaked_candidates(monkeypatch):
+    """即使 retriever 忽略 where 漏回 Apple/华为，最终商品结果也不能含被排除品牌。"""
+    chunks = [
+        _brand_chunk("iphone", "Apple 苹果", 0.1),
+        _brand_chunk("huawei", "华为", 0.2),
+        _brand_chunk("vivo", "vivo", 0.3),
+    ]
+    parsed = ParsedQuery(
+        original_query="非华为非苹果的手机",
+        retrieval_query="手机",
+        brand_exclude=["华为", "苹果"],
+    )
+    monkeypatch.setattr("search.search_service.understand_query", lambda query: parsed)
+
+    result = SearchService(
+        retriever=_MultiChunkRetriever(chunks),
+        reranker=None,
+        use_rerank=False,
+    ).search("非华为非苹果的手机", top_k_products=5)
+
+    brands = [hit.brand for hit in result.hits]
+    assert brands == ["vivo"]
