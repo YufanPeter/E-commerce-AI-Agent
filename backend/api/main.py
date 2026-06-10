@@ -29,9 +29,11 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
+from agent.memory_extractor import extract_preference_updates
 from api import products as products_router
 from store.cart_store import CartStore
 from store.session_store import SqliteSessionStore
+from store.user_memory_store import UserMemoryStore, UserPreference
 
 
 logger = logging.getLogger(__name__)
@@ -44,6 +46,7 @@ logger = logging.getLogger(__name__)
 class ChatRequest(BaseModel):
     query: str = Field(..., description="用户输入的自然语言 query")
     session_id: str | None = Field(None, description="会话 id；不传则服务端新建")
+    user_id: str | None = Field(None, description="用户 id；用于加载跨会话 Preference 核心记忆")
     image_base64: str | None = Field(
         None,
         description="拍照找货：图片的 base64（可带 data:image/...;base64, 前缀，也可纯 base64）",
@@ -81,6 +84,25 @@ class CartMutationRequest(BaseModel):
     selectedCartItemIDs: list[str] = Field(default_factory=list)
 
 
+class PreferenceRequest(BaseModel):
+    personalization_enabled: bool = True
+    budget_min: float | None = None
+    budget_max: float | None = None
+    price_tier: str | None = None
+    favorite_categories: list[str] = Field(default_factory=list)
+    brand_include: list[str] = Field(default_factory=list)
+    brand_exclude: list[str] = Field(default_factory=list)
+    preference_keywords: list[str] = Field(default_factory=list)
+    style_tags: list[str] = Field(default_factory=list)
+    category_specific: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    preference_note: str | None = None
+    notes: str | None = None
+
+
+class PreferenceUndoRequest(BaseModel):
+    undo_token: str = Field(..., description="memory_update 事件返回的撤销 token")
+
+
 # ---------------------------------------------------------------------------
 # 应用 & 会话管理
 # ---------------------------------------------------------------------------
@@ -106,6 +128,7 @@ async def http_exception_handler(_request: Request, exc: HTTPException) -> JSONR
 
 
 _sessions = SqliteSessionStore()
+_user_memory = UserMemoryStore()
 _agent: Any | None = None  # 懒加载，避免 import 时就触发 SearchService/OpenAI 初始化
 _agent_lock = threading.Lock()
 _warmup_status: dict[str, str] = {
@@ -125,6 +148,33 @@ def _get_agent() -> Any:
 
             _agent = Agent()
     return _agent
+
+
+def _attach_user_memory(session: Any, user_id: str | None) -> None:
+    """Attach long-lived user preference to this request-scoped session object."""
+    if not user_id:
+        session.user_id = None
+        session.user_profile = {}
+        return
+    clean_user_id = user_id.strip()
+    preference = _user_memory.get_preference(clean_user_id)
+    session.user_id = clean_user_id
+    session.user_profile = preference.to_dict()
+
+
+def _apply_realtime_preference_updates(query: str, session: Any) -> list[dict[str, Any]]:
+    user_id = getattr(session, "user_id", None)
+    if not user_id:
+        return []
+    updates = extract_preference_updates(query, user_id, getattr(session, "session_id", None))
+    events: list[dict[str, Any]] = []
+    for update in updates:
+        event = _user_memory.apply_update(user_id, update)
+        if event is not None:
+            events.append(event)
+    if events:
+        session.user_profile = _user_memory.get_preference(user_id).to_dict()
+    return events
 
 
 @app.on_event("startup")
@@ -180,12 +230,47 @@ def warmup_status() -> dict[str, str]:
     return dict(_warmup_status)
 
 
+@app.get("/preferences/{user_id}")
+def get_preferences(user_id: str) -> dict[str, Any]:
+    """Read cross-session core preference memory for a user."""
+    if not user_id.strip():
+        raise HTTPException(status_code=400, detail="user_id 不能为空")
+    return _user_memory.get_preference(user_id.strip()).to_dict()
+
+
+@app.put("/preferences/{user_id}")
+def put_preferences(user_id: str, req: PreferenceRequest) -> dict[str, Any]:
+    """Replace cross-session core preference memory for a user."""
+    clean_user_id = user_id.strip()
+    if not clean_user_id:
+        raise HTTPException(status_code=400, detail="user_id 不能为空")
+    data = req.model_dump() if hasattr(req, "model_dump") else req.dict()
+    preference = UserPreference.from_dict(clean_user_id, data)
+    return _user_memory.put_preference(preference).to_dict()
+
+
+@app.post("/preferences/{user_id}/undo")
+def undo_preference(user_id: str, req: PreferenceUndoRequest) -> dict[str, Any]:
+    """Undo a recent automatic preference write."""
+    clean_user_id = user_id.strip()
+    if not clean_user_id:
+        raise HTTPException(status_code=400, detail="user_id 不能为空")
+    result = _user_memory.undo_update(clean_user_id, req.undo_token.strip())
+    if result is None:
+        raise HTTPException(status_code=404, detail="撤销 token 不存在或已使用")
+    return result
+
+
 @app.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest) -> ChatResponse:
     if not req.query or not req.query.strip():
         raise HTTPException(status_code=400, detail="query 不能为空")
     session = _sessions.get_or_create(req.session_id)
+    _attach_user_memory(session, req.user_id)
     resp = _get_agent().handle_turn(req.query, session)
+    memory_updates = _apply_realtime_preference_updates(req.query, session)
+    if memory_updates:
+        resp.trace["memory_updates"] = memory_updates
     _sessions.save(session)  # 持久化本轮对话，重启后可接上下文
     return ChatResponse(
         session_id=session.session_id,
@@ -230,6 +315,7 @@ def chat_stream(req: ChatRequest) -> StreamingResponse:
     客户端用 `EventSource` 或 `requests.get(stream=True)` 消费。
     """
     session = _sessions.get_or_create(req.session_id)
+    _attach_user_memory(session, req.user_id)
     agent = _get_agent()
     image = _resolve_image(req)
 
@@ -249,6 +335,10 @@ def chat_stream(req: ChatRequest) -> StreamingResponse:
             else:
                 stream = agent.handle_turn_stream(req.query, session)
             for ev in stream:
+                # done 之前抽取本轮偏好更新并推送 memory_update（前端横幅依赖）
+                if ev["type"] == "done":
+                    for memory_event in _apply_realtime_preference_updates(req.query, session):
+                        yield _format_sse("memory_update", memory_event)
                 yield _format_sse(ev["type"], ev["data"])
         except Exception as exc:  # noqa: BLE001 - 流式中任何异常都要给前端
             logger.exception("Stream pipeline crashed")

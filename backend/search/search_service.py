@@ -33,7 +33,7 @@ from typing import Any
 
 from rag.retriever import ChromaRetriever, RetrievedChunk
 from rag.reranker import ApiReranker, RerankedChunk, get_reranker
-from search.query_understanding import ParsedQuery, understand_query
+from search.query_understanding import ParsedQuery, expand_brands, understand_query
 from search.where_builder import build_chroma_where
 
 def _env_use_rerank() -> bool:
@@ -126,6 +126,7 @@ class SearchService:
         top_k_chunks: int = 50,
         top_k_products: int = 10,
         base: ParsedQuery | None = None,
+        user_profile: dict[str, Any] | None = None,
     ) -> SearchResult:
         """端到端入口。
 
@@ -143,6 +144,8 @@ class SearchService:
         # "需澄清"，也已经有足够上下文，merge_base 会把 needs_clarification 置 False。
         if base is not None:
             parsed = parsed.merge_base(base)
+
+        parsed = _apply_user_profile(parsed, user_profile)
 
         if parsed.needs_clarification:
             return SearchResult(parsed=parsed, hits=[], raw_chunk_count=0, filtered_chunk_count=0)
@@ -170,11 +173,18 @@ class SearchService:
         negatives = _normalize_negatives(parsed.negative_ingredients)
         excluded_subs = set(parsed.sub_category_exclude or [])
         excluded_cats = set(parsed.category_exclude or [])
-        if negatives or excluded_subs or excluded_cats:
+        excluded_brands = _expanded_brand_set(parsed.brand_exclude)
+        if negatives or excluded_subs or excluded_cats or excluded_brands:
             banned_products = {
                 c.product_id
                 for c in chunks
-                if c.product_id and _chunk_is_banned(c, negatives, excluded_subs, excluded_cats)
+                if c.product_id and _chunk_is_banned(
+                    c,
+                    negatives,
+                    excluded_subs,
+                    excluded_cats,
+                    excluded_brands,
+                )
             }
             if banned_products:
                 chunks = [c for c in chunks if c.product_id not in banned_products]
@@ -205,6 +215,82 @@ class SearchService:
 
 def _contains_any(text: str, needles: list[str]) -> bool:
     return any(needle and needle in text for needle in needles)
+
+
+def _apply_user_profile(
+    parsed: ParsedQuery,
+    user_profile: dict[str, Any] | None,
+) -> ParsedQuery:
+    """Merge long-lived Preference into ParsedQuery without overriding this turn."""
+    if not user_profile:
+        return parsed
+    if user_profile.get("personalization_enabled") is False:
+        return parsed
+
+    brand_include = list(parsed.brand_include or [])
+    brand_exclude = list(parsed.brand_exclude or [])
+    profile_exclude = [
+        b for b in (user_profile.get("brand_exclude") or [])
+        if isinstance(b, str) and not _brand_conflicts_with_include(b, brand_include)
+    ]
+    for brand in profile_exclude:
+        if brand not in brand_exclude:
+            brand_exclude.append(brand)
+
+    soft_terms = list(parsed.soft_terms or [])
+    preference_terms = list(user_profile.get("preference_keywords") or [])
+    preference_terms.extend(user_profile.get("style_tags") or [])
+    for term in preference_terms:
+        if isinstance(term, str) and term and term not in soft_terms:
+            soft_terms.append(term)
+
+    category = parsed.category
+    favorites = [c for c in (user_profile.get("favorite_categories") or []) if isinstance(c, str)]
+    if category is None and not parsed.sub_category and len(favorites) == 1:
+        category = favorites[0]
+
+    min_price = parsed.min_price
+    max_price = parsed.max_price
+    if min_price is None and user_profile.get("budget_min") is not None:
+        min_price = _coerce_float(user_profile.get("budget_min"))
+    if max_price is None and user_profile.get("budget_max") is not None:
+        max_price = _coerce_float(user_profile.get("budget_max"))
+
+    retrieval_terms = [parsed.retrieval_query or parsed.original_query]
+    retrieval_terms.extend(term for term in soft_terms if term not in retrieval_terms)
+
+    return ParsedQuery(
+        original_query=parsed.original_query,
+        intent=parsed.intent,
+        category=category,
+        sub_category=parsed.sub_category,
+        category_exclude=parsed.category_exclude,
+        sub_category_exclude=parsed.sub_category_exclude,
+        max_price=max_price,
+        min_price=min_price,
+        brand_include=brand_include,
+        brand_exclude=brand_exclude,
+        negative_ingredients=parsed.negative_ingredients,
+        soft_terms=soft_terms,
+        retrieval_query=" ".join(t for t in retrieval_terms if t),
+        needs_clarification=parsed.needs_clarification,
+    )
+
+
+def _coerce_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _brand_conflicts_with_include(brand: str, includes: list[str]) -> bool:
+    left = brand.lower().replace(" ", "")
+    for include in includes:
+        right = include.lower().replace(" ", "")
+        if left and right and (left in right or right in left):
+            return True
+    return False
 
 
 # 否定词归一别名表：把用户/LLM 的同义说法收敛到「商品文本里会真实出现的字面词」。
@@ -245,6 +331,7 @@ def _chunk_is_banned(
     negatives: list[str],
     excluded_subs: set[str],
     excluded_cats: set[str],
+    excluded_brands: set[str],
 ) -> bool:
     """该 chunk 所属商品是否应被剔除。
 
@@ -256,6 +343,9 @@ def _chunk_is_banned(
     meta = chunk.metadata
     sub = str(meta.get("sub_category", ""))
     cat = str(meta.get("category", ""))
+    brand = str(meta.get("brand", ""))
+    if brand and _normalize_brand_key(brand) in excluded_brands:
+        return True
     if sub and sub in excluded_subs:
         return True
     if cat and cat in excluded_cats:
@@ -271,6 +361,16 @@ def _chunk_is_banned(
         ]
     )
     return _contains_any(haystack, negatives)
+
+
+def _expanded_brand_set(brands: list[str]) -> set[str]:
+    if not brands:
+        return set()
+    return {_normalize_brand_key(brand) for brand in expand_brands(brands)}
+
+
+def _normalize_brand_key(brand: str) -> str:
+    return (brand or "").strip().lower().replace(" ", "")
 
 
 def _aggregate_by_distance(chunks: list[RetrievedChunk]) -> list[ProductHit]:

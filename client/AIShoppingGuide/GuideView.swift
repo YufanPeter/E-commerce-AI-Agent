@@ -28,6 +28,7 @@ struct ComparisonContext: Identifiable, Hashable {
 
 struct GuideView: View {
     @Binding var cartItems: [CartItem]
+    @ObservedObject var preferenceStore: PreferenceStore
     @StateObject private var store = ConversationStore()
     @State private var messages: [ChatMessage] = []
     @State private var inputText = ""
@@ -59,6 +60,7 @@ struct GuideView: View {
     @State private var chatListIdentity = UUID()
     /// 待发送的图片草稿：选/拍图后先挂在输入区，待用户配上文字一起发送；nil 表示无附件。
     @State private var pendingImageData: Data?
+    @State private var pendingMemoryUpdate: MemoryUpdatePayload?
     @StateObject private var speechInput = SpeechInputController()
     @FocusState private var isInputFocused: Bool
 
@@ -106,6 +108,14 @@ struct GuideView: View {
                     )
                     .padding(.bottom, composerBottomPadding)
                     .zIndex(1)
+
+                if let pendingMemoryUpdate {
+                    memoryUpdateBanner(pendingMemoryUpdate)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, composerBottomPadding + composerHeight + 10)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .zIndex(2)
+                }
             }
             .background(AppTheme.background)
             .onPreferenceChange(ComposerHeightPreferenceKey.self) { height in
@@ -168,6 +178,29 @@ struct GuideView: View {
                 }
             }
         }
+    }
+
+    private func memoryUpdateBanner(_ update: MemoryUpdatePayload) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(AppTheme.primary)
+            Text(update.message)
+                .font(.footnote.weight(.medium))
+                .lineLimit(2)
+            Spacer()
+            Button("撤销") {
+                Task { @MainActor in
+                    await preferenceStore.undo(update)
+                    pendingMemoryUpdate = nil
+                }
+            }
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(AppTheme.primary)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(AppTheme.border, lineWidth: 1))
     }
 
     private var header: some View {
@@ -720,6 +753,14 @@ struct GuideView: View {
                     case .cartSnapshot:
                         if let snapshot = event.cartSnapshot {
                             syncCartItems(from: snapshot)
+                        }
+
+                    case .memoryUpdate:
+                        if let update = event.memoryUpdate {
+                            preferenceStore.applyMemoryUpdate(update)
+                            withAnimation(.easeOut(duration: 0.18)) {
+                                pendingMemoryUpdate = update
+                            }
                         }
 
                     case .textDelta:

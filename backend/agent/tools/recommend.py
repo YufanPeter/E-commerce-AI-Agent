@@ -135,6 +135,22 @@ class RecommendTool:
             self._products = ProductStore()
         return self._products
 
+    @staticmethod
+    def _search(
+        service: SearchService,
+        query: str,
+        session: AgentSession,
+        **kwargs: Any,
+    ) -> SearchResult:
+        profile = session.user_profile or None
+        if profile:
+            try:
+                return service.search(query, user_profile=profile, **kwargs)
+            except TypeError:
+                # Some tests inject tiny stubs that predate user_profile.
+                pass
+        return service.search(query, **kwargs)
+
     def _attach_price_displays(self, cards: list[dict[str, Any]]) -> None:
         """给商品卡补上预格式化的价格展示「price_display」（多规格→¥X 起）。
 
@@ -216,7 +232,12 @@ class RecommendTool:
         视觉索引缺失或编码失败时，自动退化为纯文本顺序（不报错）。
         """
         pool = max(top_k, _VISUAL_POOL_SIZE)
-        result = self._get_service().search(query, top_k_products=pool)
+        result = self._search(
+            self._get_service(),
+            query,
+            session,
+            top_k_products=pool,
+        )
 
         hits = self._visual_rerank(result.hits, image, top_k)
 
@@ -306,7 +327,13 @@ class RecommendTool:
     ) -> ToolResult:
         """运行 complement / pivot 检索：只搜目标，不让旧品类污染召回。"""
         pool_k = max(top_k * _DIVERSITY_POOL_MULTIPLIER, 20)
-        result = self._get_service().search(plan.target_query, top_k_products=pool_k, base=None)
+        result = self._search(
+            self._get_service(),
+            plan.target_query,
+            session,
+            top_k_products=pool_k,
+            base=None,
+        )
 
         hits: list[ProductHit] = []
         for h in result.hits:
@@ -382,7 +409,13 @@ class RecommendTool:
         # refine（base 非空）是聚焦的承接式追问，保持原样不打散。
         want_diversity = base is None
         pool_k = top_k * _DIVERSITY_POOL_MULTIPLIER if want_diversity else top_k
-        result = self._get_service().search(query, top_k_products=pool_k, base=base)
+        result = self._search(
+            self._get_service(),
+            query,
+            session,
+            top_k_products=pool_k,
+            base=base,
+        )
 
         # 仅当用户没点名品牌时才做多样性筛选；点名了（brand_include 非空）就尊重其意图。
         if want_diversity and not getattr(result.parsed, "brand_include", None):
@@ -462,7 +495,12 @@ class RecommendTool:
         first_parsed: dict[str, Any] | None = None
 
         for sub in subs:
-            result: SearchResult = service.search(sub.query, top_k_products=PER_GROUP_TOP_K)
+            result: SearchResult = self._search(
+                service,
+                sub.query,
+                session,
+                top_k_products=PER_GROUP_TOP_K,
+            )
             if first_parsed is None:
                 first_parsed = result.parsed.to_dict()
 

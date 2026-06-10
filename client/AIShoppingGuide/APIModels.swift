@@ -200,6 +200,7 @@ enum AgentRequestMode: String, Codable, Hashable {
 
 struct AgentRequestPayload: Codable, Hashable {
     let sessionID: String?
+    let userID: String
     let clientMessageID: String
     let text: String
     let attachments: [AttachmentPayload]
@@ -213,6 +214,7 @@ struct AgentRequestPayload: Codable, Hashable {
 
     init(
         sessionID: String? = nil,
+        userID: String = UserIdentity.defaultUserID,
         clientMessageID: String = UUID().uuidString,
         text: String,
         attachments: [AttachmentPayload] = [],
@@ -224,6 +226,7 @@ struct AgentRequestPayload: Codable, Hashable {
         imageBase64: String? = nil
     ) {
         self.sessionID = sessionID
+        self.userID = userID
         self.clientMessageID = clientMessageID
         self.text = text
         self.attachments = attachments
@@ -278,8 +281,27 @@ enum AgentStreamEventType: String, Codable, Hashable {
     case specSelection
     case toolAction
     case cartSnapshot
+    case memoryUpdate
     case error
     case done
+}
+
+struct MemoryUpdatePayload: Codable, Hashable {
+    let message: String
+    let field: String
+    let value: StringValue
+    let source: String
+    let undoToken: String
+    let preference: UserPreferencePayload?
+
+    enum CodingKeys: String, CodingKey {
+        case message
+        case field
+        case value
+        case source
+        case undoToken = "undo_token"
+        case preference
+    }
 }
 
 struct AgentStreamEventPayload: Identifiable, Codable, Hashable {
@@ -293,6 +315,7 @@ struct AgentStreamEventPayload: Identifiable, Codable, Hashable {
     let specSelection: SpecSelection?
     let toolAction: AgentToolActionPayload?
     let cartSnapshot: CartSnapshotPayload?
+    let memoryUpdate: MemoryUpdatePayload?
     let error: APIErrorPayload?
     let traceID: String?
 
@@ -307,6 +330,7 @@ struct AgentStreamEventPayload: Identifiable, Codable, Hashable {
         specSelection: SpecSelection? = nil,
         toolAction: AgentToolActionPayload? = nil,
         cartSnapshot: CartSnapshotPayload? = nil,
+        memoryUpdate: MemoryUpdatePayload? = nil,
         error: APIErrorPayload? = nil,
         traceID: String? = nil
     ) {
@@ -320,8 +344,177 @@ struct AgentStreamEventPayload: Identifiable, Codable, Hashable {
         self.specSelection = specSelection
         self.toolAction = toolAction
         self.cartSnapshot = cartSnapshot
+        self.memoryUpdate = memoryUpdate
         self.error = error
         self.traceID = traceID
+    }
+}
+
+enum UserIdentity {
+    static let defaultUserID = "local-user"
+}
+
+enum StringValue: Codable, Hashable {
+    case string(String)
+    case number(Double)
+    case object([String: Double])
+    case array([String])
+    case null
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if container.decodeNil() {
+            self = .null
+        } else if let value = try? container.decode(String.self) {
+            self = .string(value)
+        } else if let value = try? container.decode(Double.self) {
+            self = .number(value)
+        } else if let value = try? container.decode([String].self) {
+            self = .array(value)
+        } else if let value = try? container.decode([String: Double].self) {
+            self = .object(value)
+        } else {
+            self = .null
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case let .string(value):
+            try container.encode(value)
+        case let .number(value):
+            try container.encode(value)
+        case let .object(value):
+            try container.encode(value)
+        case let .array(value):
+            try container.encode(value)
+        case .null:
+            try container.encodeNil()
+        }
+    }
+
+    var displayText: String {
+        switch self {
+        case let .string(value): return value
+        case let .number(value): return "\(Int(value))"
+        case let .array(value): return value.joined(separator: "、")
+        case let .object(value):
+            if let min = value["budget_min"], let max = value["budget_max"] {
+                return "¥\(Int(min))-¥\(Int(max))"
+            }
+            return ""
+        case .null: return ""
+        }
+    }
+}
+
+struct UserPreferencePayload: Codable, Hashable {
+    let userID: String
+    var personalizationEnabled: Bool
+    var budgetMin: Double?
+    var budgetMax: Double?
+    var priceTier: String?
+    var favoriteCategories: [String]
+    var brandInclude: [String]
+    var brandExclude: [String]
+    var preferenceKeywords: [String]
+    var styleTags: [String]
+    var categorySpecific: [String: [String: StringValue]]
+    var preferenceNote: String?
+    var notes: String?
+
+    enum CodingKeys: String, CodingKey {
+        case userID = "user_id"
+        case personalizationEnabled = "personalization_enabled"
+        case budgetMin = "budget_min"
+        case budgetMax = "budget_max"
+        case priceTier = "price_tier"
+        case favoriteCategories = "favorite_categories"
+        case brandInclude = "brand_include"
+        case brandExclude = "brand_exclude"
+        case preferenceKeywords = "preference_keywords"
+        case styleTags = "style_tags"
+        case categorySpecific = "category_specific"
+        case preferenceNote = "preference_note"
+        case notes
+    }
+
+    init(
+        userID: String,
+        personalizationEnabled: Bool,
+        budgetMin: Double?,
+        budgetMax: Double?,
+        priceTier: String?,
+        favoriteCategories: [String],
+        brandInclude: [String],
+        brandExclude: [String],
+        preferenceKeywords: [String],
+        styleTags: [String],
+        categorySpecific: [String: [String: StringValue]],
+        preferenceNote: String?,
+        notes: String?
+    ) {
+        self.userID = userID
+        self.personalizationEnabled = personalizationEnabled
+        self.budgetMin = budgetMin
+        self.budgetMax = budgetMax
+        self.priceTier = priceTier
+        self.favoriteCategories = favoriteCategories
+        self.brandInclude = brandInclude
+        self.brandExclude = brandExclude
+        self.preferenceKeywords = preferenceKeywords
+        self.styleTags = styleTags
+        self.categorySpecific = categorySpecific
+        self.preferenceNote = preferenceNote
+        self.notes = notes
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let styleTags = try container.decodeIfPresent([String].self, forKey: .styleTags) ?? []
+        let keywords = try container.decodeIfPresent([String].self, forKey: .preferenceKeywords) ?? styleTags
+        self.init(
+            userID: try container.decode(String.self, forKey: .userID),
+            personalizationEnabled: try container.decodeIfPresent(Bool.self, forKey: .personalizationEnabled) ?? true,
+            budgetMin: try container.decodeIfPresent(Double.self, forKey: .budgetMin),
+            budgetMax: try container.decodeIfPresent(Double.self, forKey: .budgetMax),
+            priceTier: try container.decodeIfPresent(String.self, forKey: .priceTier),
+            favoriteCategories: try container.decodeIfPresent([String].self, forKey: .favoriteCategories) ?? [],
+            brandInclude: try container.decodeIfPresent([String].self, forKey: .brandInclude) ?? [],
+            brandExclude: try container.decodeIfPresent([String].self, forKey: .brandExclude) ?? [],
+            preferenceKeywords: keywords,
+            styleTags: styleTags,
+            categorySpecific: try container.decodeIfPresent([String: [String: StringValue]].self, forKey: .categorySpecific) ?? [:],
+            preferenceNote: try container.decodeIfPresent(String.self, forKey: .preferenceNote),
+            notes: try container.decodeIfPresent(String.self, forKey: .notes)
+        )
+    }
+
+    static func empty(userID: String = UserIdentity.defaultUserID) -> UserPreferencePayload {
+        UserPreferencePayload(
+            userID: userID,
+            personalizationEnabled: true,
+            budgetMin: nil,
+            budgetMax: nil,
+            priceTier: "balanced",
+            favoriteCategories: [],
+            brandInclude: [],
+            brandExclude: [],
+            preferenceKeywords: [],
+            styleTags: [],
+            categorySpecific: [:],
+            preferenceNote: nil,
+            notes: nil
+        )
+    }
+}
+
+struct PreferenceUndoRequest: Codable, Hashable {
+    let undoToken: String
+
+    enum CodingKeys: String, CodingKey {
+        case undoToken = "undo_token"
     }
 }
 
