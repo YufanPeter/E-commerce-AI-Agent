@@ -197,3 +197,7 @@ client/AIShoppingGuide/
   python -m store.import_image_manifest
   python -m rag.build_chroma --reset
   ```
+
+- **设计文档**：详见 [docs/系统设计文档.md](docs/系统设计文档.md)，涵盖系统架构、Agent 编排、多模态 RAG 检索、数据存储、API 接口与客户端设计。
+
+更多后端数据层细节见 [backend/README.md](backend/README.md)，客户端细节见 [client/README.md](client/README.md)。
