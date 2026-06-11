@@ -55,7 +55,7 @@
          <EnvironmentVariable
             key = "BACKEND_BASE_URL"
             value = "http://118.196.64.197:8000"
-            isEnabled = "NO">
+            isEnabled = "YES">
          </EnvironmentVariable>
       </EnvironmentVariables>
    </LaunchAction>
