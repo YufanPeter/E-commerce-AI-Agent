@@ -108,6 +108,34 @@ open client/AIShoppingGuide.xcodeproj
 
 在 Xcode 中选择一个 iOS 模拟器点击 ▶︎ Run。模拟器与 Mac 共享 localhost，默认连接 `http://127.0.0.1:8000`，无需额外配置。
 
+#### 连接火山云服务器
+
+如果要让 iOS 端连接火山云后端，在 Xcode 打开 `Product` → `Scheme` → `Edit Scheme...` → `Run` → `Arguments` → `Environment Variables`，新增并勾选：
+
+```text
+BACKEND_BASE_URL=http://118.196.64.197:8000
+```
+
+这个配置会写入共享 Scheme 文件：
+
+```text
+client/AIShoppingGuide.xcodeproj/xcshareddata/xcschemes/AIShoppingGuide.xcscheme
+```
+
+也可以直接修改该文件，在 `LaunchAction` 下加入：
+
+```xml
+<EnvironmentVariables>
+   <EnvironmentVariable
+      key = "BACKEND_BASE_URL"
+      value = "http://118.196.64.197:8000"
+      isEnabled = "YES">
+   </EnvironmentVariable>
+</EnvironmentVariables>
+```
+
+改完后停止旧的 App 进程并重新 Run，新的环境变量才会生效。
+
 进入「导购」页输入例如「不要含酒精的防晒」，看到流式回复和商品卡片即说明前后端联调成功。
 
 ---
