@@ -59,9 +59,47 @@
 
 ## 🚀 快速启动
 
-### 1. 配置环境变量
+有两种方式运行。**只想体验 App，选方式 A 最快**：iOS 直连已部署的火山云后端，无需在本地启动任何服务、也无需配置 API 密钥。需要改后端代码或离线建库时，再用方式 B 在本地自建后端。
 
-在仓库根目录创建 `.env` 文件，填入相关 API 密钥：
+### 方式 A：iOS 直连火山云服务器（推荐，最快）
+
+云服务器已部署后端并配好全部密钥，本地**无需启动后端、无需 `.env`**。
+
+**环境要求：Xcode 15+（iOS 17.0 deployment target）**
+
+1. 打开项目：
+
+   ```bash
+   open client/AIShoppingGuide.xcodeproj
+   ```
+
+2. 指定后端地址：Xcode 菜单 `Product` → `Scheme` → `Edit Scheme...` → `Run` → `Arguments` → `Environment Variables`，新增并勾选：
+
+   ```text
+   BACKEND_BASE_URL=http://118.196.64.197:8000
+   ```
+
+   该配置会写入共享 Scheme 文件 `client/AIShoppingGuide.xcodeproj/xcshareddata/xcschemes/AIShoppingGuide.xcscheme`，也可直接编辑该文件，在 `LaunchAction` 下加入：
+
+   ```xml
+   <EnvironmentVariables>
+      <EnvironmentVariable
+         key = "BACKEND_BASE_URL"
+         value = "http://118.196.64.197:8000"
+         isEnabled = "YES">
+      </EnvironmentVariable>
+   </EnvironmentVariables>
+   ```
+
+3. 选择一个 iOS 模拟器点击 ▶︎ Run。进入「导购」页输入例如「不要含酒精的防晒」，看到流式回复和商品卡片即说明联调成功。
+
+> 改动环境变量后需停止旧的 App 进程并重新 Run 才会生效。若云服务器未运行，请改用方式 B。
+
+### 方式 B：本地自建后端
+
+需要修改后端、调试或离线建库时使用。
+
+**1. 配置环境变量** —— 在仓库根目录创建 `.env` 文件，填入相关 API 密钥（仅本地运行后端时需要；连云服务器走方式 A 无需此步）：
 
 ```bash
 # 豆包大模型（对话与意图识别）
@@ -79,17 +117,13 @@ RERANK_MODEL=rerank
 RERANK_BASE_URL=https://open.bigmodel.cn/api/paas/v4/rerank
 ```
 
-### 2. 启动后端服务
-
-**环境要求：Python 3.10+**
+**2. 启动后端服务**（环境要求：Python 3.10+）：
 
 ```bash
 ./scripts/start_backend.sh
 ```
 
 > 脚本会自动创建虚拟环境 `.venv`、安装依赖并启动服务。访问 `http://127.0.0.1:8000/health` 返回 `{"status":"ok"}` 即成功。首次启动需后台预热模型约 30–60 秒，首条对话稍等即可。
-
-常用脚本：
 
 | 脚本 | 作用 |
 | --- | --- |
@@ -98,45 +132,7 @@ RERANK_BASE_URL=https://open.bigmodel.cn/api/paas/v4/rerank
 | `./scripts/restart_backend.sh` | 重启后端服务 |
 | `./scripts/dev.sh` | 开发模式（uvicorn 自动重载） |
 
-### 3. 启动 iOS 客户端
-
-**环境要求：Xcode 15+（iOS 17.0 deployment target）**
-
-```bash
-open client/AIShoppingGuide.xcodeproj
-```
-
-在 Xcode 中选择一个 iOS 模拟器点击 ▶︎ Run。模拟器与 Mac 共享 localhost，默认连接 `http://127.0.0.1:8000`，无需额外配置。
-
-#### 连接火山云服务器
-
-如果要让 iOS 端连接火山云后端，在 Xcode 打开 `Product` → `Scheme` → `Edit Scheme...` → `Run` → `Arguments` → `Environment Variables`，新增并勾选：
-
-```text
-BACKEND_BASE_URL=http://118.196.64.197:8000
-```
-
-这个配置会写入共享 Scheme 文件：
-
-```text
-client/AIShoppingGuide.xcodeproj/xcshareddata/xcschemes/AIShoppingGuide.xcscheme
-```
-
-也可以直接修改该文件，在 `LaunchAction` 下加入：
-
-```xml
-<EnvironmentVariables>
-   <EnvironmentVariable
-      key = "BACKEND_BASE_URL"
-      value = "http://118.196.64.197:8000"
-      isEnabled = "YES">
-   </EnvironmentVariable>
-</EnvironmentVariables>
-```
-
-改完后停止旧的 App 进程并重新 Run，新的环境变量才会生效。
-
-进入「导购」页输入例如「不要含酒精的防晒」，看到流式回复和商品卡片即说明前后端联调成功。
+**3. 启动 iOS 客户端**：用 Xcode 打开 `client/AIShoppingGuide.xcodeproj`，选择 iOS 模拟器点击 ▶︎ Run。模拟器与 Mac 共享 localhost，默认连接 `http://127.0.0.1:8000`，**无需配置 `BACKEND_BASE_URL`**。
 
 ---
 
