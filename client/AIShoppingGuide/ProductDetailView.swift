@@ -137,10 +137,6 @@ struct ProductDetailView: View {
                 productTextBlock(title: "推荐依据", text: product.reason, icon: "lightbulb")
             }
 
-            if !product.details.isEmpty {
-                productTextBlock(title: "商品资料", text: product.details, icon: "doc.text")
-            }
-
             if !product.tags.isEmpty {
                 productTags
             }
@@ -182,18 +178,7 @@ struct ProductDetailView: View {
     }
 
     private var productTags: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 82), spacing: 8, alignment: .leading)], alignment: .leading, spacing: 8) {
-            ForEach(product.tags, id: \.self) { tag in
-                Text(tag)
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(AppTheme.primary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.82)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 7)
-                    .background(AppTheme.secondary.opacity(0.78), in: Capsule())
-            }
-        }
+        ProductTagRow(tags: product.tags)
     }
 
     private var selectedSpecificationSummary: String {
@@ -234,13 +219,46 @@ struct ProductDetailView: View {
 private struct ProductReviewsSection: View {
     let reviews: [ProductReview]
     @State private var isExpanded = false
+    @State private var selectedRating: Int?
+    @State private var sortMode: ReviewSortMode = .defaultOrder
 
     private var visibleReviews: [ProductReview] {
-        isExpanded ? reviews : Array(reviews.prefix(3))
+        isExpanded ? filteredAndSortedReviews : Array(filteredAndSortedReviews.prefix(3))
     }
 
     private var hiddenReviewCount: Int {
-        max(0, reviews.count - 3)
+        max(0, filteredAndSortedReviews.count - 3)
+    }
+
+    private var filteredAndSortedReviews: [ProductReview] {
+        let filtered = reviews.enumerated().filter { _, review in
+            selectedRating == nil || review.rating == selectedRating
+        }
+
+        let sorted: [(offset: Int, element: ProductReview)]
+        switch sortMode {
+        case .defaultOrder:
+            sorted = filtered.sorted { $0.offset < $1.offset }
+        case .ratingHighToLow:
+            sorted = filtered.sorted {
+                if $0.element.rating == $1.element.rating {
+                    return $0.offset < $1.offset
+                }
+                return $0.element.rating > $1.element.rating
+            }
+        case .ratingLowToHigh:
+            sorted = filtered.sorted {
+                if $0.element.rating == $1.element.rating {
+                    return $0.offset < $1.offset
+                }
+                return $0.element.rating < $1.element.rating
+            }
+        }
+        return sorted.map(\.element)
+    }
+
+    private var availableRatings: [Int] {
+        Array(Set(reviews.map(\.rating))).sorted(by: >)
     }
 
     var body: some View {
@@ -249,16 +267,27 @@ private struct ProductReviewsSection: View {
                 Text("用户评价")
                     .font(.headline)
                     .foregroundStyle(AppTheme.textPrimary)
-                Text("\(reviews.count) 条")
+                Text("\(filteredAndSortedReviews.count) / \(reviews.count) 条")
                     .font(.caption.weight(.medium))
                     .foregroundStyle(AppTheme.textSecondary)
+                Spacer(minLength: 12)
+                ratingMenu
+                sortMenu
             }
 
-            VStack(alignment: .leading, spacing: 12) {
-                ForEach(visibleReviews) { review in
-                    ProductReviewRow(review: review)
-                    if review.id != visibleReviews.last?.id {
-                        Divider().overlay(AppTheme.border)
+            if visibleReviews.isEmpty {
+                Text("当前筛选下暂无评价")
+                    .font(.subheadline)
+                    .foregroundStyle(AppTheme.textSecondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 10)
+            } else {
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(visibleReviews) { review in
+                        ProductReviewRow(review: review)
+                        if review.id != visibleReviews.last?.id {
+                            Divider().overlay(AppTheme.border)
+                        }
                     }
                 }
             }
@@ -283,9 +312,95 @@ private struct ProductReviewsSection: View {
                 .buttonStyle(.tactile)
             }
         }
+        .onChange(of: selectedRating) { _, _ in
+            withAnimation(.easeOut(duration: 0.18)) {
+                isExpanded = false
+            }
+        }
+        .onChange(of: sortMode) { _, _ in
+            withAnimation(.easeOut(duration: 0.18)) {
+                isExpanded = false
+            }
+        }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
         .surfacePanel(cornerRadius: 20)
+    }
+
+    private var sortMenu: some View {
+        Menu {
+            ForEach(ReviewSortMode.allCases) { mode in
+                Button {
+                    sortMode = mode
+                } label: {
+                    if mode == sortMode {
+                        Label(mode.title, systemImage: "checkmark")
+                    } else {
+                        Text(mode.title)
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: "arrow.up.arrow.down")
+                .font(.system(size: 15, weight: .semibold))
+            .foregroundStyle(AppTheme.primary)
+            .frame(width: 34, height: 34)
+            .background(AppTheme.secondary.opacity(0.64), in: Capsule())
+            .overlay(Capsule().stroke(AppTheme.border, lineWidth: 1))
+            .accessibilityLabel("评价排序")
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var ratingMenu: some View {
+        Menu {
+            Button {
+                selectedRating = nil
+            } label: {
+                if selectedRating == nil {
+                    Label("全部星级", systemImage: "checkmark")
+                } else {
+                    Text("全部星级")
+                }
+            }
+
+            ForEach(availableRatings, id: \.self) { rating in
+                Button {
+                    selectedRating = rating
+                } label: {
+                    if selectedRating == rating {
+                        Label("\(rating) 星", systemImage: "checkmark")
+                    } else {
+                        Text("\(rating) 星")
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: selectedRating == nil ? "star" : "star.fill")
+                .font(.system(size: 15, weight: .semibold))
+            .foregroundStyle(AppTheme.primary)
+            .frame(width: 34, height: 34)
+            .background(AppTheme.secondary.opacity(0.64), in: Capsule())
+            .overlay(Capsule().stroke(AppTheme.border, lineWidth: 1))
+            .accessibilityLabel("评价星级筛选")
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private enum ReviewSortMode: String, CaseIterable, Identifiable {
+    case defaultOrder
+    case ratingHighToLow
+    case ratingLowToHigh
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .defaultOrder: return "默认排序"
+        case .ratingHighToLow: return "评分高到低"
+        case .ratingLowToHigh: return "评分低到高"
+        }
     }
 }
 

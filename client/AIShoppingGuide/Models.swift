@@ -231,6 +231,12 @@ struct ChatMessage: Identifiable, Codable {
     var localImageData: Data? = nil
     /// AI 返回的结构化内容（JSON 格式）
     var structuredContent: StructuredContent? = nil
+    /// 商品卡片已先展示时，最终 composer 完成后追加的完成态说明。
+    var completionSummary: String? = nil
+    /// 推荐卡片已展示、但追问 Prompt 仍在生成时，底部展示独立加载态。
+    var isGeneratingFollowups: Bool = false
+    /// 只影响追问 Prompt 的失败信息；商品卡片与正文保持可用。
+    var followupError: String? = nil
 }
 
 struct StructuredContent: Codable {

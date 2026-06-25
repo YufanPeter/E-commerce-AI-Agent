@@ -74,6 +74,8 @@ struct GuideView: View {
     private let streamPunctuationDelay: UInt64 = 70_000_000
     private let streamLineBreakDelay: UInt64 = 110_000_000
     private let streamCardRevealDelay: UInt64 = 180_000_000
+    private let streamRetryBaseDelay: UInt64 = 650_000_000
+    private let streamRetryMaxAttempts = 3
 
     /// 示例 query 池：每次空态出现时随机取 4 条，避免每次都是同样几个。
     private static let examplePool = [
@@ -207,7 +209,9 @@ struct GuideView: View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
                 Text("CartPilot")
-                    .font(.system(size: 26, weight: .bold, design: .rounded))
+                    .font(.custom("Georgia", size: 30).weight(.regular))
+                    .tracking(0.3)
+                    .scaleEffect(x: 1.06, y: 1, anchor: .leading)
                     .foregroundStyle(AppTheme.textPrimary)
                 Text("购物导购")
                     .font(.caption.weight(.medium))
@@ -651,7 +655,9 @@ struct GuideView: View {
         shouldShowJumpToLatest = false
         shouldHoldLatestQuestionAnchor = false
         pendingQuestionAnchorID = nil
-        let placeholder = imageData != nil ? "正在识别图片并匹配商品" : "正在为你匹配商品"
+        let placeholder = imageData != nil
+            ? "正在识别图片并匹配商品"
+            : loadingSearchText(for: query)
         // 用户气泡 + 助手占位一起以弹性动画淡入，避免"啪"地直接出现。
         withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
             messages.append(userMessage)
@@ -716,109 +722,154 @@ struct GuideView: View {
 
     private func runAgent(for query: String, imageBase64: String? = nil) {
         Task { @MainActor in
+            await runAgentWithRetry(for: query, imageBase64: imageBase64)
+        }
+    }
+
+    private func runAgentWithRetry(for query: String, imageBase64: String? = nil) async {
+        var attempt = 0
+        var lastError: Error?
+
+        while attempt < streamRetryMaxAttempts {
+            do {
+                try await runAgentOnce(for: query, imageBase64: imageBase64, retryAttempt: attempt)
+                persistCurrent()
+                await generateTitleIfNeeded()
+                return
+            } catch {
+                lastError = error
+                attempt += 1
+                let hasProducts = latestAssistantMessage?.products.isEmpty == false
+                let hasStructuredContent = latestAssistantMessage?.structuredContent != nil
+
+                if hasProducts || hasStructuredContent {
+                    markFollowupGenerationFailed("追问生成失败，正在重试")
+                    try? await Task.sleep(nanoseconds: retryDelay(for: attempt))
+                    completeFollowupsFromCurrentMessage(query: query)
+                    persistCurrent()
+                    await generateTitleIfNeeded()
+                    return
+                }
+
+                markAssistantTransientFailure(attempt: attempt, maxAttempts: streamRetryMaxAttempts)
+                try? await Task.sleep(nanoseconds: retryDelay(for: attempt))
+            }
+        }
+
+        if latestAssistantMessage?.products.isEmpty == false || latestAssistantMessage?.structuredContent != nil {
+            markFollowupGenerationFailed("追问生成失败，可以稍后重试")
+        } else {
+            updateLastAI(text: errorMessage(lastError ?? RESTServiceError.decodingFailed), state: .failed, canRetry: true)
+        }
+        persistCurrent()
+    }
+
+    private func runAgentOnce(
+        for query: String,
+        imageBase64: String? = nil,
+        retryAttempt: Int
+    ) async throws {
             var narrative = ""
             var visibleNarrative = ""
             var isStructuredNarrative = false
             var hydrated: [Product] = []
-            var statusText = imageBase64 == nil ? "正在匹配商品" : "正在识别图片并匹配商品"
+            var statusText = imageBase64 == nil ? loadingSearchText(for: query) : "正在识别图片并匹配商品"
 
-            do {
-                let request = AgentRequestPayload(
-                    sessionID: currentSessionID,
-                    text: query,
-                    imageBase64: imageBase64
-                )
-                for try await event in agentService.streamResponse(for: request) {
-                    switch event.type {
-                    case .status:
-                        if let status = event.status {
-                            statusText = status.message.isEmpty ? statusText : status.message
-                            if narrative.isEmpty {
-                                updateLastAI(
-                                    text: statusText,
-                                    state: status.phase.messageState,
-                                    products: []
-                                )
-                            }
+            let request = AgentRequestPayload(
+                sessionID: currentSessionID,
+                text: query,
+                imageBase64: imageBase64
+            )
+            for try await event in agentService.streamResponse(for: request) {
+                switch event.type {
+                case .status:
+                    if let status = event.status {
+                        statusText = status.message.isEmpty ? statusText : status.message
+                        if narrative.isEmpty && hydrated.isEmpty {
+                            updateLastAI(
+                                text: statusText,
+                                state: status.phase.messageState,
+                                products: nil
+                            )
+                        } else if status.phase == .generating, !hydrated.isEmpty {
+                            markFollowupGenerationInProgress("生成追问中")
                         }
-
-                    case .products:
-                        hydrated = event.products.map(Product.init(payload:))
-                        updateLastAI(
-                            text: narrative.isEmpty ? statusText : narrative,
-                            state: .generating,
-                            products: []
-                        )
-
-                    case .cartSnapshot:
-                        if let snapshot = event.cartSnapshot {
-                            syncCartItems(from: snapshot)
-                        }
-
-                    case .memoryUpdate:
-                        if let update = event.memoryUpdate {
-                            preferenceStore.applyMemoryUpdate(update)
-                            withAnimation(.easeOut(duration: 0.18)) {
-                                pendingMemoryUpdate = update
-                            }
-                        }
-
-                    case .textDelta:
-                        if let piece = event.textDelta {
-                            narrative += piece
-                            let trimmedNarrative = narrative.trimmingCharacters(in: .whitespacesAndNewlines)
-                            if isStructuredNarrative || trimmedNarrative.first == "{" {
-                                isStructuredNarrative = true
-                                updateLastAI(text: statusText, state: .generating)
-                            } else {
-                                visibleNarrative = await revealTextDelta(
-                                    piece,
-                                    currentText: visibleNarrative,
-                                    fallbackText: statusText
-                                )
-                            }
-                        }
-
-                    case .specSelection:
-                        if let spec = event.specSelection {
-                            attachSpecSelection(spec)
-                        }
-
-                    case .comparison:
-                        if let comparison = event.comparison {
-                            attachComparison(comparison)
-                        }
-
-                    case .done:
-                        await finishStreamingResponse(
-                            rawText: narrative.isEmpty ? statusText : narrative,
-                            visibleText: visibleNarrative,
-                            fallbackText: statusText,
-                            products: hydrated
-                        )
-
-                    default:
-                        break
                     }
-                }
 
-                // 流正常结束但未收到 done 时的兜底
-                if let index = messages.lastIndex(where: { $0.sender == .ai }),
-                   messages[index].state != .ready, messages[index].state != .failed {
+                case .products:
+                    hydrated = event.products.map(Product.init(payload:))
+                    await revealProductPreview(
+                        query: query,
+                        rawText: narrative.isEmpty ? statusText : narrative,
+                        products: hydrated
+                    )
+
+                case .cartSnapshot:
+                    if let snapshot = event.cartSnapshot {
+                        syncCartItems(from: snapshot)
+                    }
+
+                case .memoryUpdate:
+                    if let update = event.memoryUpdate {
+                        preferenceStore.applyMemoryUpdate(update)
+                        withAnimation(.easeOut(duration: 0.18)) {
+                            pendingMemoryUpdate = update
+                        }
+                    }
+
+                case .textDelta:
+                    if let piece = event.textDelta {
+                        narrative += piece
+                        let trimmedNarrative = narrative.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if isStructuredNarrative || trimmedNarrative.first == "{" {
+                            isStructuredNarrative = true
+                            if hydrated.isEmpty {
+                                updateLastAI(text: statusText, state: .generating, products: nil)
+                            } else {
+                                markFollowupGenerationInProgress("生成追问中")
+                            }
+                        } else {
+                            visibleNarrative = await revealTextDelta(
+                                piece,
+                                currentText: visibleNarrative,
+                                fallbackText: statusText
+                            )
+                        }
+                    }
+
+                case .specSelection:
+                    if let spec = event.specSelection {
+                        attachSpecSelection(spec)
+                    }
+
+                case .comparison:
+                    if let comparison = event.comparison {
+                        attachComparison(comparison)
+                    }
+
+                case .done:
                     await finishStreamingResponse(
                         rawText: narrative.isEmpty ? statusText : narrative,
                         visibleText: visibleNarrative,
                         fallbackText: statusText,
                         products: hydrated
                     )
+
+                default:
+                    break
                 }
-                persistCurrent()
-                await generateTitleIfNeeded()
-            } catch {
-                updateLastAI(text: errorMessage(error), state: .failed, canRetry: true)
-                persistCurrent()
             }
-        }
+
+            // 流正常结束但未收到 done 时的兜底
+            if let index = messages.lastIndex(where: { $0.sender == .ai }),
+               messages[index].state != .ready, messages[index].state != .failed {
+                await finishStreamingResponse(
+                    rawText: narrative.isEmpty ? statusText : narrative,
+                    visibleText: visibleNarrative,
+                    fallbackText: statusText,
+                    products: hydrated
+                )
+            }
     }
 
     private func revealTextDelta(
@@ -868,11 +919,72 @@ struct GuideView: View {
         markAssistantResponseReadyForScroll()
     }
 
+    private func revealProductPreview(
+        query: String,
+        rawText: String,
+        products: [Product]
+    ) async {
+        guard !products.isEmpty else { return }
+
+        let opening = searchingRecommendationOpening(for: query)
+        let previewItems = products.map {
+            StructuredItem(productId: $0.id, description: $0.reason)
+        }
+        var visibleProducts: [Product] = []
+
+        if latestAssistantMessage?.structuredContent == nil {
+            updateLastAI(
+                text: rawText,
+                state: .generating,
+                products: [],
+                structuredContent: StructuredContent(opening: opening, items: previewItems),
+                isGeneratingFollowups: true
+            )
+        }
+
+        for product in products {
+            guard !Task.isCancelled else { return }
+            visibleProducts.append(product)
+            withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.86)) {
+                updateLastAI(
+                    text: rawText,
+                    state: .generating,
+                    products: visibleProducts,
+                    structuredContent: StructuredContent(opening: opening, items: previewItems),
+                    isGeneratingFollowups: true
+                )
+            }
+            if product.id != products.last?.id {
+                try? await Task.sleep(nanoseconds: streamCardRevealDelay)
+            }
+        }
+    }
+
     private func revealStructuredResponse(
         _ content: StructuredContent,
         rawText: String,
         products: [Product]
     ) async {
+        if latestAssistantMessage?.products.isEmpty == false {
+            let stableOpening = latestAssistantMessage?.structuredContent?.opening
+                ?? searchingRecommendationOpening(for: "")
+            updateLastAI(
+                text: rawText,
+                state: .ready,
+                products: nil,
+                structuredContent: StructuredContent(
+                    opening: stableOpening,
+                    items: content.items,
+                    followup: content.followup
+                ),
+                completionSummary: content.opening,
+                isGeneratingFollowups: false,
+                followupError: nil
+            )
+            markAssistantResponseReadyForScroll()
+            return
+        }
+
         var opening = ""
         for character in content.opening {
             guard !Task.isCancelled else { return }
@@ -906,15 +1018,86 @@ struct GuideView: View {
             }
         }
 
-        withAnimation(.easeOut(duration: 0.18)) {
-            updateLastAI(
-                text: rawText,
-                state: .ready,
-                products: products,
-                structuredContent: content
-            )
-        }
+        updateLastAI(
+            text: rawText,
+            state: .ready,
+            products: products,
+            structuredContent: content,
+            isGeneratingFollowups: false,
+            followupError: nil
+        )
         markAssistantResponseReadyForScroll()
+    }
+
+    private func completedRecommendationOpening(for query: String, products: [Product]) -> String {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            return "为你找到了几款和「\(trimmed)」比较匹配的商品"
+        }
+        if let firstTag = products.first?.tags.first, !firstTag.isEmpty {
+            return "为你找到了几款\(firstTag)相关的商品"
+        }
+        return "为你找到了几款比较匹配的商品"
+    }
+
+    private func searchingRecommendationOpening(for query: String) -> String {
+        "正在为你寻找合适的商品"
+    }
+
+    private func loadingSearchText(for query: String) -> String {
+        "正在为你寻找合适的商品"
+    }
+
+    private func retryDelay(for attempt: Int) -> UInt64 {
+        let multiplier = UInt64(1 << max(0, min(attempt - 1, 3)))
+        return streamRetryBaseDelay * multiplier
+    }
+
+    private func markAssistantTransientFailure(attempt: Int, maxAttempts: Int) {
+        guard attempt < maxAttempts else { return }
+        let retryText = "连接中断，正在第 \(attempt + 1) 次重试"
+        updateLastAI(text: retryText, state: .understanding, products: nil)
+    }
+
+    private func markFollowupGenerationInProgress(_ text: String) {
+        guard let index = messages.lastIndex(where: { $0.sender == .ai }) else { return }
+        messages[index].isGeneratingFollowups = true
+        messages[index].followupError = nil
+        messages[index].state = .generating
+    }
+
+    private func markFollowupGenerationFailed(_ message: String) {
+        guard let index = messages.lastIndex(where: { $0.sender == .ai }) else { return }
+        messages[index].isGeneratingFollowups = false
+        messages[index].followupError = message
+        messages[index].state = .ready
+    }
+
+    private func completeFollowupsFromCurrentMessage(query: String) {
+        guard let index = messages.lastIndex(where: { $0.sender == .ai }) else { return }
+        let message = messages[index]
+        let products = message.products
+        let opening = message.structuredContent?.opening ?? searchingRecommendationOpening(for: query)
+        let items = message.structuredContent?.items
+            ?? products.map { StructuredItem(productId: $0.id, description: $0.reason) }
+        let completion = completedRecommendationOpening(for: query, products: products)
+        let followups = fallbackFollowups(for: query, products: products)
+        messages[index].structuredContent = StructuredContent(opening: opening, items: items, followup: followups)
+        messages[index].completionSummary = completion
+        messages[index].isGeneratingFollowups = false
+        messages[index].followupError = nil
+        messages[index].state = .ready
+    }
+
+    private func fallbackFollowups(for query: String, products: [Product]) -> [String] {
+        var prompts = ["推荐更便宜一点的", "对比一下前两款", "换个品牌看看"]
+        if let tag = products.first?.tags.first, !tag.isEmpty {
+            prompts[2] = "继续找\(tag)相关的"
+        }
+        if query.contains("便宜") || query.contains("平价") {
+            prompts[0] = "预算再放宽一点看看"
+        }
+        return prompts
     }
 
     private func markAssistantResponseReadyForScroll() {
@@ -1242,17 +1425,31 @@ struct GuideView: View {
     private func updateLastAI(
         text: String,
         state: MessageState,
-        products: [Product] = [],
+        products: [Product]? = [],
         canRetry: Bool = false,
-        structuredContent: StructuredContent? = nil
+        structuredContent: StructuredContent? = nil,
+        completionSummary: String? = nil,
+        isGeneratingFollowups: Bool? = nil,
+        followupError: String? = nil
     ) {
         guard let index = messages.lastIndex(where: { $0.sender == .ai }) else { return }
         messages[index].text = text
         messages[index].state = state
-        messages[index].products = products
+        if let products {
+            messages[index].products = products
+        }
         messages[index].canRetry = canRetry
         if let structuredContent {
             messages[index].structuredContent = structuredContent
+        }
+        if let completionSummary {
+            messages[index].completionSummary = completionSummary
+        }
+        if let isGeneratingFollowups {
+            messages[index].isGeneratingFollowups = isGeneratingFollowups
+        }
+        if followupError != nil || isGeneratingFollowups == false {
+            messages[index].followupError = followupError
         }
     }
 
@@ -1309,7 +1506,6 @@ struct MessageRow: View {
     let onSpecSubmit: (String) -> Void
     let onCompareTap: ([Product]) -> Void
     let onFollowUpTap: (String) -> Void
-    @State private var dotCount = 0
     
     private struct ProductSection: Identifiable, Equatable {
         let id: String
@@ -1317,7 +1513,7 @@ struct MessageRow: View {
         let description: String?
         
         init(product: Product, description: String?) {
-            self.id = "\(product.id)_\(description?.hashValue ?? 0)"
+            self.id = product.id
             self.product = product
             self.description = description
         }
@@ -1357,9 +1553,10 @@ struct MessageRow: View {
     
     private var followups: [String] {
         guard message.sender == .ai else { return [] }
-        guard let content = parsedStructuredContent else { return [] }
-        return content.followup.filter {
-            !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if let content = parsedStructuredContent {
+            return content.followup.filter {
+                !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }
         }
         // 降级：从文本中提取真正像「追问方向」的段落。
         // 注意：必须排除已作为开场白渲染的段落，否则像 cart 选规格这类单段确定性
@@ -1491,6 +1688,22 @@ struct MessageRow: View {
                                 .transition(.opacity)
                         }
                     }
+
+                    if let completionSummary = message.completionSummary,
+                       !completionSummary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Text(completionSummary)
+                            .font(.subheadline)
+                            .foregroundStyle(AppTheme.textPrimary)
+                            .lineSpacing(6)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 11)
+                            .background(bubbleColor, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                    .stroke(AppTheme.border, lineWidth: message.sender == .ai ? 1 : 0)
+                            )
+                            .transition(.opacity.combined(with: .move(edge: .top)))
+                    }
                     
                     // 3. 追问 Prompt（点击填入输入框，不直接发送）
                     if !followups.isEmpty {
@@ -1509,6 +1722,26 @@ struct MessageRow: View {
                                 }
                                 .buttonStyle(.tactile)
                             }
+                        }
+                        .padding(.top, 8)
+                    }
+
+                    if message.isGeneratingFollowups {
+                        ClaudeStyleLoadingStatus(text: "生成追问中")
+                            .padding(.top, 8)
+                            .transition(.opacity.combined(with: .move(edge: .top)))
+                    } else if let followupError = message.followupError {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Rectangle()
+                                .fill(AppTheme.border)
+                                .frame(width: 148, height: 1)
+                            HStack(spacing: 8) {
+                                Image(systemName: "arrow.clockwise")
+                                    .font(.caption.weight(.semibold))
+                                Text(followupError)
+                                    .font(.caption.weight(.medium))
+                            }
+                            .foregroundStyle(AppTheme.textSecondary)
                         }
                         .padding(.top, 8)
                     }
@@ -1627,19 +1860,7 @@ struct MessageRow: View {
             } else {
                 // 首字符优化：文本很短时继续显示加载动画，避免闪烁
                 if message.text.count < 10 {
-                    HStack(spacing: 2) {
-                        Text(message.state.rawValue)
-                            .font(.subheadline)
-                            .foregroundStyle(AppTheme.textPrimary)
-                        Text(String(repeating: ".", count: dotCount))
-                            .font(.subheadline)
-                            .foregroundStyle(AppTheme.textPrimary)
-                            .monospacedDigit()
-                    }
-                    .padding(.horizontal, 4)
-                    .onAppear {
-                        startLoadingAnimation()
-                    }
+                    ClaudeStyleLoadingStatus(text: message.state.rawValue)
                 } else {
                     Text(message.text)
                         .font(.subheadline)
@@ -1655,33 +1876,14 @@ struct MessageRow: View {
                 }
             }
         case .understanding, .retrieving, .generating:
-            HStack(spacing: 2) {
-                Text(message.state.rawValue)
-                    .font(.subheadline)
-                    .foregroundStyle(AppTheme.textPrimary)
-                Text(String(repeating: ".", count: dotCount))
-                    .font(.subheadline)
-                    .foregroundStyle(AppTheme.textPrimary)
-                    .monospacedDigit()
-            }
-            .padding(.horizontal, 4)
-            .onAppear {
-                startLoadingAnimation()
-            }
+            ClaudeStyleLoadingStatus(text: loadingStatusText)
         }
     }
-    
-    private func startLoadingAnimation() {
-        dotCount = 0
-        Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { timer in
-            if message.state == .ready || message.state == .failed {
-                timer.invalidate()
-                return
-            }
-            withAnimation(.easeInOut(duration: 0.2)) {
-                dotCount = (dotCount + 1) % 4
-            }
-        }
+
+    private var loadingStatusText: String {
+        let trimmed = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return message.state.rawValue }
+        return trimmed.hasSuffix("中") ? trimmed : message.state.rawValue
     }
 
     private var displayText: String {
@@ -1713,6 +1915,70 @@ struct MessageRow: View {
             return message.state == .failed ? AppTheme.error.opacity(0.08) : AppTheme.surface
         }
     }
+}
+
+private struct ClaudeStyleLoadingStatus: View {
+    let text: String
+    @State private var isBreathing = false
+    @State private var activeDot = 0
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ZStack {
+                Circle()
+                    .fill(AppTheme.primary.opacity(0.16))
+                    .frame(width: 18, height: 18)
+                    .scaleEffect(isBreathing ? 1.35 : 0.72)
+                    .opacity(isBreathing ? 0.20 : 0.62)
+
+                Circle()
+                    .fill(AppTheme.primary)
+                    .frame(width: 7, height: 7)
+                    .scaleEffect(isBreathing ? 0.88 : 1.08)
+            }
+            .frame(width: 18, height: 18)
+
+            Text(normalizedText)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(AppTheme.textPrimary)
+
+            Text("...")
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(AppTheme.textPrimary)
+                .opacity(ellipsisOpacity)
+                .animation(.easeInOut(duration: 0.42), value: activeDot)
+                .frame(width: 18, alignment: .leading)
+        }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 2)
+        .onAppear {
+            withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
+                isBreathing = true
+            }
+        }
+        .task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 320_000_000)
+                withAnimation(.easeInOut(duration: 0.34)) {
+                    activeDot = (activeDot + 1) % 3
+                }
+            }
+        }
+    }
+
+    private var normalizedText: String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.hasSuffix("中") ? trimmed : "\(trimmed)中"
+    }
+
+    private var ellipsisOpacity: Double {
+        switch activeDot {
+        case 0: return 0.35
+        case 1: return 0.62
+        default: return 0.9
+        }
+    }
+
 }
 
 @MainActor
@@ -1897,16 +2163,7 @@ struct ProductCard: View {
                 )
 
             if !product.tags.isEmpty {
-                HStack(spacing: 8) {
-                    ForEach(Array(product.tags.prefix(3)), id: \.self) { tag in
-                        Text(tag)
-                            .font(.caption.weight(.medium))
-                            .foregroundStyle(AppTheme.primary)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 7)
-                            .background(AppTheme.softPurple, in: Capsule())
-                    }
-                }
+                ProductTagRow(tags: Array(product.tags.prefix(3)))
             }
 
             Text(product.title)
@@ -1934,6 +2191,27 @@ struct ProductCard: View {
         }
         .padding(14)
         .surfacePanel(cornerRadius: 22)
+    }
+}
+
+struct ProductTagRow: View {
+    let tags: [String]
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ForEach(tags, id: \.self) { tag in
+                Text(tag)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(AppTheme.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    .background(AppTheme.softPurple, in: Capsule())
+            }
+        }
+        .fixedSize(horizontal: true, vertical: false)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
