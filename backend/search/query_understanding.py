@@ -1,21 +1,17 @@
 from __future__ import annotations
 
-"""Query Understanding 编排入口（LLM 主力版）。
+"""LLM-first query-understanding orchestration.
 
-职责边界：
-    本模块只做「数据契约 + 编排 + 缓存」，不做任何关键字/正则解析。
-    自然语言到 ParsedQuery 的真实工作全部交给 search.llm_parser，
-    由豆包 function calling 完成（详见 docs/后端业务技术选型与流程设计.md）。
+This module owns the data contract, orchestration, caching, and deterministic safeguards.
+``search.llm_parser`` performs the primary natural-language-to-``ParsedQuery`` extraction.
 
-为什么不再保留规则兜底：
-    规则版在 query 覆盖率、否定语义、同义词等维度上全面落后 LLM，
-    保留它只会带来「降级到一个同样不准的版本」的虚假安全感。
-    LLM 不可用时直接 raise，由上层 API 决定是返回错误还是空结果，
-    比悄悄给出错误召回更负责任。
+When LLM parsing fails, retrieval keeps the raw query and omits inferred positive hard
+filters. Small deterministic negative-category and brand safeguards preserve explicit
+exclusions without attempting to replace full language understanding.
 
-依赖关系：
-    llm_parser  ──imports──►  query_understanding   （取 ParsedQuery / load_taxonomy / INGREDIENT_BLOCKLIST）
-    api / agent ──imports──►  query_understanding   （只调 understand_query）
+Dependency direction:
+    ``llm_parser`` imports this module's contracts and taxonomy helpers; API and agent
+    layers call only ``understand_query``.
 """
 
 import argparse
@@ -36,12 +32,12 @@ DEFAULT_DB_PATH = PROJECT_ROOT / "backend" / "storage" / "ecommerce_agent.sqlite
 
 
 # ---------------------------------------------------------------------------
-# 1. 数据契约
+# 1. Data contract
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
 class ParsedQuery:
-    """检索意图的结构化表示，下游所有模块只面向本结构编程。"""
+    """Structured retrieval intent consumed by every downstream module."""
 
     original_query: str
     intent: str = "product_search"
@@ -60,7 +56,7 @@ class ParsedQuery:
 
     @property
     def hard_filters(self) -> dict[str, object]:
-        """直接喂给 SQLite / Chroma where 的硬过滤条件。"""
+        """Return hard filters suitable for SQLite or Chroma."""
         return {
             "category": self.category,
             "sub_category": self.sub_category,
@@ -79,31 +75,21 @@ class ParsedQuery:
 
     @classmethod
     def from_dict(cls, data: dict[str, object]) -> "ParsedQuery":
-        """从 to_dict() 的结果还原。
+        """Restore an instance from ``to_dict`` output.
 
-        宽容地忽略未知键——尤其是 to_dict() 额外塞进去的 ``hard_filters``
-        （它是派生 property，不是构造参数），否则 ParsedQuery(**data) 会报
-        unexpected keyword argument。
+        Unknown keys are ignored, especially the derived ``hard_filters`` property that
+        is not a constructor argument.
         """
         allowed = {f.name for f in fields(cls)}
         return cls(**{k: v for k, v in data.items() if k in allowed})
 
     def merge_base(self, base: "ParsedQuery") -> "ParsedQuery":
-        """把本轮解析（self，作为覆盖项）叠加到上一轮基线（base）上。
+        """Overlay the current parsed turn on the previous structured intent.
 
-        多轮"细化"的核心：用户只说"Adidas"时，本轮解析几乎是空的，必须继承
-        上一轮的品类/价格等，否则就退化成一次"泛搜 Adidas"。
-
-        合并规则（按字段语义区分，不是一刀切）：
-            - 标量类目/价格（category/sub_category/max_price/min_price）：
-              本轮显式给了就覆盖，否则继承 base —— "便宜点"不该清掉"跑鞋"。
-            - brand_include：本轮非空则**替换**（"换成 Nike"应只剩 Nike，
-              而不是 Adidas+Nike）。
-            - brand_exclude / negative_ingredients / soft_terms：取**并集**
-              （否定与软偏好是逐轮累积的，"不要苹果"之后"也不要三星"该都生效）。
-            - retrieval_query：合并双方分词并去重，本轮词在前，让向量检索
-              同时命中"品牌"和"上一轮的品类语义"（"Adidas" + "跑鞋"）。
-            - needs_clarification：恒为 False —— 既然有 base，就已有足够上下文。
+        Scalar category and price fields override only when present. A non-empty brand
+        inclusion replaces the old brand, while exclusions, negative ingredients, and
+        soft preferences accumulate. Retrieval terms are merged with current terms first,
+        and inherited context makes clarification unnecessary.
         """
         def pick(cur: object, prev: object) -> object:
             return cur if cur is not None else prev
@@ -139,13 +125,10 @@ class ParsedQuery:
 
 
 # ---------------------------------------------------------------------------
-# 2. Taxonomy：从 SQLite 派生，给 LLM function schema 注入 enum
+# 2. Taxonomy derived from SQLite for function-schema enums
 # ---------------------------------------------------------------------------
 
-# 品牌别名表：key 是 canonical（暴露给 LLM 的官方名），value 是
-# SQLite / Chroma 中可能出现的所有变体（包含 canonical 自身）。
-# 添加时机：发现同一品牌在数据里有两种写法（如中英混用）。
-# 维护成本：每条 ~1 行，比清洗数据 + 重建 Chroma 便宜得多。
+# Canonical brand keys map to every SQLite/Chroma spelling, including the canonical name.
 BRAND_ALIASES: dict[str, tuple[str, ...]] = {
     "Apple 苹果":      ("Apple 苹果", "苹果"),
     "耐克":            ("耐克", "Nike"),
@@ -159,15 +142,10 @@ _EXTRA_BRAND_ALIASES: dict[str, tuple[str, ...]] = {
 
 @lru_cache(maxsize=1)
 def load_taxonomy(db_path: Path = DEFAULT_DB_PATH) -> dict[str, object]:
-    """读取 products 表的 category / sub_category / brand 唯一值。
+    """Read distinct category, subcategory, and brand values from ``products``.
 
-    返回：
-        {
-          "sub_to_cat":   {sub_category: category},   # 反查父类目
-          "brands":       [canonical_brand, ...],     # 暴露给 LLM enum 的官方名
-          "brand_expand": {canonical: [variants]},    # 查 Chroma 时把 canonical 展回所有变体
-        }
-    用 lru_cache 让进程内只读一次；建库脚本变更后重启服务生效。
+    The result maps subcategories to parents, exposes canonical brands for the LLM enum,
+    and expands canonical brands to stored variants. It is cached once per process.
     """
     if not db_path.exists():
         return {"sub_to_cat": {}, "brands": [], "brand_expand": {}}
@@ -185,13 +163,13 @@ def load_taxonomy(db_path: Path = DEFAULT_DB_PATH) -> dict[str, object]:
         if brand:
             raw_brands.add(brand)
 
-    # 反向索引：variant → canonical
+    # Reverse variant-to-canonical index.
     variant_to_canonical: dict[str, str] = {}
     for canonical, variants in BRAND_ALIASES.items():
         for variant in variants:
             variant_to_canonical[variant] = canonical
 
-    # 把每个 raw brand 映射到 canonical，收敛重复
+    # Map stored brands to canonical values and collapse duplicates.
     canonicals: set[str] = set()
     brand_expand: dict[str, list[str]] = {}
     for raw in raw_brands:
@@ -199,7 +177,7 @@ def load_taxonomy(db_path: Path = DEFAULT_DB_PATH) -> dict[str, object]:
         canonicals.add(canonical)
         brand_expand.setdefault(canonical, []).append(raw)
 
-    # 保证 canonical 自身也在 expand 列表里（即使数据库里没出现过）
+    # Include the canonical spelling even when absent from stored rows.
     for canonical, variants in BRAND_ALIASES.items():
         if canonical in canonicals:
             existing = set(brand_expand[canonical])
@@ -215,7 +193,7 @@ def load_taxonomy(db_path: Path = DEFAULT_DB_PATH) -> dict[str, object]:
 
 
 def expand_brands(canonical_brands: list[str]) -> list[str]:
-    """把 canonical 品牌列表展开成 Chroma 实际存的所有变体，喂给 $in / $nin。"""
+    """Expand canonical brands to stored variants for ``$in`` and ``$nin``."""
     taxonomy = load_taxonomy()
     expand: dict[str, list[str]] = taxonomy["brand_expand"]  # type: ignore[assignment]
     variant_to_canonical: dict[str, str] = {}
@@ -241,13 +219,11 @@ def expand_brands(canonical_brands: list[str]) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# 3. 后置过滤词表：成分黑名单
+# 3. Postfilter vocabulary
 # ---------------------------------------------------------------------------
 
-# 这个列表是「后置过滤」用的，不是「解析」用的：
-#   解析时 LLM 用它做 enum 约束，避免幻觉成分；
-#   召回后，retriever 用它在商品全文里做关键词剔除。
-# 保持小而稳定，新增成分前先确认数据里确实能匹配到。
+# This stable vocabulary constrains extraction and supports keyword postfiltering. Add a
+# term only after confirming that it appears in catalog text.
 INGREDIENT_BLOCKLIST: tuple[str, ...] = (
     "酒精", "乙醇", "香精", "色素", "防腐剂",
     "糖", "蔗糖", "果葡糖浆",
@@ -257,7 +233,7 @@ INGREDIENT_BLOCKLIST: tuple[str, ...] = (
 
 
 # ---------------------------------------------------------------------------
-# 4. 编排入口
+# 4. Orchestration entry point
 # ---------------------------------------------------------------------------
 
 def normalize_query(query: str) -> str:
@@ -266,20 +242,18 @@ def normalize_query(query: str) -> str:
 
 @lru_cache(maxsize=1024)
 def _cached_understand(normalized_query: str) -> ParsedQuery:
-    # 延迟导入：让本模块在没装 openai 时也能 import（便于纯数据契约场景）
+    # Delay the import so data-contract consumers do not require the OpenAI package.
     from search.llm_parser import parse_query_with_llm
 
     return parse_query_with_llm(normalized_query)
 
 
 def understand_query(query: str) -> ParsedQuery:
-    """所有上层模块（API、Agent、retriever）唯一应该调的入口。
+    """Public query-understanding entry point for API, agent, and retrieval layers.
 
-    - 进程内 LRU 缓存，热门 query 0ms 命中（加分项 4.4 的简单实现，
-      线上可升级为 Redis 跨进程缓存）。
-    - LLM 调用 / 解析失败时降级为纯向量召回（保留原始 query、跳过 hard_filter），
-      而不是让整条检索链崩成兜底文案。降级结果不写入 LRU 缓存，避免一次模型
-      抖动被永久缓存，下次同样的 query 仍会重新尝试 LLM 解析。
+    Successful results use an in-process LRU cache. LLM failures keep the raw query for
+    vector retrieval and skip inferred positive filters. Failed results are not cached,
+    allowing a later retry.
     """
     normalized = normalize_query(query)
     if not normalized:
@@ -291,9 +265,7 @@ def understand_query(query: str) -> ParsedQuery:
         logger.warning(
             "LLM query understanding failed, degrade to vector-only recall: %r", exc
         )
-        # 降级：不带任何 hard_filter，retrieval_query 用原文，让向量召回兜底。
-        # 但【否定/反选】是用户的硬性诉求，不能因 LLM 挂了就完全失效——这里用
-        # 确定性正则 + taxonomy 兜底抽取「不要X品类」，至少保住品类反选。
+        # Preserve raw vector retrieval plus deterministic explicit exclusions.
         sub_excl, cat_excl = _regex_extract_excludes(query)
         brand_excl = _regex_extract_brand_excludes(query)
         return ParsedQuery(
@@ -307,20 +279,18 @@ def understand_query(query: str) -> ParsedQuery:
 
 
 def clear_cache() -> None:
-    """taxonomy 或 LLM prompt 变更后调一次。"""
+    """Clear caches after taxonomy or prompt changes."""
     _cached_understand.cache_clear()
     load_taxonomy.cache_clear()
 
 
-# 否定意图触发词：用户表达"不要/不含/排除"时的常见说法。
+# Common lexical cues for explicit exclusion intent.
 _NEGATION_CUES = ("不要", "不想要", "不想", "不含", "不带", "没有", "无", "非", "除了", "排除", "拒绝", "讨厌")
 
-# 品类同义词 → taxonomy 官方 sub_category（确定性兜底，覆盖全部一级类目的高频反选目标）。
-# LLM 挂掉时靠这张表保住品类反选；命中后走 where $nin 召回阶段排除。
-# 维护原则：key 写用户口语，value 必须是 taxonomy 里真实存在的官方子类目（含斜杠的写全名，
-# 如 "坚果/零食"），否则不会被采纳。官方子类目本身（及其斜杠拆分项）由代码自动兜底，无需逐一列出。
+# Colloquial category aliases mapped to official taxonomy values for deterministic
+# exclusion fallback. Values must exactly match stored subcategories.
 _SUBCAT_SYNONYMS: dict[str, str] = {
-    # —— 食品饮料 ——
+    # Food and beverages
     "功能性饮料": "功能饮料",
     "能量饮料": "功能饮料",
     "功能型饮料": "功能饮料",
@@ -341,7 +311,7 @@ _SUBCAT_SYNONYMS: dict[str, str] = {
     "纯牛奶": "牛奶",
     "茶": "茶饮",
     "茶饮料": "茶饮",
-    # —— 数码电子 ——
+    # Consumer electronics
     "蓝牙耳机": "真无线耳机",
     "无线耳机": "真无线耳机",
     "耳机": "真无线耳机",
@@ -351,7 +321,7 @@ _SUBCAT_SYNONYMS: dict[str, str] = {
     "笔记本": "笔记本电脑",
     "电脑": "笔记本电脑",
     "笔电": "笔记本电脑",
-    # —— 服饰运动 ——
+    # Apparel and sports
     "慢跑鞋": "跑步鞋",
     "运动鞋": "跑步鞋",
     "球鞋": "篮球鞋",
@@ -365,7 +335,7 @@ _SUBCAT_SYNONYMS: dict[str, str] = {
     "速干衣": "速干T恤",
     "双肩包": "背包",
     "书包": "背包",
-    # —— 美妆护肤 ——
+    # Beauty and skincare
     "补水面膜": "面膜",
     "贴片面膜": "面膜",
     "面膜": "面膜",
@@ -396,10 +366,11 @@ _SUBCAT_SYNONYMS: dict[str, str] = {
 
 
 def _regex_extract_excludes(query: str) -> tuple[list[str], list[str]]:
-    """LLM 失败降级时的确定性否定兜底：从原句抽「不要X品类」→ (子类目排除, 一级类目排除)。
+    """Extract deterministic category exclusions when LLM parsing fails.
 
-    只在出现否定触发词时才尝试，且只认 taxonomy 里真实存在的品类/同义词，
-    保证零误伤（不会把"不要太贵"误当品类排除）。"""
+    Extraction requires an exclusion cue and accepts only real taxonomy values or mapped
+    aliases, preventing unrelated negative phrases from becoming category filters.
+    """
     text = query or ""
     if not any(cue in text for cue in _NEGATION_CUES):
         return [], []
@@ -408,8 +379,7 @@ def _regex_extract_excludes(query: str) -> tuple[list[str], list[str]]:
     sub_to_cat = taxonomy.get("sub_to_cat", {}) or {}
     known_cats = {c for c in sub_to_cat.values() if c}
 
-    # 预拆斜杠子类目（如 "坚果/零食"）：任一拆分项命中即视作命中该官方子类目。
-    # 否则用户说"不要坚果"永远匹配不上带斜杠的官方名。
+    # Split slash-delimited subcategories so either component can match the official value.
     sub_parts: dict[str, str] = {}
     for sub in sub_to_cat:
         for part in re.split(r"[/、，,]", sub):
@@ -424,25 +394,25 @@ def _regex_extract_excludes(query: str) -> tuple[list[str], list[str]]:
         if official in sub_to_cat and official not in sub_excl:
             sub_excl.append(official)
 
-    # 找否定触发词之后的一小段文本，在其中匹配品类同义词 / 官方子类目 / 一级类目。
+    # Match aliases and official categories in a short window after each exclusion cue.
     for cue in _NEGATION_CUES:
         idx = text.find(cue)
         if idx < 0:
             continue
         window = text[idx + len(cue): idx + len(cue) + 12]
-        # 1) 同义词表（口语 → 官方子类目）
+        # 1. Colloquial alias to official subcategory.
         for syn, official in _SUBCAT_SYNONYMS.items():
             if syn in window:
                 _add_sub(official)
-        # 2) 官方子类目全名直接命中
+        # 2. Direct official subcategory match.
         for sub in sub_to_cat:
             if sub in window:
                 _add_sub(sub)
-        # 3) 斜杠子类目的拆分项命中（"坚果" → "坚果/零食"）
+        # 3. Component of a slash-delimited official subcategory.
         for part, official in sub_parts.items():
             if part in window:
                 _add_sub(official)
-        # 4) 一级类目命中
+        # 4. Parent category match.
         for cat in known_cats:
             if cat in window and cat not in cat_excl:
                 cat_excl.append(cat)
@@ -451,7 +421,7 @@ def _regex_extract_excludes(query: str) -> tuple[list[str], list[str]]:
 
 
 def _regex_extract_brand_excludes(query: str) -> list[str]:
-    """确定性品牌反选兜底，覆盖「非华为非苹果」这类紧凑表达。"""
+    """Extract deterministic brand exclusions, including compact expressions."""
     text = query or ""
     if not any(cue in text for cue in _NEGATION_CUES):
         return []
@@ -478,6 +448,10 @@ def _regex_extract_brand_excludes(query: str) -> list[str]:
             idx = text.find(cue, start)
             if idx < 0:
                 break
+            # The existence-question pattern is not an exclusion cue.
+            if cue == "没有" and idx > 0 and text[idx - 1] == "有":
+                start = idx + len(cue)
+                continue
             window = text[idx + len(cue): idx + len(cue) + 18]
             for brand in brands:
                 if brand and brand in window and brand not in excludes:
@@ -486,11 +460,34 @@ def _regex_extract_brand_excludes(query: str) -> list[str]:
     return excludes
 
 
+def _drop_conflicting_excludes(
+    brand_include: list[str] | None,
+    brand_exclude: list[str],
+) -> list[str]:
+    """Remove exclusions that conflict with included brand variants.
+
+    Variant-aware comparison prevents simultaneous ``$in`` and ``$nin`` filters for the
+    same brand. Inclusion wins on conflict.
+    """
+    if not brand_include or not brand_exclude:
+        return list(brand_exclude or [])
+    inc_keys = {b.strip().lower().replace(" ", "") for b in expand_brands(brand_include)}
+    out: list[str] = []
+    for brand in brand_exclude:
+        variants = {v.strip().lower().replace(" ", "") for v in expand_brands([brand])}
+        if variants & inc_keys:
+            continue
+        out.append(brand)
+    return out
+
+
 def _merge_regex_brand_excludes(parsed: ParsedQuery, query: str) -> ParsedQuery:
     brand_excludes = list(parsed.brand_exclude or [])
     for brand in _regex_extract_brand_excludes(query):
         if brand not in brand_excludes:
             brand_excludes.append(brand)
+    # A brand cannot be both included and excluded.
+    brand_excludes = _drop_conflicting_excludes(parsed.brand_include, brand_excludes)
     if brand_excludes == list(parsed.brand_exclude or []):
         return parsed
     return ParsedQuery(
@@ -516,7 +513,7 @@ def _merge_regex_brand_excludes(parsed: ParsedQuery, query: str) -> ParsedQuery:
 # ---------------------------------------------------------------------------
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="解析用户 query 并生成检索输入。")
+    parser = argparse.ArgumentParser(description="Parse a user query into structured retrieval input")
     parser.add_argument("query")
     parser.add_argument("--db", type=Path, default=DEFAULT_DB_PATH)
     return parser.parse_args()
@@ -526,7 +523,7 @@ def main() -> None:
     logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
     args = parse_args()
     if args.db != DEFAULT_DB_PATH:
-        # CLI 覆盖默认 DB 时需要重置 taxonomy 缓存
+        # Reset taxonomy cache when the CLI overrides the default database.
         load_taxonomy.cache_clear()
         load_taxonomy(args.db)
     parsed = understand_query(args.query)
