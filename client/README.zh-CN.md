@@ -2,6 +2,18 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
+<p align="center">
+  <img alt="ByteDance 优秀项目" src="https://img.shields.io/badge/ByteDance-优秀项目-F5A623?style=flat&amp;logo=bytedance&amp;logoColor=white">
+</p>
+
+<p align="center">
+  <img src="../bytedance.svg" height="40">
+</p>
+
+<h3 align="center">
+  优秀项目奖
+</h3>
+
 该客户端是 CartPilot 的原生 SwiftUI 界面，支持流式导购对话、商品卡片、拍照找货、商品对比、购物车管理、偏好设置和本地会话历史。
 
 ## 环境要求

@@ -3,6 +3,7 @@
 [English](README.md) | [简体中文](README.zh-CN.md)
 
 <p align="center">
+  <img alt="ByteDance 优秀项目" src="https://img.shields.io/badge/ByteDance-优秀项目-F5A623?style=flat&amp;logo=bytedance&amp;logoColor=white">
   <a href="client/README.zh-CN.md"><img alt="iOS 17+" src="https://img.shields.io/badge/iOS-17%2B-000000?logo=apple&amp;logoColor=white"></a>
   <a href="#1-环境要求"><img alt="Python 3.10+" src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&amp;logoColor=white"></a>
   <a href="https://github.com/YufanPeter/E-commerce-AI-Agent/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/YufanPeter/E-commerce-AI-Agent?style=flat&amp;logo=github"></a>
@@ -11,9 +12,25 @@
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-22C55E"></a>
 </p>
 
+<p align="center">
+  <img src="bytedance.svg" height="35">
+</p>
+
+<h3 align="center">
+  🏆 字节跳动优秀项目奖
+</h3>
+
 CartPilot 是一款面向 iOS 的对话式智能导购。用户可以通过文字、语音或商品图片表达需求，并在同一段对话中完成推荐、条件细化、商品对比、详情查询和购物车管理。
 
 项目采用原生 SwiftUI 客户端、FastAPI 后端、可控的 `router → tool → composer` Agent、混合 RAG 检索与 SQLite 商品事实库。
+
+## Demo
+
+<p align="center">
+  <a href="demo_pic.png"><img src="demo_pic.png" alt="CartPilot iOS App 首页" width="200"></a>
+</p>
+
+<p align="center"><sub>CartPilot iOS App — 通过文字、语音或商品图片开启导购对话。</sub></p>
 
 ## 核心能力
 

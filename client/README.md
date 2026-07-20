@@ -2,6 +2,18 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
+<p align="center">
+  <img alt="ByteDance Outstanding Project" src="https://img.shields.io/badge/ByteDance-Outstanding_Project-F5A623?style=flat&amp;logo=bytedance&amp;logoColor=white">
+</p>
+
+<p align="center">
+  <img src="../bytedance.svg" height="40">
+</p>
+
+<h3 align="center">
+  Outstanding Project Award
+</h3>
+
 The client is a native SwiftUI interface for CartPilot. It supports streaming shopping conversations, product cards, visual search, product comparison, cart management, preferences, and local conversation history.
 
 ## Requirements

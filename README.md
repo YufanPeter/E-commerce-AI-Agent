@@ -3,6 +3,7 @@
 [English](README.md) | [简体中文](README.zh-CN.md)
 
 <p align="center">
+  <img alt="ByteDance Outstanding Project" src="https://img.shields.io/badge/ByteDance-Outstanding_Project-F5A623?style=flat&amp;logo=bytedance&amp;logoColor=white">
   <a href="client/README.md"><img alt="iOS 17+" src="https://img.shields.io/badge/iOS-17%2B-000000?logo=apple&amp;logoColor=white"></a>
   <a href="#1-requirements"><img alt="Python 3.10+" src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&amp;logoColor=white"></a>
   <a href="https://github.com/YufanPeter/E-commerce-AI-Agent/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/YufanPeter/E-commerce-AI-Agent?style=flat&amp;logo=github"></a>
@@ -11,9 +12,25 @@
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-22C55E"></a>
 </p>
 
+<p align="center">
+  <img src="bytedance.svg" height="35">
+</p>
+
+<h3 align="center">
+  Bytedance Outstanding Project Award
+</h3>
+
 CartPilot is a conversational shopping assistant for iOS. Users can describe a need by text or voice, upload a product photo, refine recommendations across multiple turns, compare products, inspect details, and manage a persistent cart in one conversation.
 
 The project uses a native SwiftUI client, a FastAPI backend, a controllable `router → tool → composer` agent, hybrid RAG retrieval, and SQLite-backed product facts.
+
+## Demo
+
+<p align="center">
+  <a href="demo_pic.png"><img src="demo_pic.png" alt="CartPilot iOS app home screen" width="300"></a>
+</p>
+
+<p align="center"><sub>CartPilot iOS app — start a shopping conversation with text, voice, or a product image.</sub></p>
 
 ## Core capabilities
 
