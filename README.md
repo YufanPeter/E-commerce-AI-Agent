@@ -2,6 +2,15 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
+<p align="center">
+  <a href="client/README.md"><img alt="iOS 17+" src="https://img.shields.io/badge/iOS-17%2B-000000?logo=apple&amp;logoColor=white"></a>
+  <a href="#1-requirements"><img alt="Python 3.10+" src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&amp;logoColor=white"></a>
+  <a href="https://github.com/YufanPeter/E-commerce-AI-Agent/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/YufanPeter/E-commerce-AI-Agent?style=flat&amp;logo=github"></a>
+  <a href="https://github.com/YufanPeter/E-commerce-AI-Agent/issues"><img alt="GitHub issues" src="https://img.shields.io/github/issues/YufanPeter/E-commerce-AI-Agent?logo=github"></a>
+  <img alt="Repository visitors" src="https://visitor-badge.laobi.icu/badge?page_id=YufanPeter.E-commerce-AI-Agent&amp;left_text=visitors&amp;left_color=%23595959&amp;right_color=%231283C3&amp;logo=github">
+  <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-22C55E"></a>
+</p>
+
 CartPilot is a conversational shopping assistant for iOS. Users can describe a need by text or voice, upload a product photo, refine recommendations across multiple turns, compare products, inspect details, and manage a persistent cart in one conversation.
 
 The project uses a native SwiftUI client, a FastAPI backend, a controllable `router → tool → composer` agent, hybrid RAG retrieval, and SQLite-backed product facts.
