@@ -1,0 +1,45 @@
+{
+  "_meta": {
+    "purpose": "Rerank 判别力评测标注集。针对『同类目大候选池里只有少数商品真正匹配某属性』的语义查询，验证 Rerank 相比纯向量距离排序，能否把真正匹配的商品排到更靠前。",
+    "label_source": "gold_ids 基于 backend/storage 商品文本（marketing_description / official_faq）中对该属性的客观陈述，逐条核对商品标题确认语义无误伤。",
+    "design": "评测时对 query 做『仅按 category 召回』（不加 sub_category 等细粒度硬过滤），保证候选池里混入大量同类目干扰项；再对同一召回池分别用距离排序与 Rerank 排序，比较 Recall@3 / MRR / NDCG。",
+    "metric": ["Recall@3", "MRR", "NDCG@5"]
+  },
+  "cases": [
+    {
+      "qid": "sem_anc_earphone",
+      "query": "有主动降噪功能的真无线耳机",
+      "category": "数码电子",
+      "pool_size": 25,
+      "gold_ids": ["p_digital_007", "p_digital_018"]
+    },
+    {
+      "qid": "sem_foldable_phone",
+      "query": "可折叠屏的大屏手机",
+      "category": "数码电子",
+      "pool_size": 25,
+      "gold_ids": ["p_digital_010", "p_digital_014"]
+    },
+    {
+      "qid": "sem_sugar_free_drink",
+      "query": "无糖的饮料，减脂期能喝的",
+      "category": "食品饮料",
+      "pool_size": 25,
+      "gold_ids": ["p_food_003", "p_food_014", "p_food_015"]
+    },
+    {
+      "qid": "sem_waterproof_outdoor",
+      "query": "防水的户外徒步鞋或背包",
+      "category": "服饰运动",
+      "pool_size": 25,
+      "gold_ids": ["p_clothes_014", "p_clothes_015", "p_clothes_018", "p_clothes_025"]
+    },
+    {
+      "qid": "sem_oil_control_beauty",
+      "query": "适合油皮、控油的护肤或彩妆",
+      "category": "美妆护肤",
+      "pool_size": 25,
+      "gold_ids": ["p_beauty_006", "p_beauty_008", "p_beauty_013", "p_beauty_014", "p_beauty_020", "p_beauty_021", "p_beauty_023", "p_beauty_024"]
+    }
+  ]
+}

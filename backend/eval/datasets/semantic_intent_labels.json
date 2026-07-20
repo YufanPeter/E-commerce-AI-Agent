@@ -1,0 +1,185 @@
+{
+  "_meta": {
+    "purpose": "RAG 语义检索价值评测标注集。用户用口语化意图提问，而商品文本用的是专业术语，二者存在明显词面差异（如『不怕长胖』vs『0糖』、『不怕淋湿』vs『防水』）。在这种 query 上对比关键词检索与语义向量检索，量化 RAG 的核心价值。",
+    "label_source": "gold_ids 基于 backend/storage 商品文本（title + marketing_description + official_faq）中对该属性的客观陈述，逐条核对商品标题确认语义无误伤。",
+    "design": "三档对比在【全库 100 商品】上裸检索（不加类目硬过滤）：① 关键词 BM25（字符 bigram）② 纯语义向量召回（ChromaRetriever, where=None）③ 完整 RAG pipeline（LLM 意图理解 + 类目硬过滤 + 向量 + Rerank）。指标 Recall@5 / MRR / NDCG@5。",
+    "note": "口语 query 刻意回避商品文本里的术语原词，以暴露关键词匹配的局限、体现语义检索的优势。"
+  },
+  "cases": [
+    {
+      "qid": "intent_anc_earphone",
+      "query": "通勤路上想隔绝外界吵闹声的无线耳机",
+      "term_in_doc": "降噪",
+      "category": "数码电子",
+      "gold_ids": ["p_digital_007", "p_digital_018"]
+    },
+    {
+      "qid": "intent_foldable_phone",
+      "query": "能合起来收进口袋、展开又是大屏的手机",
+      "term_in_doc": "折叠屏/内折",
+      "category": "数码电子",
+      "gold_ids": ["p_digital_010", "p_digital_014"]
+    },
+    {
+      "qid": "intent_sugar_free_drink",
+      "query": "减肥期间也能放心喝、不怕长胖的饮料",
+      "term_in_doc": "无糖/0糖/0卡",
+      "category": "食品饮料",
+      "gold_ids": ["p_food_003", "p_food_004", "p_food_014", "p_food_015", "p_food_024"]
+    },
+    {
+      "qid": "intent_waterproof_outdoor",
+      "query": "下雨天爬山徒步不怕淋湿的鞋子和背包",
+      "term_in_doc": "防水/GORE-TEX",
+      "category": "服饰运动",
+      "gold_ids": ["p_clothes_014", "p_clothes_015", "p_clothes_017", "p_clothes_018", "p_clothes_025"]
+    },
+    {
+      "qid": "intent_anti_aging_skincare",
+      "query": "熬夜之后用来淡化细纹、对抗衰老的护肤品",
+      "term_in_doc": "抗初老/淡纹/抗皱",
+      "category": "美妆护肤",
+      "gold_ids": ["p_beauty_001", "p_beauty_008", "p_beauty_009", "p_beauty_016", "p_beauty_024"]
+    },
+    {
+      "qid": "intent_phone_camera",
+      "query": "想买台拍照特别清楚、拍人像和远景都好看的手机",
+      "term_in_doc": "影像/长焦/摄影",
+      "category": "数码电子",
+      "gold_ids": ["p_digital_001", "p_digital_002", "p_digital_008", "p_digital_010", "p_digital_015", "p_digital_016", "p_digital_017"]
+    },
+    {
+      "qid": "intent_eye_protect_screen",
+      "query": "长时间看屏幕不想那么累眼睛的设备",
+      "term_in_doc": "护眼/防蓝光",
+      "category": "数码电子",
+      "gold_ids": ["p_digital_005", "p_digital_017"]
+    },
+    {
+      "qid": "intent_kids_snack",
+      "query": "适合给小孩当零食或加餐吃的",
+      "term_in_doc": "儿童/宝宝/孩子",
+      "category": "食品饮料",
+      "gold_ids": ["p_food_007", "p_food_017", "p_food_019"]
+    },
+    {
+      "qid": "intent_greasy_relief_drink",
+      "query": "吃火锅烧烤时配着喝、解油腻的饮料",
+      "term_in_doc": "解腻/佐餐",
+      "category": "食品饮料",
+      "gold_ids": ["p_food_003", "p_food_004", "p_food_008", "p_food_014", "p_food_015", "p_food_024"]
+    },
+    {
+      "qid": "intent_makeup_concealer",
+      "query": "能遮住瑕疵又持久不卡粉的底妆彩妆",
+      "term_in_doc": "遮瑕/持妆/卡粉",
+      "category": "美妆护肤",
+      "gold_ids": ["p_beauty_006", "p_beauty_013", "p_beauty_014", "p_beauty_015", "p_beauty_020"]
+    },
+    {
+      "qid": "intent_phone_telephoto",
+      "query": "想拍清楚很远的东西、放大也不糊的手机",
+      "term_in_doc": "潜望/长焦/光学变焦",
+      "category": "数码电子",
+      "gold_ids": ["p_digital_001", "p_digital_008", "p_digital_017"]
+    },
+    {
+      "qid": "intent_stylus_note",
+      "query": "能用笔在屏幕上写字、记东西的平板或电脑",
+      "term_in_doc": "触控笔/手写笔",
+      "category": "数码电子",
+      "gold_ids": ["p_digital_004", "p_digital_011", "p_digital_019", "p_digital_021", "p_digital_025"]
+    },
+    {
+      "qid": "intent_big_screen",
+      "query": "屏幕特别大、看剧打游戏更过瘾的设备",
+      "term_in_doc": "大屏",
+      "category": "数码电子",
+      "gold_ids": ["p_digital_003", "p_digital_005", "p_digital_009", "p_digital_010", "p_digital_011", "p_digital_014", "p_digital_021", "p_digital_024"]
+    },
+    {
+      "qid": "intent_quick_breakfast",
+      "query": "早上匆忙时能快速垫肚子吃的",
+      "term_in_doc": "早餐",
+      "category": "食品饮料",
+      "gold_ids": ["p_food_007", "p_food_008", "p_food_010", "p_food_016", "p_food_017"]
+    },
+    {
+      "qid": "intent_anti_slip_shoe",
+      "query": "在湿滑地面上走不容易摔倒的鞋",
+      "term_in_doc": "防滑/抓地",
+      "category": "服饰运动",
+      "gold_ids": ["p_clothes_009", "p_clothes_010", "p_clothes_012", "p_clothes_014"]
+    },
+    {
+      "qid": "intent_basketball_gear",
+      "query": "专门用来打篮球、实战场上穿的装备",
+      "term_in_doc": "篮球/实战/球场",
+      "category": "服饰运动",
+      "gold_ids": ["p_clothes_011", "p_clothes_012", "p_clothes_013", "p_clothes_023"]
+    },
+    {
+      "qid": "term_goretex",
+      "query": "想要 GORE-TEX 防水面料的徒步鞋",
+      "term_in_doc": "GORE-TEX/GTX",
+      "style": "exact_term",
+      "category": "服饰运动",
+      "gold_ids": ["p_clothes_014", "p_clothes_015"]
+    },
+    {
+      "qid": "term_bifida",
+      "query": "含二裂酵母成分的抗老精华",
+      "term_in_doc": "二裂酵母",
+      "style": "exact_term",
+      "category": "美妆护肤",
+      "gold_ids": ["p_beauty_001", "p_beauty_002"]
+    },
+    {
+      "qid": "term_niacinamide",
+      "query": "添加了烟酰胺的护肤品",
+      "term_in_doc": "烟酰胺",
+      "style": "exact_term",
+      "category": "美妆护肤",
+      "gold_ids": ["p_beauty_008", "p_beauty_009", "p_beauty_016", "p_beauty_018"]
+    },
+    {
+      "qid": "term_carbon_plate",
+      "query": "带碳板的跑鞋",
+      "term_in_doc": "碳板",
+      "style": "exact_term",
+      "category": "服饰运动",
+      "gold_ids": ["p_clothes_010", "p_clothes_014"]
+    },
+    {
+      "qid": "term_m_chip",
+      "query": "搭载 M4 或 M5 芯片的苹果设备",
+      "term_in_doc": "M4/M5",
+      "style": "exact_term",
+      "category": "数码电子",
+      "gold_ids": ["p_digital_006", "p_digital_012", "p_digital_013", "p_digital_020", "p_digital_024", "p_digital_025"]
+    },
+    {
+      "qid": "term_freeze_dried_coffee",
+      "query": "冻干速溶黑咖啡",
+      "term_in_doc": "冻干",
+      "style": "exact_term",
+      "category": "食品饮料",
+      "gold_ids": ["p_food_001", "p_food_022", "p_food_023"]
+    },
+    {
+      "qid": "term_spf50",
+      "query": "SPF50+ 高倍防晒",
+      "term_in_doc": "SPF50",
+      "style": "exact_term",
+      "category": "美妆护肤",
+      "gold_ids": ["p_beauty_006", "p_beauty_010", "p_beauty_023"]
+    },
+    {
+      "qid": "intent_windproof_outdoor",
+      "query": "防风防泼水、户外挡小雨的装备",
+      "term_in_doc": "防泼水/DWR/冲锋",
+      "category": "服饰运动",
+      "gold_ids": ["p_clothes_014", "p_clothes_017", "p_clothes_018", "p_clothes_024", "p_clothes_025"]
+    }
+  ]
+}

@@ -1,0 +1,73 @@
+{
+  "_meta": {
+    "purpose": "意图路由准确率评测标注集。每条样本标注了用户 query 在给定上下文下应被路由到的 7 类工具之一。",
+    "tools": ["recommend", "refine", "compare", "product_detail", "cart", "clarify", "fallback"],
+    "metric": "Accuracy（整体）+ per-tool Precision/Recall + 混淆矩阵",
+    "context_note": "refine/compare/product_detail 依赖上一轮已有推荐结果，样本通过 last_hits 注入模拟上下文。"
+  },
+  "cases": [
+    { "qid": "r01", "query": "推荐几款适合敏感肌的防晒", "expected": "recommend", "last_hits": [] },
+    { "qid": "r02", "query": "有没有500元以内的精华", "expected": "recommend", "last_hits": [] },
+    { "qid": "r03", "query": "我想买一台轻薄的笔记本电脑", "expected": "recommend", "last_hits": [] },
+    { "qid": "r04", "query": "帮我找找适合跑步的运动鞋", "expected": "recommend", "last_hits": [] },
+    { "qid": "r05", "query": "有什么好喝的咖啡", "expected": "recommend", "last_hits": [] },
+    { "qid": "r06", "query": "想给妈妈买套护肤品", "expected": "recommend", "last_hits": [] },
+
+    { "qid": "rf01", "query": "再便宜点的", "expected": "refine", "last_hits": [{"product_id": "p_beauty_001", "title": "雅诗兰黛小棕瓶精华"}, {"product_id": "p_beauty_002", "title": "兰蔻菁纯精华"}] },
+    { "qid": "rf02", "query": "换个品牌看看", "expected": "refine", "last_hits": [{"product_id": "p_clothes_007", "title": "Nike Pegasus 41"}, {"product_id": "p_clothes_008", "title": "阿迪达斯跑鞋"}] },
+    { "qid": "rf03", "query": "还有别的吗", "expected": "refine", "last_hits": [{"product_id": "p_digital_011", "title": "小米平板"}, {"product_id": "p_digital_019", "title": "vivo Pad"}] },
+    { "qid": "rf04", "query": "要轻一点的", "expected": "refine", "last_hits": [{"product_id": "p_digital_004", "title": "华为 MateBook 14"}, {"product_id": "p_digital_020", "title": "MacBook Air"}] },
+    { "qid": "rf05", "query": "阿迪达斯的", "expected": "refine", "last_hits": [{"product_id": "p_clothes_007", "title": "Nike Pegasus 41"}, {"product_id": "p_clothes_010", "title": "特步竞速跑鞋"}] },
+    { "qid": "rf06", "query": "预算1000以内", "expected": "refine", "last_hits": [{"product_id": "p_clothes_011", "title": "Nike LeBron 篮球鞋"}, {"product_id": "p_clothes_012", "title": "安踏KT9"}] },
+
+    { "qid": "c01", "query": "这两个有什么区别", "expected": "compare", "last_hits": [{"product_id": "p_digital_001", "title": "iPhone 17 Pro"}, {"product_id": "p_digital_008", "title": "小米17 Ultra"}] },
+    { "qid": "c02", "query": "第一个和第二个哪个更好", "expected": "compare", "last_hits": [{"product_id": "p_beauty_001", "title": "雅诗兰黛精华"}, {"product_id": "p_beauty_002", "title": "兰蔻精华"}] },
+    { "qid": "c03", "query": "对比一下这几款", "expected": "compare", "last_hits": [{"product_id": "p_clothes_007", "title": "Nike跑鞋"}, {"product_id": "p_clothes_008", "title": "阿迪跑鞋"}, {"product_id": "p_clothes_009", "title": "HOKA跑鞋"}] },
+    { "qid": "c04", "query": "iPhone 和华为那个对比下", "expected": "compare", "last_hits": [{"product_id": "p_digital_001", "title": "iPhone 17 Pro"}, {"product_id": "p_digital_002", "title": "华为 Pura 90 Pro"}] },
+
+    { "qid": "pd01", "query": "第二个详细说说", "expected": "product_detail", "last_hits": [{"product_id": "p_beauty_006", "title": "巴黎欧莱雅防晒"}, {"product_id": "p_beauty_010", "title": "安耐晒防晒"}] },
+    { "qid": "pd02", "query": "这款敏感肌能用吗", "expected": "product_detail", "last_hits": [{"product_id": "p_beauty_007", "title": "薇诺娜面霜"}] },
+    { "qid": "pd03", "query": "第一个续航怎么样", "expected": "product_detail", "last_hits": [{"product_id": "p_digital_004", "title": "华为 MateBook 14"}, {"product_id": "p_digital_020", "title": "MacBook Air"}] },
+    { "qid": "pd04", "query": "这个有几个颜色", "expected": "product_detail", "last_hits": [{"product_id": "p_clothes_001", "title": "优衣库T恤"}] },
+
+    { "qid": "ct01", "query": "把第一个加入购物车", "expected": "cart", "last_hits": [{"product_id": "p_beauty_001", "title": "雅诗兰黛精华"}] },
+    { "qid": "ct02", "query": "加到购物车吧", "expected": "cart", "last_hits": [{"product_id": "p_digital_001", "title": "iPhone 17 Pro"}] },
+    { "qid": "ct03", "query": "看看我的购物车", "expected": "cart", "last_hits": [] },
+    { "qid": "ct04", "query": "把第二个删掉", "expected": "cart", "last_hits": [] },
+    { "qid": "ct05", "query": "改成两件", "expected": "cart", "last_hits": [] },
+    { "qid": "ct06", "query": "结算吧", "expected": "cart", "last_hits": [] },
+
+    { "qid": "cl01", "query": "随便看看", "expected": "clarify", "last_hits": [] },
+    { "qid": "cl02", "query": "有啥好东西", "expected": "clarify", "last_hits": [] },
+    { "qid": "cl03", "query": "给我推荐点东西", "expected": "clarify", "last_hits": [] },
+
+    { "qid": "fb01", "query": "今天天气怎么样", "expected": "fallback", "last_hits": [] },
+    { "qid": "fb02", "query": "讲个笑话", "expected": "fallback", "last_hits": [] },
+    { "qid": "fb03", "query": "你是谁开发的", "expected": "fallback", "last_hits": [] },
+
+    { "qid": "r07", "query": "想入手一台拍照好的手机", "expected": "recommend", "last_hits": [] },
+    { "qid": "r08", "query": "夏天穿的速干T恤有哪些", "expected": "recommend", "last_hits": [] },
+    { "qid": "r09", "query": "送女朋友的口红推荐一下", "expected": "recommend", "last_hits": [] },
+    { "qid": "r10", "query": "有没有适合露营带的零食", "expected": "recommend", "last_hits": [] },
+
+    { "qid": "rf07", "query": "有没有更轻的", "expected": "refine", "last_hits": [{"product_id": "p_digital_020", "title": "MacBook Air"}, {"product_id": "p_digital_022", "title": "ThinkPad X1"}] },
+    { "qid": "rf08", "query": "要白色的", "expected": "refine", "last_hits": [{"product_id": "p_clothes_001", "title": "优衣库T恤"}, {"product_id": "p_clothes_002", "title": "优衣库速干T恤"}] },
+    { "qid": "rf09", "query": "续航更久一点的", "expected": "refine", "last_hits": [{"product_id": "p_digital_001", "title": "iPhone 17 Pro"}, {"product_id": "p_digital_008", "title": "小米17 Ultra"}] },
+
+    { "qid": "c05", "query": "这几款哪个性价比高", "expected": "compare", "last_hits": [{"product_id": "p_digital_011", "title": "小米平板"}, {"product_id": "p_digital_019", "title": "vivo Pad"}, {"product_id": "p_digital_025", "title": "iPad Air"}] },
+    { "qid": "c06", "query": "安耐晒和理肤泉防晒比一下", "expected": "compare", "last_hits": [{"product_id": "p_beauty_010", "title": "安耐晒防晒"}, {"product_id": "p_beauty_023", "title": "理肤泉防晒"}] },
+
+    { "qid": "pd05", "query": "这款保质期多久", "expected": "product_detail", "last_hits": [{"product_id": "p_food_001", "title": "三顿半咖啡"}] },
+    { "qid": "pd06", "query": "第三个适合油痘肌吗", "expected": "product_detail", "last_hits": [{"product_id": "p_beauty_005", "title": "科颜氏精华"}, {"product_id": "p_beauty_009", "title": "珀莱雅精华"}, {"product_id": "p_beauty_018", "title": "The Ordinary烟酰胺"}] },
+
+    { "qid": "ct07", "query": "把这款加两件到购物车", "expected": "cart", "last_hits": [{"product_id": "p_clothes_001", "title": "优衣库T恤"}] },
+    { "qid": "ct08", "query": "购物车里那个换成大杯", "expected": "cart", "last_hits": [] },
+    { "qid": "ct09", "query": "清空购物车", "expected": "cart", "last_hits": [] },
+
+    { "qid": "cl04", "query": "我也不知道想买啥", "expected": "clarify", "last_hits": [] },
+    { "qid": "cl05", "query": "看看有什么", "expected": "clarify", "last_hits": [] },
+
+    { "qid": "fb04", "query": "帮我写一首诗", "expected": "fallback", "last_hits": [] },
+    { "qid": "fb05", "query": "明天股市会涨吗", "expected": "fallback", "last_hits": [] }
+  ]
+}
