@@ -77,7 +77,7 @@ def get_products(ids: str = Query(..., description="Comma-separated product ids"
 
 @router.post("/products/{product_id}/pitch")
 def product_pitch(product_id: str) -> dict[str, str]:
-    """单品推荐理由：走与导购 recommend 相同的 composer，只返回一条不含价格的 description。"""
+    """Compose one price-free recommendation description for a product."""
     detail = store.get_product_detail(product_id)
     if detail is None:
         raise HTTPException(

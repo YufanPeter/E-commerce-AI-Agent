@@ -1,13 +1,13 @@
 PRAGMA foreign_keys = ON;
 PRAGMA journal_mode = WAL;
 
--- 电商导购 MVP SQLite schema。
--- SQLite 负责确定性商品事实、详情页结构化内容、SKU 价格和购物车。
--- Chroma 负责长文本语义召回；两者通过 product_id + source_index 对齐。
+-- SQLite schema for the shopping-guide MVP.
+-- SQLite stores deterministic product facts, structured detail content, SKU prices, and carts.
+-- Chroma handles long-text semantic retrieval; product_id and source_index align records across both stores.
 
--- products：商品主表，保存商品级稳定事实。
--- base_price 保留原始 JSON 中的基础价，适合展示和粗排序；预算 hard filter
--- 应优先使用 product_skus.price 或 product_price_ranges.min_price。
+-- products: primary table for stable product-level facts.
+-- base_price preserves the source JSON value for display and coarse sorting. Hard budget filters
+-- should prefer product_skus.price or product_price_ranges.min_price.
 CREATE TABLE IF NOT EXISTS products (
     product_id   TEXT PRIMARY KEY,
     title        TEXT NOT NULL,
@@ -25,8 +25,8 @@ CREATE TABLE IF NOT EXISTS products (
     CHECK (image_path IS NOT NULL OR image_url IS NOT NULL)
 );
 
--- product_skus：SKU 表，是规格、SKU 价格和购物车结算的真实来源。
--- “500 元以内”这类预算过滤应判断是否存在满足价格条件的 SKU。
+-- product_skus: source of truth for variants, SKU prices, and cart settlement.
+-- Budget filters should check whether at least one SKU satisfies the price constraint.
 CREATE TABLE IF NOT EXISTS product_skus (
     sku_id          TEXT PRIMARY KEY,
     product_id      TEXT NOT NULL,
@@ -41,8 +41,8 @@ CREATE TABLE IF NOT EXISTS product_skus (
     CHECK (json_valid(properties_json))
 );
 
--- product_descriptions：商品营销描述/卖点/使用建议。
--- 详情页直接读取本表；Chroma 中的 marketing chunk 也来自同一份文本。
+-- product_descriptions: marketing descriptions, selling points, and usage guidance.
+-- Product detail pages read this table directly; Chroma marketing chunks use the same text.
 CREATE TABLE IF NOT EXISTS product_descriptions (
     product_id            TEXT PRIMARY KEY,
     marketing_description TEXT NOT NULL DEFAULT '',
@@ -51,8 +51,8 @@ CREATE TABLE IF NOT EXISTS product_descriptions (
     FOREIGN KEY (product_id) REFERENCES products(product_id) ON DELETE CASCADE
 );
 
--- product_faqs：官方 FAQ 明细表。
--- source_index 与 Chroma chunk_id 中的 faq index 对齐，用于召回后回表。
+-- product_faqs: official FAQ entries.
+-- source_index aligns with the FAQ index in Chroma chunk IDs for relational lookup after retrieval.
 CREATE TABLE IF NOT EXISTS product_faqs (
     faq_id       INTEGER PRIMARY KEY AUTOINCREMENT,
     product_id   TEXT NOT NULL,
@@ -65,8 +65,8 @@ CREATE TABLE IF NOT EXISTS product_faqs (
     UNIQUE (product_id, source_index)
 );
 
--- product_reviews：用户评价明细表。
--- 供商品详情页展示、评价统计、风险提示和 Chroma review chunk 回表使用。
+-- product_reviews: individual customer reviews.
+-- Used by product detail views, review statistics, risk notices, and lookups for Chroma review chunks.
 CREATE TABLE IF NOT EXISTS product_reviews (
     review_id    INTEGER PRIMARY KEY AUTOINCREMENT,
     product_id   TEXT NOT NULL,
@@ -82,7 +82,7 @@ CREATE TABLE IF NOT EXISTS product_reviews (
     UNIQUE (product_id, source_index)
 );
 
--- users：演示用户表，为购物车和后续偏好/会话扩展预留用户归属。
+-- users: demo user table that provides ownership for carts and future preference or session features.
 CREATE TABLE IF NOT EXISTS users (
     user_id    TEXT PRIMARY KEY,
     nickname   TEXT NOT NULL DEFAULT 'demo_user',
@@ -90,7 +90,7 @@ CREATE TABLE IF NOT EXISTS users (
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
--- cart_items：演示购物车表，保存用户选择的具体 SKU、数量和下单价格快照。
+-- cart_items: demo cart table storing the selected SKU, quantity, and purchase-price snapshot.
 CREATE TABLE IF NOT EXISTS cart_items (
     cart_item_id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id      TEXT NOT NULL,
@@ -109,8 +109,8 @@ CREATE TABLE IF NOT EXISTS cart_items (
     UNIQUE (user_id, sku_id)
 );
 
--- product_price_ranges：商品价格区间视图。
--- 商品卡片展示“xx 元起”和预算过滤推荐优先使用本视图的 min_price。
+-- product_price_ranges: product price-range view.
+-- Product-card starting prices and budget-filtered recommendations should prefer this view's min_price.
 CREATE VIEW IF NOT EXISTS product_price_ranges AS
 SELECT
     product_id,

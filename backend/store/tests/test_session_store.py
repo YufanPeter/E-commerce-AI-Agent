@@ -12,7 +12,7 @@ from store.session_store import SqliteSessionStore
 
 @pytest.fixture
 def store(tmp_path):
-    # agent_sessions 懒建表，所以空 DB 文件即可
+    # The agent_sessions table is created lazily, so an empty database file is sufficient.
     db = tmp_path / "test.sqlite3"
     sqlite3.connect(db).close()
     return SqliteSessionStore(db_path=db)
@@ -24,7 +24,7 @@ def test_save_and_reload_history(store, tmp_path):
     sess.add_assistant("推荐几款")
     store.save(sess)
 
-    # 新建 store 实例 = 模拟后端重启
+    # A new store instance simulates a backend restart.
     reloaded_store = SqliteSessionStore(db_path=store.db_path)
     loaded = reloaded_store.get_or_create("s1")
     assert [(m.role, m.content) for m in loaded.history] == [
@@ -55,7 +55,7 @@ def test_reset_removes_session(store):
     sess.add_user("hi")
     store.save(sess)
     store.reset("s3")
-    # reset 后再取应是空会话
+    # Reading after reset should return an empty session.
     loaded = SqliteSessionStore(db_path=store.db_path).get_or_create("s3")
     assert loaded.history == []
 
@@ -63,7 +63,7 @@ def test_reset_removes_session(store):
 def test_save_handles_unserializable_memory_gracefully(store):
     sess = store.get_or_create("s4")
     sess.set("bad", object())  # 不可 JSON 序列化
-    # 不应抛异常；memory 降级存空
+    # This should not raise; the in-memory fallback stores an empty state.
     store.save(sess)
     loaded = SqliteSessionStore(db_path=store.db_path).get_or_create("s4")
     assert loaded.working_memory == {}

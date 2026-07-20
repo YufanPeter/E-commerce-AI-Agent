@@ -42,7 +42,7 @@ class _FakeResponse:
 
 
 class _FakeClient:
-    """模拟智谱 HTTP rerank：记录请求、按构造时给定的 payload 返回。"""
+    """Fake HTTP reranker that records requests and returns its configured payload."""
 
     def __init__(self, payload):
         self.payload = payload
@@ -63,7 +63,7 @@ def test_api_reranker_sends_query_and_documents_and_sorts_by_score():
         base_url="https://open.bigmodel.cn/api/paas/v4/rerank",
     ).rerank("轻量跑鞋", chunks)
 
-    # 分数与输入同序对齐后按降序排序：b(0.9) 在前。
+    # Align scores with input order and sort descending, placing b (0.9) first.
     assert [item.product_id for item in ranked] == ["b", "a"]
     call = client.calls[0]
     assert call["url"] == "https://open.bigmodel.cn/api/paas/v4/rerank"

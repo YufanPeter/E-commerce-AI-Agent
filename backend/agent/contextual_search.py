@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-"""多轮导购里的上下文检索计划。
+"""Context-aware retrieval plans for multi-turn shopping conversations.
 
-普通 refine 是在上一轮同一品类里继续筛；但用户也会说“搭配一件上衣”
-或“再看看运动鞋”。这两类本轮目标已经变了，上一轮品类只能作为语境，
-不能进入检索词或硬过滤，否则就会出现“想看运动上衣却继续返回瑜伽裤”。
+An ordinary refinement keeps filtering within the previous category, but requests
+such as “搭配一件上衣” or “再看看运动鞋” change the current target. The previous
+category should then provide context only, not a retrieval term or hard filter.
 
-本模块先做一个轻量、确定性的第一阶段：用小型 taxonomy/别名表识别
-complement（搭配/互补）和 pivot（换目标品类），产出检索计划。
+This module provides a lightweight deterministic first stage. A small taxonomy and
+alias table identifies complement and category-pivot requests and emits a search plan.
 """
 
 from dataclasses import dataclass, field
@@ -21,7 +21,7 @@ SearchMode = Literal["complement", "pivot"]
 
 @dataclass(frozen=True)
 class ContextualSearchPlan:
-    """一次跨品类/搭配式追问的结构化计划。"""
+    """Structured plan for a cross-category or complementary follow-up."""
 
     mode: SearchMode
     target_query: str
@@ -45,7 +45,7 @@ class ContextualSearchPlan:
         }
 
 
-# 用户自然说法 → 库中真实子类目。值可以覆盖多个真实子类目。
+# Natural-language aliases mapped to one or more catalog subcategories.
 _TARGET_ALIASES: dict[str, list[str]] = {
     "运动上衣": ["短袖T恤", "速干T恤", "卫衣"],
     "上衣": ["短袖T恤", "速干T恤", "卫衣"],
@@ -96,10 +96,11 @@ def detect_contextual_plan(
     query: str,
     base: ParsedQuery | None,
 ) -> ContextualSearchPlan | None:
-    """识别 complement / pivot 追问。
+    """Detect complement or category-pivot follow-ups.
 
-    返回 None 表示继续走原来的 recommend/refine 逻辑。
-    只在能识别出“本轮目标词”且该目标不同于上一轮子类目时返回计划。
+    Return ``None`` to continue through the regular recommend/refine path. A plan is
+    returned only when the current target is recognized and differs from the prior
+    subcategory.
     """
     text = (query or "").strip()
     if not text:
@@ -126,8 +127,8 @@ def detect_contextual_plan(
             relation="搭配",
         )
 
-    # 有上一轮上下文，并且本轮出现一个不同于旧品类的目标词：通常是换目标品类。
-    # 加 pivot 触发词能降低误伤；短输入如“运动上衣”也算用户在当前上下文里转向。
+    # A new target under an existing context usually means a category pivot. Trigger
+    # words reduce false positives; short inputs such as "sports top" also count.
     if base is not None and (_has_any(text, _PIVOT_WORDS) or _is_short_target_only(text, target_term)):
         return ContextualSearchPlan(
             mode="pivot",
@@ -147,7 +148,7 @@ def _find_target_term(
     text: str,
     base: ParsedQuery | None,
 ) -> tuple[str, list[str]] | None:
-    """在 query 里找目标词，优先最长别名，并跳过上一轮相同子类目。"""
+    """Find the longest target alias, excluding the previous subcategory."""
     anchor_sub = base.sub_category if base else None
     for term in sorted(_TARGET_ALIASES, key=len, reverse=True):
         if term not in text:

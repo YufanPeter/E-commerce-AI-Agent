@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""将商品 CDN 图片 URL manifest 导入 SQLite。"""
+"""Import the product CDN image URL manifest into SQLite."""
 
 from __future__ import annotations
 
@@ -17,24 +17,24 @@ DEFAULT_IMAGE_MANIFEST = ROOT_DIR / "backend" / "cdn" / "image_manifest.json"
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="根据 product_id -> image URL manifest 更新 products.image_url。"
+        description="Update products.image_url from a product-ID-to-image-URL manifest"
     )
     parser.add_argument(
         "--db",
         type=Path,
         default=DEFAULT_DB_PATH,
-        help=f"SQLite 数据库路径。默认：{DEFAULT_DB_PATH}",
+        help=f"SQLite database path (default: {DEFAULT_DB_PATH})",
     )
     parser.add_argument(
         "--image-manifest",
         type=Path,
         default=DEFAULT_IMAGE_MANIFEST,
-        help=f"商品 CDN URL manifest。默认：{DEFAULT_IMAGE_MANIFEST}",
+        help=f"Product CDN URL manifest (default: {DEFAULT_IMAGE_MANIFEST})",
     )
     parser.add_argument(
         "--strict",
         action="store_true",
-        help="如果 manifest 中包含数据库不存在的 product_id，则直接失败。",
+        help="Fail when the manifest contains a product ID absent from the database",
     )
     return parser.parse_args()
 

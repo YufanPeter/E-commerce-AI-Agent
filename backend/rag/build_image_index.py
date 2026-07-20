@@ -1,15 +1,13 @@
 from __future__ import annotations
 
-"""离线构建商品图视觉索引。
+"""Build the product-image visual index offline.
 
-读取 ``backend/cdn/image_manifest.json``（``{product_id: 图片URL}``），逐张调用
-多模态 embedding 编码成向量，写到 ``backend/storage/image_index.json``
-（``{product_id: vector}``）。这是「拍照找货」视觉重排的离线产物，只需在
-数据/模型变更时重跑一次。
+Read ``backend/cdn/image_manifest.json``, encode each image with the multimodal
+embedding service, and write ``backend/storage/image_index.json``. Rebuild this visual
+reranking artifact when product images or the embedding model change.
 
-运行：
+Usage:
     cd backend && python -m rag.build_image_index
-    # 或指定增量/全量
     python -m rag.build_image_index --force
 """
 
@@ -47,13 +45,13 @@ def build_index(
     force: bool = False,
     max_workers: int = 8,
 ) -> dict[str, list[float]]:
-    """构建（或增量补全）视觉索引并落盘，返回完整索引字典。"""
+    """Build or incrementally complete the visual index and persist it."""
     manifest = _load_manifest(manifest_path)
     existing = {} if force else _load_existing(out_path)
 
     todo = {pid: url for pid, url in manifest.items() if pid not in existing}
     logger.info(
-        "视觉索引：manifest %d 条，已存在 %d 条，本次需编码 %d 条",
+        "Visual index: %d manifest entries, %d existing, %d to encode",
         len(manifest), len(existing), len(todo),
     )
 
@@ -61,8 +59,8 @@ def build_index(
         pid, url = item
         try:
             return pid, embed_image(url)
-        except Exception as exc:  # noqa: BLE001 - 单条失败不应中断整批
-            logger.warning("商品 %s 图片编码失败：%r", pid, exc)
+        except Exception as exc:  # noqa: BLE001 - one image must not stop the batch
+            logger.warning("Image encoding failed for product %s: %r", pid, exc)
             return pid, None
 
     result = dict(existing)
@@ -75,18 +73,18 @@ def build_index(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w", encoding="utf-8") as f:
         json.dump(result, f)
-    logger.info("视觉索引已写入 %s（共 %d 条）", out_path, len(result))
+    logger.info("Visual index written to %s with %d entries", out_path, len(result))
     return result
 
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
-    parser = argparse.ArgumentParser(description="构建商品图视觉索引")
+    parser = argparse.ArgumentParser(description="Build the product-image visual index")
     parser.add_argument(
-        "--force", action="store_true", help="忽略已有索引，全量重建"
+        "--force", action="store_true", help="Ignore the existing index and rebuild all"
     )
     parser.add_argument(
-        "--workers", type=int, default=8, help="并发编码线程数"
+        "--workers", type=int, default=8, help="Number of concurrent encoding workers"
     )
     args = parser.parse_args()
     build_index(force=args.force, max_workers=args.workers)

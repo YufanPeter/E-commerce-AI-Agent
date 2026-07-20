@@ -1,23 +1,23 @@
 from __future__ import annotations
 
-"""会话状态：长期 Preference 挂载 + session history + working memory。
+"""Session state combining long-term preferences, history, and working memory.
 
-V1 记忆分层：
+V1 memory layers:
 
     Preference Core Memory
-        - 每个 user_id 一份，跨 session 留存
-        - 由 API 层加载后挂到 user_profile，本类不负责持久化长期偏好
+        - One record per user ID, retained across sessions.
+        - Loaded by the API into ``user_profile``; this class does not persist it.
 
-    工作记忆 (working_memory)
-        - 当前 turn 内 tool/composer 都能读写的临时字典
-        - 典型字段：last_parsed_query（RefineTool 用）、last_hits
+    Working memory
+        - A temporary dictionary shared by tools and the composer.
+        - Typical fields include ``last_parsed_query`` and ``last_hits``.
 
-    Session 记忆 (history + session_summary)
-        - 当前 session 的对话原文，滑动窗口截断
-        - 让 router 知道"再便宜点"指什么、"对比第一个和第二个"指哪些商品
-        - 超出窗口的旧消息压成轻量 session_summary，只服务当前 session
+    Session memory
+        - Raw conversation messages retained in a sliding window.
+        - Gives the router enough context to resolve follow-up references.
+        - Older messages are compressed into a lightweight session-only summary.
 
-注意：Phase 1 不做并发安全；FastAPI 单 worker / 每 session 串行调用足够。
+Phase 1 assumes one FastAPI worker and serialized calls per session.
 """
 
 from dataclasses import dataclass, field
@@ -26,34 +26,30 @@ from uuid import uuid4
 
 
 # ---------------------------------------------------------------------------
-# 工作记忆的类型契约
+# Working-memory type contract
 # ---------------------------------------------------------------------------
 #
-# working_memory 之前是个裸 dict[str, Any]，键名只在各 tool 的注释里口口相传，
-# 改一个键名就会静默断链（refine 读不到 recommend 写的东西）。这里用 TypedDict
-# 把"跨 turn 复用的状态"固化成一份**单一可信契约**：键名、类型、含义集中可查，
-# IDE / 类型检查器也能在写错键时报警。
+# ``working_memory`` was previously an untyped dictionary whose keys were documented
+# only inside individual tools. A renamed key could silently break the chain. TypedDict
+# provides one discoverable contract for names, types, and meanings.
 #
-# 注意：TypedDict 只是"类型视图"，运行时仍是普通 dict——保持与现有 set/get
-# 完全兼容，不引入任何新依赖（这正是选"轻量 State"而非 LangGraph 的原因）。
+# TypedDict is a type-level view only; runtime values remain ordinary dictionaries,
+# preserving compatibility with set/get and adding no dependency.
 
 
 class HitRef(TypedDict):
-    """上一轮返回给用户的商品引用（精简，仅够 refine/compare/detail 回指）。"""
+    """Compact product reference retained from the previous turn."""
 
     product_id: str
     title: str
 
 
 class WorkingMemory(TypedDict, total=False):
-    """跨 turn 复用的工作记忆。所有键都可选（total=False）。
+    """Optional working-memory fields reused across turns.
 
-    canonical keys：
-        last_parsed_query: 上一轮**结构化**检索意图（ParsedQuery.to_dict()）。
-                           refine 在它之上做无损约束叠加——这正是"跑鞋→Adidas"
-                           不丢品类的关键。
-        last_hits:         上一轮返回的商品引用列表，供 compare/product_detail
-                           把"第一个/这款"映射回 product_id。
+    ``last_parsed_query`` is the previous structured retrieval intent and provides the
+    base for lossless refinement. ``last_hits`` contains compact references used by
+    compare and product-detail tools to resolve ordinal or demonstrative references.
     """
 
     last_parsed_query: dict[str, Any]
@@ -62,14 +58,13 @@ class WorkingMemory(TypedDict, total=False):
     summary_updated_at_turn: int
 
 
-# 历史滑窗大小：保留最近 N 条 user/assistant 消息。
-# 超过则丢弃最旧的，避免 token 累积。10 条足够覆盖"3 轮往返"+ 系统消息。
+# Retain the latest N user/assistant messages to bound context-token growth.
 DEFAULT_HISTORY_WINDOW = 10
 
 
 @dataclass
 class Message:
-    """对话消息。role 与 OpenAI chat 约定一致，方便直接喂给 LLM。"""
+    """Conversation message using the standard chat role convention."""
 
     role: str          # "user" / "assistant" / "system"
     content: str
@@ -77,14 +72,13 @@ class Message:
 
 @dataclass
 class AgentSession:
-    """单个用户会话。"""
+    """State for one user conversation."""
 
     session_id: str = field(default_factory=lambda: uuid4().hex)
     user_id: str | None = None
     user_profile: dict[str, Any] = field(default_factory=dict)
     history: list[Message] = field(default_factory=list)
-    # 工作记忆：跨 turn 累积的轻量上下文。键名见各 tool 文档。
-    # 典型键：last_parsed_query / last_hits / pinned_filters
+    # Lightweight context accumulated across turns; see individual tool contracts.
     working_memory: dict[str, Any] = field(default_factory=dict)
     history_window: int = DEFAULT_HISTORY_WINDOW
 
@@ -96,14 +90,14 @@ class AgentSession:
 
     def _append(self, msg: Message) -> None:
         self.history.append(msg)
-        # 滑窗只在 user/assistant 上生效，system 消息不在这里维护。
+        # This class retains user/assistant messages only; system messages live elsewhere.
         if len(self.history) > self.history_window:
             overflow = self.history[: len(self.history) - self.history_window]
             self._update_session_summary(overflow)
             self.history = self.history[-self.history_window:]
 
     def recent_text(self, n: int = 4) -> str:
-        """取最近 n 轮文本，给 router / composer 当上下文用。"""
+        """Return recent text for router and composer context."""
         recent = self.history[-n:]
         lines = []
         summary = self.working_memory.get("session_summary")
@@ -125,7 +119,7 @@ class AgentSession:
             if content:
                 snippets.append(f"{prefix}:{content[:80]}")
         combined = "；".join([s for s in [existing, *snippets] if s])
-        # 轻量确定性摘要：不调用 LLM，避免 session 持久化路径引入额外失败点。
+        # Use a deterministic summary to avoid adding an LLM failure point to persistence.
         self.working_memory["session_summary"] = combined[-500:]
         self.working_memory["summary_updated_at_turn"] = (
             int(self.working_memory.get("summary_updated_at_turn") or 0) + len(overflow)
@@ -137,18 +131,17 @@ class AgentSession:
     def get(self, key: str, default: Any = None) -> Any:
         return self.working_memory.get(key, default)
 
-    # ---- 工作记忆的类型化读写（围绕 WorkingMemory 契约，避免裸键名手滑）----
+    # Typed accessors around the WorkingMemory contract.
 
     def remember_search(self, parsed_dict: dict[str, Any], hits: list[HitRef]) -> None:
-        """recommend 每次成功检索后调用：把本轮结构化意图 + 命中写进工作记忆，
-        供下一轮 refine/compare/product_detail 复用。"""
+        """Store the successful search intent and hits for subsequent tools."""
         self.working_memory["last_parsed_query"] = parsed_dict
         self.working_memory["last_hits"] = hits
 
     def recall_parsed(self) -> dict[str, Any] | None:
-        """取上一轮结构化检索意图（ParsedQuery.to_dict()），没有则 None。"""
+        """Return the previous structured retrieval intent, if any."""
         return self.working_memory.get("last_parsed_query")
 
     def recall_hits(self) -> list[HitRef]:
-        """取上一轮命中的商品引用，没有则空列表。"""
+        """Return product references from the previous turn."""
         return self.working_memory.get("last_hits") or []

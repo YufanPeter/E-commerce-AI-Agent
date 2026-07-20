@@ -1,15 +1,13 @@
 from __future__ import annotations
 
-"""FastAPI 应用：暴露 Agent 的 HTTP / SSE 接口。
+"""FastAPI application exposing the agent over HTTP and SSE.
 
-端点：
-    POST /chat          非流式，一次性返回 JSON
-    POST /chat/stream   SSE 流式，事件序列：meta / tool_result / token / done / error
-    GET  /health        健康检查
+Endpoints:
+    ``POST /chat`` returns one JSON response.
+    ``POST /chat/stream`` streams meta, tool result, token, done, or error events.
+    ``GET /health`` reports health.
 
-会话管理：
-    极简实现——客户端传 session_id（uuid），服务端用进程内字典存。
-    单 worker 部署够用；要横向扩展时换 Redis。
+Sessions are identified by a client-provided UUID and persisted through the session store.
 """
 
 import asyncio
@@ -19,7 +17,7 @@ import os
 import threading
 from typing import Any
 
-# 必须在 import chromadb / sentence_transformers 之前完成环境设置
+# Configure the environment before importing Chroma or sentence-transformers.
 os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
 os.environ.setdefault("CHROMA_TELEMETRY_IMPL", "none")
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
@@ -40,19 +38,19 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Pydantic 请求/响应模型
+# Pydantic request and response models.
 # ---------------------------------------------------------------------------
 
 class ChatRequest(BaseModel):
-    query: str = Field(..., description="用户输入的自然语言 query")
-    session_id: str | None = Field(None, description="会话 id；不传则服务端新建")
-    user_id: str | None = Field(None, description="用户 id；用于加载跨会话 Preference 核心记忆")
+    query: str = Field(..., description="Natural-language user query")
+    session_id: str | None = Field(None, description="Session ID; omitted to create one")
+    user_id: str | None = Field(None, description="User ID for cross-session preferences")
     image_base64: str | None = Field(
         None,
-        description="拍照找货：图片的 base64（可带 data:image/...;base64, 前缀，也可纯 base64）",
+        description="Image-search base64 data, with or without a data-URI prefix",
     )
     image_url: str | None = Field(
-        None, description="拍照找货：图片的远程 URL（与 image_base64 二选一）"
+        None, description="Remote image-search URL; mutually exclusive with image_base64"
     )
 
 
@@ -65,13 +63,13 @@ class ChatResponse(BaseModel):
 
 
 class CompareRequest(BaseModel):
-    product_ids: list[str] = Field(..., description="要对比的商品 id（2-3 个）")
-    focus: str | None = Field(None, description="对比侧重点，如『续航』『适合敏感肌』")
+    product_ids: list[str] = Field(..., description="Product IDs to compare")
+    focus: str | None = Field(None, description="Optional comparison focus")
 
 
 class TitleRequest(BaseModel):
-    user_text: str = Field(..., description="用户首条消息")
-    assistant_text: str | None = Field(None, description="AI 首条回复（可空）")
+    user_text: str = Field(..., description="First user message")
+    assistant_text: str | None = Field(None, description="Optional first assistant reply")
 
 
 class CartMutationRequest(BaseModel):
@@ -100,22 +98,22 @@ class PreferenceRequest(BaseModel):
 
 
 class PreferenceUndoRequest(BaseModel):
-    undo_token: str = Field(..., description="memory_update 事件返回的撤销 token")
+    undo_token: str = Field(..., description="Undo token returned by a memory_update event")
 
 
 # ---------------------------------------------------------------------------
-# 应用 & 会话管理
+# Application and session management.
 # ---------------------------------------------------------------------------
 
 app = FastAPI(title="E-commerce AI Agent", version="0.2.0")
 
-# 商品详情 / 批量查询端点（队友 wsm 贡献）
+# Product detail and batch-query endpoints.
 app.include_router(products_router.router)
 
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(_request: Request, exc: HTTPException) -> JSONResponse:
-    """统一错误响应格式：dict detail 透传；字符串 detail 包装成标准 envelope。"""
+    """Normalize HTTP errors while preserving structured detail dictionaries."""
     if isinstance(exc.detail, dict):
         detail = exc.detail
     else:
@@ -129,7 +127,7 @@ async def http_exception_handler(_request: Request, exc: HTTPException) -> JSONR
 
 _sessions = SqliteSessionStore()
 _user_memory = UserMemoryStore()
-_agent: Any | None = None  # 懒加载，避免 import 时就触发 SearchService/OpenAI 初始化
+_agent: Any | None = None  # Avoid heavy search/model initialization during import.
 _agent_lock = threading.Lock()
 _warmup_status: dict[str, str] = {
     "status": "disabled",
@@ -179,14 +177,13 @@ def _apply_realtime_preference_updates(query: str, session: Any) -> list[dict[st
 
 @app.on_event("startup")
 def _warmup() -> None:
-    """启动预热：在后台线程把 Agent / SearchService / embedding / API rerank 拉热。
+    """Warm the agent, search service, embeddings, and reranker in a background thread.
 
-    否则首条真实查询会在 SSE 请求内部触发 ~30-90s 的模型懒加载，
-    导致流卡在 status(tool) 之后迟迟收不到 tool_result。
+    Without warmup, the first SSE request may trigger slow lazy initialization and pause
+    after the tool status event.
 
-    预热放在后台线程（而非直接在 startup 里同步执行），这样 uvicorn 能
-    立即绑定端口、/health 立即可用；模型在后台加热，首条查询若赶在加热
-    完成前到达，也只是退化为原来的懒加载行为，不会让整个服务起不来。
+    Background execution lets Uvicorn bind immediately and keeps ``/health`` available.
+    A request arriving before completion follows the ordinary lazy-load path.
     """
     if os.getenv("BACKEND_WARMUP", "0").strip().lower() not in {"1", "true", "yes", "on"}:
         _warmup_status.update(
@@ -205,19 +202,19 @@ def _warmup() -> None:
 
             _get_agent()
             svc = get_search_service()
-            # 跑一次真实检索，强制 embedding + API rerank HTTP client 完成初始化
+            # Run one real retrieval to initialize embeddings and the reranking client.
             svc.search("预热查询", top_k_products=1)
             _warmup_status.update(status="ready", message="Agent/SearchService warmup completed.")
             logger.info("Warmup done: models are hot.")
-        except Exception as exc:  # noqa: BLE001 - 预热失败不应阻止服务运行
+        except Exception as exc:  # noqa: BLE001 - warmup must not prevent startup
             _warmup_status.update(status="failed", message=f"Warmup failed: {type(exc).__name__}: {exc}")
-            logger.exception("Warmup failed (服务仍可用，首条查询会较慢)")
+        logger.exception("Warmup failed; the service remains available but the first query will be slower")
 
     threading.Thread(target=_run, name="warmup", daemon=True).start()
 
 
 # ---------------------------------------------------------------------------
-# 端点
+# Endpoints
 # ---------------------------------------------------------------------------
 
 @app.get("/health")
@@ -271,7 +268,7 @@ def chat(req: ChatRequest) -> ChatResponse:
     memory_updates = _apply_realtime_preference_updates(req.query, session)
     if memory_updates:
         resp.trace["memory_updates"] = memory_updates
-    _sessions.save(session)  # 持久化本轮对话，重启后可接上下文
+    _sessions.save(session)  # Persist the turn so context survives a restart.
     return ChatResponse(
         session_id=session.session_id,
         decision=resp.decision.to_dict(),
@@ -282,10 +279,10 @@ def chat(req: ChatRequest) -> ChatResponse:
 
 
 def _resolve_image(req: ChatRequest) -> str | None:
-    """把请求里的图片归一成 Ark image_url 字段能直接吃的形态。
+    """Normalize a request image to an ``image_url``-compatible value.
 
-    优先用远程 URL；否则用 base64（裸 base64 自动补 data URI 前缀）。
-    都没有则返回 None（走普通文本链路）。
+    Prefer a remote URL; otherwise use base64 and add a data-URI prefix when missing.
+    Return ``None`` when no image exists so the text path is used.
     """
     if req.image_url and req.image_url.strip():
         return req.image_url.strip()
@@ -299,20 +296,20 @@ def _resolve_image(req: ChatRequest) -> str | None:
 
 @app.post("/chat/stream")
 def chat_stream(req: ChatRequest) -> StreamingResponse:
-    """SSE 流式端点。
+    """Stream one agent turn over Server-Sent Events.
 
-    输出格式（每条事件以 `\\n\\n` 结束）：
+    Each event ends with ``\\n\\n``:
         event: <session|status|meta|tool_result|token|done|error>
         data: <json>
 
-    事件顺序：
+    Event order:
         session → status(routing) → meta → status(tool) → tool_result
                 → status(compose)? → token* → done
 
-    `status.data.message` 是给用户看的"识别中…/检索中…/生成中…"提示，
-    前端可显示成 loading 胶囊；`meta`/`tool_result` 是结构化数据。
+    ``status.data.message`` is user-facing progress copy; ``meta`` and ``tool_result``
+    contain structured data.
 
-    客户端用 `EventSource` 或 `requests.get(stream=True)` 消费。
+    Clients may consume the stream with ``EventSource`` or a streaming HTTP client.
     """
     session = _sessions.get_or_create(req.session_id)
     _attach_user_memory(session, req.user_id)
@@ -324,10 +321,10 @@ def chat_stream(req: ChatRequest) -> StreamingResponse:
         return f"event: {event}\ndata: {data}\n\n"
 
     def _generator():
-        # 首条：先把 session_id 告诉客户端（便于客户端持久化）
+        # Send the session ID first so the client can persist it.
         yield _format_sse("session", {"session_id": session.session_id})
         try:
-            # 有图 → 走图搜（拍照找货）；query 作为随图附带文字（可空）
+            # An image selects visual search; query becomes optional accompanying text.
             if image:
                 stream = agent.handle_image_turn_stream(
                     image, session, hint_text=req.query
@@ -335,22 +332,21 @@ def chat_stream(req: ChatRequest) -> StreamingResponse:
             else:
                 stream = agent.handle_turn_stream(req.query, session)
             for ev in stream:
-                # done 之前抽取本轮偏好更新并推送 memory_update（前端横幅依赖）
+                # Emit preference updates before done for the client banner.
                 if ev["type"] == "done":
                     for memory_event in _apply_realtime_preference_updates(req.query, session):
                         yield _format_sse("memory_update", memory_event)
                 yield _format_sse(ev["type"], ev["data"])
-        except Exception as exc:  # noqa: BLE001 - 流式中任何异常都要给前端
+        except Exception as exc:  # noqa: BLE001 - every stream failure reaches the client
             logger.exception("Stream pipeline crashed")
             yield _format_sse("error", {"message": f"{type(exc).__name__}: {exc}"})
         finally:
-            # 流结束（含正常/异常）后持久化会话，history + working_memory 都已在
-            # 生成器内部更新完毕，此时落盘保证重启可恢复。
+            # Persist once generator-managed history and working memory are final.
             _sessions.save(session)
 
     headers = {
         "Cache-Control": "no-cache, no-transform",
-        # 关闭 nginx 之类的代理缓冲，否则 token 会被攒在一起
+        # Disable proxy buffering so tokens are delivered immediately.
         "X-Accel-Buffering": "no",
         "Connection": "keep-alive",
     }
@@ -365,10 +361,10 @@ def reset_session(session_id: str) -> dict[str, str]:
 
 @app.post("/cart/reset")
 def reset_cart() -> dict[str, Any]:
-    """清空购物车（演示单用户 demo_user）。
+    """Clear the cart for the single demonstration user.
 
-    购物车持久化在 SQLite 里且与会话无关。本端点仅在需要手动清空时使用
-    （如调试）；App 冷启动不再自动调用——改为启动时加载已有购物车。
+    Cart state is persisted independently of sessions. Use this only for manual reset or
+    debugging; clients should load existing cart state at startup.
     """
     removed = CartStore().clear()
     return {"status": "cleared", "removed": removed}
@@ -394,7 +390,7 @@ def _cart_item_id(value: str | None) -> int:
 
 @app.post("/cart/mutate")
 def mutate_cart(req: CartMutationRequest) -> dict[str, Any]:
-    """确定性修改购物车并返回最新快照，供前端购物车页同步持久化状态。"""
+    """Apply a deterministic cart mutation and return the latest snapshot."""
     store = CartStore()
     action = req.action
 
@@ -435,21 +431,19 @@ def mutate_cart(req: CartMutationRequest) -> dict[str, Any]:
 
 @app.get("/cart")
 def get_cart() -> dict[str, Any]:
-    """读取当前购物车快照（演示单用户 demo_user）。
+    """Return the current cart snapshot for the demonstration user.
 
-    购物车持久化在 SQLite，App 冷启动调用本端点恢复购物车，避免"启动即空车"
-    与后端真实状态不一致（首次加购时回灌历史、算错总价）。返回结构与 cart
-    工具 SSE 里的快照一致：{cart: {lines, item_count, total}}，前端可统一解析。
+    Startup restoration keeps client state consistent with SQLite. The response matches
+    the cart snapshot emitted by SSE so clients can share one parser.
     """
     return _cart_response(CartStore())
 
 
 @app.post("/compare")
 def compare(req: CompareRequest) -> dict[str, Any]:
-    """商品对比：给定 2 个商品 id，返回结构化对比表 + 购买建议。
+    """Return a structured comparison for two product IDs.
 
-    对话路径走 compare 工具（SSE），这个 REST 端点供「对比页」直接调用，
-    两者复用同一个 build_comparison，产出结构一致。
+    The conversational tool and comparison screen share ``build_comparison``.
     """
     from agent.comparison import build_comparison
     from store.product_store import ProductStore
@@ -457,7 +451,7 @@ def compare(req: CompareRequest) -> dict[str, Any]:
     ids = [pid.strip() for pid in req.product_ids if pid and pid.strip()]
     if len(ids) < 2:
         raise HTTPException(status_code=400, detail="对比至少需要 2 个商品 id")
-    ids = ids[:2]  # 固定对比 2 件
+    ids = ids[:2]  # Keep comparison output to two products.
 
     store = ProductStore()
     details = []
@@ -473,10 +467,10 @@ def compare(req: CompareRequest) -> dict[str, Any]:
 
 @app.post("/title")
 def generate_title(req: TitleRequest) -> dict[str, str]:
-    """用首轮对话生成一个 4-8 字的对话标题（供历史列表展示）。
+    """Generate a short title from the first conversation turn.
 
-    前端首轮 AI 回复完成后异步调用，拿到精炼标题再回写本地历史；调用失败或
-    超时不影响主流程（前端退回截句标题）。生成是确定性约束的轻量 LLM 调用。
+    The client calls this asynchronously and falls back to a local truncated title on
+    failure or timeout.
     """
     user_text = (req.user_text or "").strip()
     if not user_text:
@@ -508,8 +502,8 @@ def generate_title(req: TitleRequest) -> dict[str, str]:
         )
         title = (resp.choices[0].message.content or "").strip()
         title = title.strip("「」\"'。.，、 \n\t")[:12]
-    except Exception as exc:  # noqa: BLE001 - 失败不应 500；返回空让前端兜底
-        logger.warning("标题生成失败：%r", exc)
+    except Exception as exc:  # noqa: BLE001 - return empty so the client can fall back
+        logger.warning("Title generation failed: %r", exc)
         title = ""
 
     if not title:
@@ -519,10 +513,10 @@ def generate_title(req: TitleRequest) -> dict[str, str]:
 
 @app.get("/suggestions")
 def get_suggestions() -> dict[str, Any]:
-    """空态首页推荐：分类入口 + 动态热门搜索，全部源自真实商品库。
+    """Return empty-state home categories and dynamic popular searches.
 
-    热门词由「品牌+子类目」「子类目」从库里随机取，保证每条点了都有商品命中
-    （解决手写示例答不上的问题）；每次请求随机轮换，呈现动态感。
+    Suggestions are sampled from real brand/subcategory combinations and rotate on each
+    request, ensuring each term maps to inventory.
     """
     import random
 
@@ -537,7 +531,7 @@ def get_suggestions() -> dict[str, Any]:
                 "GROUP BY category ORDER BY n DESC"
             ).fetchall()
         ]
-        # 真实 (品牌, 子类目) 组合 —— 一定对应到具体商品
+        # Real brand/subcategory combinations guaranteed to map to products.
         pairs = [
             (r["brand"], r["sub_category"])
             for r in conn.execute(
@@ -555,11 +549,10 @@ def get_suggestions() -> dict[str, Any]:
 
     random.shuffle(pairs)
     random.shuffle(subcats)
-    # 混合：一半「品牌+子类目」（如 Nike 跑步鞋），一半裸子类目（如 降噪真无线耳机），
-    # 都来自真实库存，点击必有结果。
+    # Mix brand-specific terms with bare subcategories, all derived from inventory.
     hot: list[str] = []
     for brand, sub in pairs[:5]:
-        # 品牌名可能带中英混排（"Apple 苹果"），取首段更自然
+        # Use the first token of bilingual brand names for natural suggestions.
         brand_short = brand.split()[0]
         hot.append(f"{brand_short}{sub}")
     hot += subcats[:5]

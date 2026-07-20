@@ -68,9 +68,8 @@ PRODUCT_DETAIL_SYSTEM_PROMPT = """你是一位专业的单品导购问答助手�
 - 证据不足时要坦诚，不要硬夸。"""
 
 
-# Few-shot 示例：用真实对话演示"导购口吻"远比文字规则有效。
-# 模型会直接模仿 assistant 的归并表达、场景化卖点和总括开场。
-# 注意：示例里的商品/价格是虚构的演示数据，仅用于教格式，不会进入真实回答。
+# Few-shot conversations demonstrate the desired shopping-assistant voice. Product and
+# price values in these examples are fictional formatting examples, not response data.
 _FEW_SHOT: list[dict[str, str]] = [
     {
         "role": "user",
@@ -134,13 +133,12 @@ _FEW_SHOT: list[dict[str, str]] = [
 ]
 
 
-# payload 里塞 LLM 不需要的字段（如 evidence chunk）只会浪费 token。
-# 这里裁剪只保留对话术有用的精简字段。
+# Drop payload fields the LLM does not need, such as evidence chunks, to save tokens.
 _HIT_KEEP_KEYS = ("title", "brand", "category", "sub_category", "price_display", "price", "base_price", "score")
 
 
 def _trim_hit_for_llm(h: dict[str, Any]) -> dict[str, Any]:
-    """裁剪单条商品，保留话术字段并把 product_id 统一成 productId 供 LLM 回写。"""
+    """Keep narrative fields and normalize ``product_id`` to ``productId``."""
     out: dict[str, Any] = {}
     pid = h.get("product_id") or h.get("productId")
     if pid:
@@ -171,18 +169,17 @@ def _trim_payload_for_llm(payload: dict[str, Any]) -> dict[str, Any]:
             )
             if contextual.get(k)
         }
-    # parsed 现在收纳在 debug 块；老格式（顶层 parsed）也兼容
+    # Parsed intent now lives under debug; retain compatibility with the old top level.
     parsed = (payload.get("debug") or {}).get("parsed") or payload.get("parsed") or {}
     trimmed["parsed"] = {
         k: parsed.get(k)
         for k in ("category", "sub_category", "max_price", "min_price", "brand_include", "brand_exclude", "negative_ingredients")
         if parsed.get(k)
     }
-    # 商品列表：新格式叫 products，老格式叫 hits
+    # Product lists use ``products`` in the new format and ``hits`` in the old format.
     hits = payload.get("products") or payload.get("hits") or []
     trimmed["hits"] = [_trim_hit_for_llm(h) for h in hits]
-    # 多需求场景：透传分组结构，让 composer 按需求分组介绍。
-    # 每组只保留 label + 精简商品，避免把 query/空组等噪声塞进 prompt。
+    # Preserve compact demand groups so the composer can organize multi-need responses.
     groups = payload.get("groups")
     if isinstance(groups, list):
         trimmed_groups = []
@@ -303,7 +300,7 @@ class AnswerComposer:
         session: AgentSession,
         timeout: float = 10.0,
     ) -> str:
-        """非流式：阻塞到 LLM 返回完整答案。"""
+        """Block until the LLM returns a complete response."""
         if tool_result.narrative_override is not None:
             return tool_result.narrative_override
         if not tool_result.needs_composer:
@@ -324,12 +321,11 @@ class AnswerComposer:
         session: AgentSession,
         timeout: float = 30.0,
     ) -> Iterator[str]:
-        """流式：逐 chunk yield 文本片段。
+        """Yield streamed text chunks.
 
-        - 当 tool 已经给了 narrative_override，仍然 yield 一次整段，
-          调用方无需特判，CLI / SSE 拼接逻辑一致。
-        - LLM 流失败时不抛异常：已经 yield 的内容保留，再 yield 一段
-          兜底提示。这样前端不会卡死在半截答案上。
+        A narrative override is emitted as one chunk so callers need no special case.
+        Stream failures preserve emitted content and append a fallback message instead
+        of raising, preventing clients from hanging on a partial response.
         """
         if tool_result.narrative_override is not None:
             yield tool_result.narrative_override
@@ -348,7 +344,7 @@ class AnswerComposer:
             )
             pieces: list[str] = []
             for chunk in stream:
-                # OpenAI SDK：chunk.choices[0].delta.content；豆包 Ark 一致。
+                # OpenAI-compatible clients expose streamed delta content here.
                 try:
                     delta = chunk.choices[0].delta
                 except (AttributeError, IndexError):
@@ -359,8 +355,8 @@ class AnswerComposer:
             if pieces:
                 yield _normalize_json_response("".join(pieces))
             else:
-                # 模型一个 token 都没吐（理论极少见），给个保底
+                # Provide a fallback if the model emits no content.
                 yield _fallback_json_response(tool_result)
-        except Exception as exc:  # noqa: BLE001 - 流式中任何异常都要兜住
+        except Exception as exc:  # noqa: BLE001 - streaming must contain every failure
             logger.exception("Streaming compose failed mid-flight")
             yield _fallback_json_response(tool_result)

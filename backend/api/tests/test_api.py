@@ -1,6 +1,6 @@
-"""FastAPI 端点测试：覆盖 /chat 与 /chat/stream 的 happy + edge case。
+"""FastAPI endpoint tests covering happy paths and edge cases for `/chat` and `/chat/stream`.
 
-用 TestClient + mock Agent，避免真实 LLM 调用。
+Uses TestClient and a mock agent to avoid real LLM calls.
 """
 
 from __future__ import annotations
@@ -15,17 +15,17 @@ from fastapi.testclient import TestClient
 
 @pytest.fixture
 def client():
-    # 必须延迟 import，因为 api.main 顶层会 import agent，
-    # 而 conftest / 其他测试可能已经把 client mock 过
+    # Import lazily because api.main imports the agent at module load time, while conftest or
+    # another test may already have mocked the client.
     from api import main as api_main
 
-    # 重置 agent 单例，避免上一个 test 的 mock 残留
+    # Reset the agent singleton so mocks cannot leak from a previous test.
     api_main._agent = None
     return TestClient(api_main.app), api_main
 
 
 class _FakeAgent:
-    """模拟 Agent：可控返回结构化事件。"""
+    """Controllable fake agent that returns structured events."""
 
     def __init__(self, events=None, response=None):
         self._events = events or []
@@ -55,7 +55,7 @@ class _FakeAgent:
         yield {"type": "done", "data": {"timings": {"router_ms": 1, "tool_ms": 1, "composer_ms": 1}, "narrative": f"hi {query}"}}
 
     def handle_image_turn_stream(self, image, session, hint_text="") -> Iterator[dict]:
-        # 记录收到的图片，供断言路由是否走了图搜
+        # Record the received image so tests can verify visual-search routing.
         self.received_image = image
         self.received_hint = hint_text
         yield {"type": "meta", "data": {"decision": {"tool": "recommend", "rewritten_query": "视觉query", "confidence": "high", "reasoning": "image"}, "trace": {"timings": {}, "extracted_query": "视觉query"}}}
@@ -147,7 +147,7 @@ class TestChatBlocking:
 
 class TestChatStream:
     def _parse_sse(self, raw: str) -> list[tuple[str, str]]:
-        """非常宽松的 SSE 解析：返回 (event, data) 列表。"""
+        """Parse SSE permissively into `(event, data)` pairs."""
         out: list[tuple[str, str]] = []
         cur_event = "message"
         cur_data: list[str] = []
@@ -192,7 +192,7 @@ class TestChatStream:
         with c.stream("POST", "/chat/stream", json={"query": "x"}) as r:
             body = "".join(chunk for chunk in r.iter_text())
         events = self._parse_sse(body)
-        # 应该有 session + meta + error
+        # The stream should include session, metadata, and error events.
         types = [e for e, _ in events]
         assert "error" in types
 
@@ -375,7 +375,7 @@ class TestVisualSearchStream:
         ) as r:
             assert r.status_code == 200
             body = "".join(chunk for chunk in r.iter_text())
-        # 走了图搜入口，且 base64 被补上 data URI 前缀
+        # Visual-search routing should run and add a data-URI prefix to Base64 input.
         assert agent.received_image == "data:image/jpeg;base64,/9j/zzz"
         events = self._parse_sse(body)
         types = [e for e, _ in events]
@@ -389,7 +389,7 @@ class TestVisualSearchStream:
         m._agent = agent
         with c.stream("POST", "/chat/stream", json={"query": "推荐耳机"}) as r:
             body = "".join(chunk for chunk in r.iter_text())
-        # 纯文本不应触发图搜
+        # Plain text must not trigger visual search.
         assert not hasattr(agent, "received_image")
 
 
@@ -449,7 +449,7 @@ class TestTitleEndpoint:
 
     def test_llm_failure_falls_back_to_truncation(self, client):
         c, _ = client
-        # 让 get_client 抛错 → 退回截句标题
+        # Make get_client fail and verify fallback to the excerpt-based title.
         with patch("llm.client.get_client", side_effect=RuntimeError("boom")):
             r = c.post("/title", json={"user_text": "推荐一款适合油皮的洗面奶啊啊啊啊啊啊啊"})
         assert r.status_code == 200
@@ -478,4 +478,3 @@ class TestTitleEndpoint:
             r = c.post("/title", json={"user_text": "推荐油皮洗面奶", "assistant_text": "给你推荐几款"})
         assert r.status_code == 200
         assert r.json()["title"] == "油皮洗面奶"
-

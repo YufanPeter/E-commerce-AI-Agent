@@ -31,7 +31,7 @@ DEFAULT_ADDRESS = "默认地址（北京市朝阳区示例路 1 号 · 收货人
 
 @dataclass(frozen=True)
 class CartLine:
-    """购物车一行（一个 SKU）。"""
+    """One cart line representing one SKU."""
 
     cart_item_id: int
     product_id: str
@@ -62,7 +62,7 @@ class CartLine:
 
 @dataclass(frozen=True)
 class OrderSummary:
-    """一次下单的结构化结果。"""
+    """Structured result of one checkout."""
 
     order_id: str
     address: str
@@ -80,17 +80,17 @@ class OrderSummary:
 
 
 class CartNotFoundError(Exception):
-    """目标商品/购物车行不存在时抛出，由 tool 转成友好话术。"""
+    """Raised for a missing product or cart line and translated by the tool."""
 
 
 class CartStore:
     def __init__(self, db_path: Path = DEFAULT_DB_PATH) -> None:
         self.db_path = db_path
 
-    # ------------------------------ 读 ------------------------------
+    # ------------------------------ Read ------------------------------
 
     def list_items(self, user_id: str = DEMO_USER_ID) -> list[CartLine]:
-        """按加入顺序返回购物车明细（join 商品标题）。"""
+        """Return cart lines in insertion order with joined product titles."""
         with self._connect() as conn:
             rows = conn.execute(
                 """
@@ -106,10 +106,9 @@ class CartStore:
         return [self._line_from_row(row) for row in rows]
 
     def list_skus(self, product_id: str) -> list[dict[str, Any]]:
-        """列出某商品全部在售 SKU（规格 + 价格），按价格升序。
+        """List active SKUs and prices for one product in ascending price order.
 
-        给 CartTool 判断"是否需要问用户选规格"用：当返回多于一个时，
-        意味着加购前应让用户在颜色/尺码/容量等维度上做选择。
+        More than one result tells ``CartTool`` to request a specification selection.
         """
         with self._connect() as conn:
             rows = conn.execute(
@@ -129,14 +128,14 @@ class CartStore:
         ]
 
     def product_title(self, product_id: str) -> str:
-        """取商品标题；用于加购询问/确认话术。找不到时回退 product_id。"""
+        """Return a product title, falling back to its ID when absent."""
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT title FROM products WHERE product_id = ?", (product_id,)
             ).fetchone()
         return row["title"] if row else product_id
 
-    # ------------------------------ 写 ------------------------------
+    # ------------------------------ Write ------------------------------
 
     def add_product(
         self,
@@ -145,10 +144,10 @@ class CartStore:
         sku_id: str | None = None,
         quantity: int = 1,
     ) -> CartLine:
-        """把商品加入购物车。
+        """Add a product to the cart.
 
-        sku_id 为空时自动选最便宜的在售 SKU。已在车里则累加数量
-        （依赖 UNIQUE(user_id, sku_id) + UPSERT）。
+        When ``sku_id`` is absent, select the cheapest active SKU. Existing lines add
+        quantity through the unique constraint and UPSERT.
         """
         if quantity <= 0:
             quantity = 1
@@ -184,7 +183,7 @@ class CartStore:
     def set_quantity(
         self, cart_item_id: int, quantity: int, user_id: str = DEMO_USER_ID
     ) -> CartLine | None:
-        """设置某行数量；quantity<=0 等价于删除（返回 None）。"""
+        """Set line quantity; non-positive values remove the line and return ``None``."""
         if quantity <= 0:
             self.remove_item(cart_item_id, user_id)
             return None
@@ -222,7 +221,7 @@ class CartStore:
             conn.commit()
             return cur.rowcount
 
-    # ------------------------------ 下单 ------------------------------
+    # ------------------------------ Checkout ------------------------------
 
     def build_order(
         self,
@@ -230,7 +229,7 @@ class CartStore:
         address: str = DEFAULT_ADDRESS,
         clear_after: bool = True,
     ) -> OrderSummary:
-        """用勾选中的购物车行生成订单汇总；下单后默认清空已下单项。"""
+        """Build an order from selected lines and clear purchased items by default."""
         lines = [line for line in self.list_items(user_id) if line.selected]
         if not lines:
             raise CartNotFoundError("购物车里没有可下单的商品")
@@ -250,7 +249,7 @@ class CartStore:
                 conn.commit()
         return order
 
-    # ------------------------------ 内部 ------------------------------
+    # ------------------------------ Internal ------------------------------
 
     def _resolve_sku(
         self, conn: sqlite3.Connection, product_id: str, sku_id: str | None
@@ -261,7 +260,7 @@ class CartStore:
                 "WHERE sku_id = ? AND product_id = ? AND status = 'active'",
                 (sku_id, product_id),
             ).fetchone()
-        # 默认最便宜的在售 SKU
+        # Default to the cheapest active SKU.
         return conn.execute(
             "SELECT sku_id, properties_json, price FROM product_skus "
             "WHERE product_id = ? AND status = 'active' ORDER BY price ASC, sku_id ASC LIMIT 1",

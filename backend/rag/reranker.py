@@ -1,15 +1,12 @@
 from __future__ import annotations
 
-"""API reranker（智谱 Rerank）。
+"""API-backed reranker.
 
-精排原本用本地 ``sentence-transformers`` CrossEncoder，会在 Docker 镜像里拉
-torch / CUDA 等超大依赖。这里改为云端 rerank API：调用智谱
-``/paas/v4/rerank``，通过 ``ZHIPU_API_KEY`` 鉴权。后端镜像
-因此更轻，云部署也不再需要本地模型缓存。
+Cloud reranking replaces a local ``sentence-transformers`` cross-encoder, keeping the
+backend image free of large PyTorch/CUDA dependencies and local model caches.
 
-智谱 rerank 的响应是按相关性降序排好的 ``results``，每项带 ``document`` 文本和
-``relevance_score``，但**不带原始 index**。因此分数要按 document 文本回填到输入
-顺序，再由上层重新排序，而不能假设返回顺序等于输入顺序。
+The configured response may contain ranked documents and relevance scores without input
+indices. Scores must therefore be aligned back to the original documents before sorting.
 """
 
 from dataclasses import dataclass
@@ -23,7 +20,7 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class RerankedChunk:
-    """带 rerank 分数的 chunk，保留原 chunk 全部信息。"""
+    """Retrieved chunk paired with its reranking score."""
 
     chunk: RetrievedChunk
     rerank_score: float
@@ -38,7 +35,7 @@ class RerankedChunk:
 
 
 class ApiReranker:
-    """调用智谱 rerank：输入 query + documents，返回与输入同序对齐的相关性分数。"""
+    """Call the reranking API and align relevance scores to input documents."""
 
     def __init__(
         self,
@@ -69,7 +66,7 @@ class ApiReranker:
         if not chunk_list:
             return []
 
-        # 智谱 rerank 单次请求不宜过大；上游召回通常 ≤50，这里做保护性截断。
+        # Bound request size; upstream retrieval normally returns at most 50 chunks.
         limited_chunks = chunk_list[:50]
         documents = [chunk.document for chunk in limited_chunks]
         payload = {
@@ -93,18 +90,15 @@ class ApiReranker:
 
 
 def _parse_rerank_scores(response: Any, documents: list[str]) -> list[float]:
-    """从智谱 rerank 响应取出与输入 ``documents`` 同序对齐的分数列表。
+    """Extract scores aligned to the input ``documents`` order.
 
-    兼容三种返回形态：
-    - results[].index + relevance_score（按 index 回填，最稳）
-    - results[].document + relevance_score（智谱实际格式，按文本回填）
-    - scores: [...]（直接同序数组）
+    Supports indexed results, document-valued results, and a flat ``scores`` array.
     """
     expected = len(documents)
     if not isinstance(response, dict):
         raise ValueError(f"Unexpected rerank response type: {type(response)!r}")
 
-    # 形态三：直接的同序分数数组。
+    # A flat score array is already aligned.
     flat = response.get("scores")
     if isinstance(flat, list) and flat:
         if len(flat) < expected:
@@ -118,7 +112,7 @@ def _parse_rerank_scores(response: Any, documents: list[str]) -> list[float]:
         raise ValueError(f"Rerank response missing results/scores: {response!r}")
 
     aligned: list[float | None] = [None] * expected
-    # document 文本可能重复：用「剩余可用位置」队列按出现顺序消费。
+    # Duplicate documents consume available input positions in appearance order.
     doc_positions: dict[str, list[int]] = {}
     for idx, doc in enumerate(documents):
         doc_positions.setdefault(doc, []).append(idx)
@@ -138,7 +132,7 @@ def _parse_rerank_scores(response: Any, documents: list[str]) -> list[float]:
             continue
 
         doc = item.get("document")
-        if isinstance(doc, dict):  # 个别实现把文本包在 {"text": ...} 里
+        if isinstance(doc, dict):  # Some providers wrap document text in an object.
             doc = doc.get("text")
         if isinstance(doc, str) and doc_positions.get(doc):
             aligned[doc_positions[doc].pop(0)] = float(score)
@@ -151,5 +145,5 @@ def _parse_rerank_scores(response: Any, documents: list[str]) -> list[float]:
 
 @lru_cache(maxsize=1)
 def get_reranker() -> ApiReranker:
-    """进程级单例，复用已建立的 HTTP 连接池。"""
+    """Return a process-wide reranker that reuses its HTTP connection pool."""
     return ApiReranker()

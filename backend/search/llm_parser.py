@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-"""LLM query understanding：用 function calling 抽取结构化意图。
+"""LLM query understanding through function-calling structured extraction.
 
-设计要点：
-1. tool schema 的 enum 从 SQLite 注入，模型无法编造不存在的类目 / 品牌。
-2. 同义词（"运动鞋"、"手机"、"ipad"）由 LLM 自然语言理解能力解决，
-   不再需要规则版里那一堆 SUB_CATEGORY_ALIASES。
-3. 否定语义（"我要 X 不要 Y"）由 LLM 上下文理解解决，不再需要窗口检测。
-4. 调用失败 / 超时由编排器（query_understanding.py）兜底到规则版。
+Taxonomy enums come from SQLite, preventing invented categories or brands. The model
+handles aliases and negative language contextually. Failures and timeouts fall back to
+the rule-based parser in ``query_understanding.py``.
 """
 
 import json
@@ -22,8 +19,7 @@ from search.query_understanding import (
 )
 
 
-# 反向索引：variant → canonical，给 _filter_brands 做兜底映射。
-# 即便 LLM 偶尔无视 enum 输出了变体（如 "Nike"），也能映射回 canonical（"耐克"）。
+# Reverse variant-to-canonical index used as a defensive brand fallback.
 _VARIANT_TO_CANONICAL: dict[str, str] = {
     variant: canonical
     for canonical, variants in BRAND_ALIASES.items()
@@ -32,14 +28,13 @@ _VARIANT_TO_CANONICAL: dict[str, str] = {
 
 
 # ---------------------------------------------------------------------------
-# 1. 构造 function schema
+# 1. Function schema
 # ---------------------------------------------------------------------------
 
 def _build_tool_schema(taxonomy: dict) -> dict:
-    """根据当前 SQLite taxonomy 构造 function calling 的 tool schema。
+    """Build a function-calling schema from the current SQLite taxonomy.
 
-    sub_category / brand 字段使用 enum 限定值域，从而把模型输出锁死在
-    真实存在的取值上，避免 "vivo Pro Max" 这种幻觉品牌泄漏到下游。
+    Category and brand enums constrain model output to real catalog values.
     """
     sub_categories = sorted(taxonomy["sub_to_cat"].keys())
     categories = sorted({c for c in taxonomy["sub_to_cat"].values() if c})
@@ -193,16 +188,16 @@ SYSTEM_PROMPT = """你是电商搜索的需求解析器。严格遵守以下规�
 
 
 # ---------------------------------------------------------------------------
-# 2. 主入口
+# 2. Public entry point
 # ---------------------------------------------------------------------------
 
 def parse_query_with_llm(
     query: str,
     timeout: float = 6.0,
 ) -> ParsedQuery:
-    """调用豆包 Ark 的 function calling 抽取意图。
+    """Extract intent through the configured function-calling model.
 
-    失败时抛出异常，由编排层决定是否降级到规则版。
+    Failures are raised so the orchestration layer can select a rule-based fallback.
     """
     taxonomy = load_taxonomy()
     tool = _build_tool_schema(taxonomy)
@@ -225,7 +220,7 @@ def parse_query_with_llm(
 
 
 def _extract_tool_arguments(response: Any) -> dict[str, Any]:
-    """从 function calling 响应里取出参数字典。"""
+    """Extract the argument dictionary from a function-calling response."""
     message = response.choices[0].message
     if not message.tool_calls:
         raise ValueError("LLM 没有调用 extract_search_intent，原始响应：" + str(message))
@@ -234,20 +229,11 @@ def _extract_tool_arguments(response: Any) -> dict[str, Any]:
 
 
 def _loads_arguments(raw: str) -> dict[str, Any]:
-    """容错解析 function arguments。
+    """Parse function arguments with recovery for known malformed outputs.
 
-    豆包 function calling 偶发返回畸形 JSON，已知四类污染：
-    1. 多包一层 ```json code fence、前后夹带说明文字；
-    2. 把内部工具标记 ``<parameter name="x">v</parameter>`` 泄漏进 JSON 串
-       （表现为 ``"category" string="null">数码电子</parameter>``，缺冒号且夹 XML）；
-    3. 把内部 tool-call 包裹标记（``</function>``、``</seed:tool_call>`` 等）
-       泄漏进 arguments，且常在 JSON 闭合前就插入停止标记导致 JSON 被截断
-       （表现为 ``{...]\n</function>`` 这类缺最外层 ``}`` 的串）；
-    4. 上述多者叠加。
-    直接 ``json.loads`` 会让整条检索链崩溃并降级到无过滤的纯向量召回（会召回到
-    跨品类的无关商品）。这里做多级解析：原样 → 剥 code fence + 截取首个 JSON 对象
-    → 修复 <parameter> 泄漏 → 剥 tool-call 协议噪声 + 括号配平补全截断。
-    全部失败才抛异常，交由上层降级。
+    Recovery handles code fences, surrounding prose, leaked ``<parameter>`` tags,
+    protocol markers, and truncated brackets. Only complete recovery failure is raised
+    to the caller.
     """
     try:
         return json.loads(raw)
@@ -256,7 +242,7 @@ def _loads_arguments(raw: str) -> dict[str, Any]:
 
     text = raw.strip()
     if text.startswith("```"):
-        # 去掉 ```json ... ``` 围栏，只留中间内容
+        # Remove a JSON code fence while retaining its content.
         text = text.split("```", 2)[1] if text.count("```") >= 2 else text.strip("`")
         if text.lstrip().lower().startswith("json"):
             text = text.lstrip()[4:]
@@ -267,7 +253,7 @@ def _loads_arguments(raw: str) -> dict[str, Any]:
     try:
         return json.loads(candidate)
     except json.JSONDecodeError:
-        # 最后一招：修复豆包 <parameter> 标记泄漏，再截取一次 JSON 对象重试。
+        # Repair leaked parameter tags and retry with the first JSON object.
         repaired = _repair_param_leak(candidate)
         r_start = repaired.find("{")
         r_end = repaired.rfind("}")
@@ -276,17 +262,14 @@ def _loads_arguments(raw: str) -> dict[str, Any]:
         try:
             return json.loads(repaired)
         except json.JSONDecodeError:
-            # 最终兜底：豆包把内部 tool-call 标记（</function>、</seed:tool_call>
-            # 等）泄漏进 arguments，且常在 JSON 闭合前插入停止标记导致截断。
-            # 剥掉协议噪声后对未闭合的 { / [ 做括号配平补全，再解析。
+            # Strip leaked protocol markers, balance truncated brackets, and parse again.
             return json.loads(_strip_tool_noise_and_balance(text))
 
 
 def _balance_brackets(text: str) -> str:
-    """为被截断的 JSON 补全缺失的闭合括号。
+    """Complete missing closing brackets in truncated JSON.
 
-    正确跳过字符串字面量（含转义），用栈统计未闭合的 ``{`` / ``[``，
-    在末尾按逆序补上对应的 ``}`` / ``]``。
+    String literals and escapes are skipped while a stack tracks unmatched braces.
     """
     stack: list[str] = []
     in_str = False
@@ -311,14 +294,10 @@ def _balance_brackets(text: str) -> str:
 
 
 def _strip_tool_noise_and_balance(text: str) -> str:
-    """剥离豆包泄漏的 tool-call 协议标记，并对截断的 JSON 做括号配平。
+    """Strip leaked tool-call protocol markers and balance truncated JSON.
 
-    已知畸形样例（单行）::
-
-        {"requests": [{...}, {..."防晒霜"}]\n</function>\n</seed:tool_call>
-
-    JSON 主体本身基本完整，只是缺最外层 ``}`` 且尾部拖着协议标记。
-    策略：从首个 ``{`` 起截取，砍掉首个 XML/协议标记及其之后内容，再配平括号。
+    Starting at the first object brace, remove the first XML-like marker and everything
+    after it, then append any missing closing brackets.
     """
     import re
 
@@ -326,8 +305,7 @@ def _strip_tool_noise_and_balance(text: str) -> str:
     if start == -1:
         return text
     body = text[start:]
-    # 砍掉首个泄漏的 XML/协议标记（如 </function>、</seed:tool_call>）及之后内容。
-    # function arguments 的 JSON 值是中文商品词，不含裸 <tag>，故此处切割安全。
+    # Remove the first leaked XML/protocol marker and everything after it.
     match = re.search(r"<\s*/?\s*[A-Za-z][\w:.-]*[^>]*>", body)
     if match:
         body = body[: match.start()]
@@ -335,21 +313,10 @@ def _strip_tool_noise_and_balance(text: str) -> str:
 
 
 def _repair_param_leak(text: str) -> str:
-    """修复豆包把内部 ``<parameter name="x">v</parameter>`` 标记混进 JSON 的污染。
+    """Repair internal ``<parameter>`` tags leaked into JSON arguments.
 
-    观察到的畸形样例（单行）::
-
-        {"category" string="null">数码电子</parameter>
-        <parameter name="sub_category": "真无线耳机", "max_price": 200.0,
-         "min_price" string="null">null</parameter>
-        <parameter name="negative_ingredients": [], "needs_clarification": false}
-
-    修复策略（值本身都在，只是被 XML 包裹/缺冒号）：
-    1. 去掉 ``<parameter name=`` 前缀，使 ``name="x"`` 还原为 ``"x"``；
-    2. 把 ``"key" string="...">VALUE</parameter>`` 还原为 ``"key": VALUE``
-       （VALUE 按 null/布尔/数字/字符串规范化）；
-    3. 清掉残余 ``</parameter>``；
-    4. 补回因标记剥离而缺失的逗号（值结束后直接换行接下一个 key 的情况）。
+    Remove opening prefixes, normalize tagged values into key-value pairs, remove closing
+    tags, and restore commas lost between adjacent keys.
     """
     if "parameter" not in text:
         return text
@@ -372,22 +339,20 @@ def _repair_param_leak(text: str) -> str:
         text,
     )
     text = text.replace("</parameter>", "")
-    # 补逗号：值结束（引号 / 数字 / ] / null / 布尔）后紧跟换行 + 下一个 key
+    # Restore a comma when one completed value is followed by the next key.
     text = re.sub(r'("|\]|\d|null|true|false)\s*\n\s*(")', r"\1, \2", text)
     return text
 
 
-# 常见口味单字：长度虽 < 2 但语义明确、误伤风险低，豁免噪声护栏。
+# Meaningful single-character flavor terms are exempt from the noise guard.
 _SHORT_NEGATIVE_ALLOW: frozenset[str] = frozenset({"辣", "甜", "咸", "酸", "苦"})
 
 
 def _clean_negatives(values: list[str] | None) -> list[str]:
-    """归一化 LLM 给出的排除词（不再用白名单约束，支持任意"不要X"）。
+    """Normalize arbitrary negative terms extracted by the LLM.
 
-    后置过滤是子串匹配，天然安全：匹配不到的词不会误伤商品。这里只做：
-    - 去首尾空白、去空串、去重（保序）；
-    - 丢掉长度 < 2 的单字噪声（如 "的"、"水" 太宽泛易误伤），
-      但保留已知短词白名单（如 "糖"）和常见口味单字（辣/甜/咸/酸/苦）。
+    Trim, remove empties, and deduplicate in order. Single-character noise is dropped
+    unless it belongs to a known ingredient or meaningful flavor allowlist.
     """
     if not values:
         return []
@@ -409,17 +374,16 @@ def _to_parsed_query(
     arguments: dict[str, Any],
     taxonomy: dict,
 ) -> ParsedQuery:
-    """把 LLM 抽取结果包装成 ParsedQuery，并做最后一次 taxonomy 校正。
+    """Wrap extracted arguments in ``ParsedQuery`` with final taxonomy validation.
 
-    虽然 enum 已经约束了 LLM 输出，这里再校验一次防御性兜底：
-    即便模型违反 enum 输出了未知 sub_category / brand，也直接丢弃，
-    不让脏数据流入下游 SQLite 硬过滤。
+    Unknown categories or brands are discarded defensively even though schema enums
+    should already prevent them.
     """
     sub_category = arguments.get("sub_category")
     if sub_category and sub_category not in taxonomy["sub_to_cat"]:
         sub_category = None
 
-    # 优先用 sub_category 反查父类；没有 sub 时退回 LLM 给的 category。
+    # Derive the parent category from subcategory, or use the model category when absent.
     known_categories = {c for c in taxonomy["sub_to_cat"].values() if c}
     if sub_category:
         category = taxonomy["sub_to_cat"].get(sub_category)
@@ -431,7 +395,7 @@ def _to_parsed_query(
     known_brands = set(taxonomy["brands"])
 
     def _filter_brands(values: list[str] | None) -> list[str]:
-        """规范化 + 去重：变体名映射回 canonical，未知品牌直接丢弃。"""
+        """Map variants to canonical brands, deduplicate, and drop unknown values."""
         if not values:
             return []
         seen: set[str] = set()
@@ -446,7 +410,7 @@ def _to_parsed_query(
     known_sub_categories = set(taxonomy["sub_to_cat"].keys())
 
     def _filter_enum(values: list[str] | None, allowed: set[str]) -> list[str]:
-        """品类/子类目反选：只保留在 taxonomy enum 里的官方值，去重。"""
+        """Retain unique category exclusions present in the taxonomy enum."""
         if not values:
             return []
         seen: set[str] = set()
@@ -470,9 +434,9 @@ def _to_parsed_query(
         brand_exclude=_filter_brands(arguments.get("brand_exclude")),
         negative_ingredients=_clean_negatives(arguments.get("negative_ingredients")),
         soft_terms=list(arguments.get("soft_terms") or []),
-        retrieval_query=query,  # LLM 路径下保留原 query；soft_terms 留给召回后重排使用
-        # 只要识别到任意一个商品线索就强制放行检索，避免 LLM 过于保守把可召回的 query 误判为模糊。
-        # clarify 的最终决策权交给 Agent 层的 IntentRouter（信息更全、有历史上下文）。
+        retrieval_query=query,  # Preserve raw text; soft terms are used during reranking.
+        # Any product signal makes the query searchable; final clarification belongs to
+        # the context-aware agent router.
         needs_clarification=bool(arguments.get("needs_clarification", False)) and not _has_any_signal(
             category=category,
             sub_category=sub_category,
@@ -485,7 +449,7 @@ def _to_parsed_query(
 
 
 def _has_any_signal(**fields: Any) -> bool:
-    """只要任意字段有内容（非 None / 非空列表 / 非空字符串），就认为 query 已经可检索。"""
+    """Return whether any structured field contains a searchable signal."""
     for value in fields.values():
         if value in (None, "", [], ()):
             continue

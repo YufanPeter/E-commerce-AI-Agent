@@ -26,7 +26,7 @@ from search.where_builder import build_chroma_where
 from search.search_service import _normalize_negatives
 
 
-# --------------------------- P0：where 结构化反选 ---------------------------
+# --------------------------- P0: structured exclusions in `where` ---------------------------
 
 def test_sub_category_exclude_becomes_nin():
     parsed = ParsedQuery(
@@ -99,7 +99,7 @@ def test_multiple_sub_excludes():
     assert {"sub_category": {"$nin": ["功能饮料", "碳酸饮料"]}} in where["$and"]
 
 
-# --------------------------- P1：否定词归一 ---------------------------
+# --------------------------- P1: negative-term normalization ---------------------------
 
 def test_normalize_collapses_synonyms_to_canonical():
     assert _normalize_negatives(["能量饮料"]) == ["功能饮料"]
@@ -108,12 +108,12 @@ def test_normalize_collapses_synonyms_to_canonical():
 
 
 def test_normalize_dedups():
-    # 多个同义词归一后应只剩一个
+    # Multiple synonyms should collapse to one normalized value.
     assert _normalize_negatives(["能量饮料", "功能性饮料", "功能饮料"]) == ["功能饮料"]
 
 
 def test_normalize_passthrough_non_alias():
-    # 非别名词（成分）原样保留
+    # Non-alias ingredient terms should remain unchanged.
     assert _normalize_negatives(["花生", "香菜"]) == ["花生", "香菜"]
 
 
@@ -122,7 +122,7 @@ def test_normalize_empty_safe():
     assert _normalize_negatives([]) == []
 
 
-# --------------------------- P2：LLM 失败正则兜底 ---------------------------
+# --------------------------- P2: regex fallback after LLM failure ---------------------------
 
 def test_regex_extracts_sub_exclude_with_synonym():
     sub, cat = _regex_extract_excludes("推荐饮料，不要功能性饮料")
@@ -136,23 +136,23 @@ def test_regex_extracts_carbonated():
 
 
 def test_regex_zero_false_positive_on_price():
-    # "不要太贵" 不含品类，绝不能误抽
+    # A price constraint without a category must not produce a false category exclusion.
     sub, cat = _regex_extract_excludes("推荐饮料，不要太贵")
     assert sub == []
     assert cat == []
 
 
 def test_regex_no_negation_cue_returns_empty():
-    # 没有否定触发词，直接空
+    # Return no exclusions when the query has no negative trigger.
     sub, cat = _regex_extract_excludes("推荐功能饮料")
     assert sub == []
     assert cat == []
 
 
-# ----------------- P2：全品类降级反选（不止饮料，保证所有品类） -----------------
+# ----------------- P2: fallback exclusions across all categories -----------------
 
 def test_regex_beauty_official_and_synonym():
-    # 美妆：官方名 + 口语同义词都要命中
+    # Beauty: both official names and colloquial synonyms should match.
     assert "面膜" in _regex_extract_excludes("推荐美妆，不要面膜")[0]
     assert "面膜" in _regex_extract_excludes("推荐护肤，不要补水面膜")[0]
     assert "洁面" in _regex_extract_excludes("推荐护肤，不要洗面奶")[0]
@@ -160,24 +160,24 @@ def test_regex_beauty_official_and_synonym():
 
 
 def test_regex_digital_synonym():
-    # 数码：口语"蓝牙耳机/平板"→官方"真无线耳机/平板电脑"
+    # Electronics: normalize colloquial product types to their catalog names.
     assert "真无线耳机" in _regex_extract_excludes("推荐数码，不要蓝牙耳机")[0]
     assert "平板电脑" in _regex_extract_excludes("推荐数码，不要平板")[0]
 
 
 def test_regex_apparel_synonym():
-    # 服饰：口语"慢跑鞋"→官方"跑步鞋"；"卫衣"官方名
+    # Apparel: normalize colloquial running-shoe wording while preserving official names.
     assert "跑步鞋" in _regex_extract_excludes("推荐运动鞋，不要慢跑鞋")[0]
     assert "卫衣" in _regex_extract_excludes("推荐衣服，不要卫衣")[0]
 
 
 def test_regex_slash_subcategory_matches_each_part():
-    # 关键修复：官方子类目"坚果/零食"含斜杠，"不要坚果"/"不要零食"都要命中全名
+    # Slash-separated catalog subcategories must match either component in a negative request.
     assert "坚果/零食" in _regex_extract_excludes("推荐零食，不要坚果")[0]
     assert "坚果/零食" in _regex_extract_excludes("来点吃的，不要零食")[0]
 
 
 def test_regex_no_false_positive_on_plain_request():
-    # 无否定词或无品类，绝不误抽
+    # Never extract a category without both a negative trigger and a category reference.
     assert _regex_extract_excludes("随便推荐点东西") == ([], [])
     assert _regex_extract_excludes("推荐无糖饮料") == ([], [])

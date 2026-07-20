@@ -1,6 +1,6 @@
-"""E2E 测试：真实调 Ark + Chroma，验证 happy path（含流式）。
+"""End-to-end happy-path tests against the configured model API and Chroma, including streaming.
 
-仅在 RUN_E2E=1 时执行；CI 默认 skip。
+Runs only when `RUN_E2E=1`; CI skips it by default.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from agent.session import AgentSession
 
 
 _RUN = os.environ.get("RUN_E2E") == "1"
-pytestmark = pytest.mark.skipif(not _RUN, reason="需要 RUN_E2E=1 与 ARK_API_KEY")
+pytestmark = pytest.mark.skipif(not _RUN, reason="requires RUN_E2E=1 and ARK_API_KEY")
 
 
 @pytest.fixture(scope="module")
@@ -27,7 +27,7 @@ class TestE2EBlocking:
         sess = AgentSession()
         resp = agent.handle_turn("推荐 500 以内的敏感肌精华", sess)
         assert resp.decision.tool == "recommend"
-        assert resp.tool_result.payload["products"], "应至少命中 1 个商品"
+        assert resp.tool_result.payload["products"], "expected at least one product"
         assert resp.narrative
 
     def test_zero_hit_recommend(self, agent):
@@ -67,14 +67,14 @@ class TestE2EStreaming:
         assert events[-1]["type"] == "done"
         narrative = events[-1]["data"]["narrative"]
         assert narrative
-        # session 历史已写入
+        # The response should be written to session history.
         assert sess.history[-1].content == narrative
 
     def test_stream_clarify_single_token(self, agent):
         sess = AgentSession()
         events = list(agent.handle_turn_stream("随便看看", sess))
         tokens = [e for e in events if e["type"] == "token"]
-        # clarify 静态文本，只产 1 个 token；recommend 流式则多个。
-        # 这里只断言总体流程能跑完。
+        # Clarification copy produces one token while recommendations usually stream several.
+        # This assertion only requires the overall flow to complete.
         assert tokens
         assert events[-1]["type"] == "done"

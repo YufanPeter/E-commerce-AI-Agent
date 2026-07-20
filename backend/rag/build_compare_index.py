@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-"""离线构建商品对比索引（compare_index.json）。
+"""Build ``compare_index.json`` offline.
 
-为每个商品，按其类目的固定对比维度，用 LLM 从 marketing_description / official_faq /
-规格里抽取每个维度的简短值，并生成一句"适合人群"短语。结果落盘后，运行时对比就是
-纯查表、零 LLM——快、稳、可复现。只需在数据/维度定义变化时重跑一次。
+For each product, an LLM extracts concise values for fixed category dimensions from
+descriptions, FAQ entries, and specifications. Runtime comparison then becomes a fast,
+stable, reproducible lookup with no LLM call. Rebuild after data or dimension changes.
 
-运行：
+Usage:
     cd backend && python -m rag.build_compare_index            # 增量（已存在的跳过）
     cd backend && python -m rag.build_compare_index --force    # 全量重建
 """
@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 
 def _extract_schema(dimensions: list[str]) -> dict[str, Any]:
-    """function-calling schema：为固定维度逐一填值 + 一句适合人群短语。"""
+    """Build the function-calling schema for dimension values and audience tagline."""
     dim_lines = "\n".join(f"  - {d}" for d in dimensions)
     properties: dict[str, Any] = {
         dim: {
@@ -60,7 +60,7 @@ def _extract_schema(dimensions: list[str]) -> dict[str, Any]:
 
 
 def _extract_one(detail: ProductDetail, timeout: float) -> dict[str, Any]:
-    """对单个商品抽取所有维度值 + tagline。"""
+    """Extract all dimension values and the audience tagline for one product."""
     dimensions = all_dimensions_for_category(detail.category)
     schema = _extract_schema(dimensions)
     system = (
@@ -85,7 +85,7 @@ def _extract_one(detail: ProductDetail, timeout: float) -> dict[str, Any]:
     )
     message = response.choices[0].message
     if not message.tool_calls:
-        raise ValueError("LLM 未调用 emit_product_dimensions")
+        raise ValueError("The LLM did not call emit_product_dimensions")
     args = json.loads(message.tool_calls[0].function.arguments)
 
     dims = {d: str(args.get(d, "—")).strip() or "—" for d in dimensions}
@@ -105,7 +105,7 @@ def build_index(
     force: bool = False,
     max_workers: int = 6,
 ) -> dict[str, Any]:
-    """为全部在售商品构建（或增量补全）对比索引并落盘。"""
+    """Build or incrementally complete the comparison index for active products."""
     store = ProductStore()
     with store.connect() as conn:
         rows = conn.execute(
@@ -117,7 +117,7 @@ def build_index(
     todo = [pid for pid in product_ids if pid not in existing]
     timeout = float(os.getenv("ARK_TIMEOUT", "30"))
     logger.info(
-        "对比索引：共 %d 个商品，已存在 %d，本次需抽取 %d",
+        "Comparison index: %d products, %d existing, %d to extract",
         len(product_ids), len(existing), len(todo),
     )
 
@@ -127,8 +127,8 @@ def build_index(
             return pid, None
         try:
             return pid, _extract_one(detail, timeout)
-        except Exception as exc:  # noqa: BLE001 - 单条失败不中断整批
-            logger.warning("商品 %s 维度抽取失败：%r", pid, exc)
+        except Exception as exc:  # noqa: BLE001 - one product must not stop the batch
+            logger.warning("Dimension extraction failed for product %s: %r", pid, exc)
             return pid, None
 
     result = dict(existing)
@@ -141,15 +141,15 @@ def build_index(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
-    logger.info("对比索引已写入 %s（共 %d 个商品）", out_path, len(result))
+    logger.info("Comparison index written to %s with %d products", out_path, len(result))
     return result
 
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
-    parser = argparse.ArgumentParser(description="构建商品对比索引")
-    parser.add_argument("--force", action="store_true", help="忽略已有索引，全量重建")
-    parser.add_argument("--workers", type=int, default=6, help="并发抽取线程数")
+    parser = argparse.ArgumentParser(description="Build the product comparison index")
+    parser.add_argument("--force", action="store_true", help="Ignore existing entries and rebuild all")
+    parser.add_argument("--workers", type=int, default=6, help="Number of concurrent extraction workers")
     args = parser.parse_args()
     build_index(force=args.force, max_workers=args.workers)
 

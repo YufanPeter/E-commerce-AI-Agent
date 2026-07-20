@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-"""商品 RAG 知识的离线 Chroma 索引构建脚本。
+"""Offline Chroma index builder for product RAG knowledge.
 
-当商品 JSON 数据集变化时运行本脚本。脚本会从商品基础信息、营销描述、
-官方 FAQ 和用户评价中构建语义证据 chunks，并写入本地 Chroma collection。
+Run after the product JSON dataset changes. The builder creates semantic evidence chunks
+from product facts, marketing descriptions, official FAQ entries, and user reviews.
 """
 
 import argparse
@@ -24,7 +24,7 @@ from rag.chroma_store import (
 
 @dataclass(frozen=True)
 class Chunk:
-    """一个需要 embedding 并写入 Chroma 的文本单元。"""
+    """Text unit to embed and write to Chroma."""
 
     id: str
     document: str
@@ -32,7 +32,7 @@ class Chunk:
 
 
 def iter_product_files(data_dir: Path) -> Iterable[Path]:
-    """按稳定顺序遍历商品 JSON，便于重复构建时结果可复现。"""
+    """Yield product JSON files in stable order for reproducible builds."""
     yield from sorted(data_dir.glob("*/data/*.json"))
 
 
@@ -42,12 +42,12 @@ def load_product(path: Path) -> dict[str, Any]:
 
 
 def compact_text(value: str) -> str:
-    """在 embedding 前压缩多余空白字符。"""
+    """Collapse redundant whitespace before embedding."""
     return " ".join(value.split())
 
 
 def sku_summary(product: dict[str, Any]) -> str:
-    """生成紧凑的 SKU 摘要，供商品基础信息 chunk 使用。"""
+    """Build a compact SKU summary for the product-profile chunk."""
     summaries: list[str] = []
     for sku in product.get("skus", []):
         properties = sku.get("properties", {})
@@ -62,7 +62,7 @@ def base_metadata(
     chunk_type: str,
     source_index: int = 0,
 ) -> dict[str, str | int | float | bool]:
-    """构建同一商品下所有 chunks 共享的 metadata。"""
+    """Build metadata shared by every chunk for one product."""
     return {
         "product_id": product["product_id"],
         "title": product["title"],
@@ -77,7 +77,7 @@ def base_metadata(
 
 
 def product_prefix(product: dict[str, Any]) -> str:
-    """给证据文本加上商品身份前缀，提升召回时的上下文清晰度。"""
+    """Prefix evidence with product identity for clearer retrieval context."""
     return (
         f"商品：{product['title']}\n"
         f"品牌：{product.get('brand', '')}\n"
@@ -87,7 +87,7 @@ def product_prefix(product: dict[str, Any]) -> str:
 
 
 def build_product_profile_chunk(product: dict[str, Any]) -> Chunk:
-    """构建包含标题、类目、价格和 SKU 的商品基础信息 chunk。"""
+    """Build a profile chunk containing title, category, price, and SKUs."""
     product_id = product["product_id"]
     sku_text = sku_summary(product)
     document = (
@@ -105,7 +105,7 @@ def build_product_profile_chunk(product: dict[str, Any]) -> Chunk:
 
 
 def build_marketing_chunk(product: dict[str, Any]) -> Chunk | None:
-    """构建用于召回场景、卖点和使用建议的营销描述 chunk。"""
+    """Build a marketing chunk for use cases, selling points, and guidance."""
     text = product.get("rag_knowledge", {}).get("marketing_description", "")
     if not text:
         return None
@@ -124,7 +124,7 @@ def build_marketing_chunk(product: dict[str, Any]) -> Chunk | None:
 
 
 def build_faq_chunks(product: dict[str, Any]) -> list[Chunk]:
-    """每条 FAQ 构建一个 chunk，确保问题和答案不被拆开。"""
+    """Build one chunk per FAQ so each question stays with its answer."""
     chunks: list[Chunk] = []
     faqs = product.get("rag_knowledge", {}).get("official_faq", [])
     for index, faq in enumerate(faqs):
@@ -151,7 +151,7 @@ def build_faq_chunks(product: dict[str, Any]) -> list[Chunk]:
 
 
 def review_polarity(rating: int | float) -> str:
-    """把数字评分映射成粗粒度评价倾向。"""
+    """Map a numeric rating to coarse review sentiment."""
     if rating >= 4:
         return "positive"
     if rating <= 2:
@@ -160,7 +160,7 @@ def review_polarity(rating: int | float) -> str:
 
 
 def build_review_chunks(product: dict[str, Any]) -> list[Chunk]:
-    """每条用户评价构建一个 chunk，用于召回真实体验和风险提示。"""
+    """Build one chunk per review for experiences and risk signals."""
     chunks: list[Chunk] = []
     reviews = product.get("rag_knowledge", {}).get("user_reviews", [])
     for index, review in enumerate(reviews):
@@ -192,10 +192,10 @@ def build_review_chunks(product: dict[str, Any]) -> list[Chunk]:
 
 
 def build_chunks(product: dict[str, Any]) -> list[Chunk]:
-    """为单个商品 JSON 构建所有 Chroma chunks。
+    """Build every Chroma chunk for one product object.
 
-    当前采用按字段语义切分，而不是固定字数切分：商品基础信息、营销描述、
-    每条 FAQ、每条用户评价分别作为独立证据单元。
+    Semantic fields define boundaries rather than a fixed character count: profile,
+    marketing copy, each FAQ, and each review become separate evidence units.
     """
     chunks = [build_product_profile_chunk(product)]
     marketing_chunk = build_marketing_chunk(product)
@@ -207,7 +207,7 @@ def build_chunks(product: dict[str, Any]) -> list[Chunk]:
 
 
 def load_all_chunks(data_dir: Path) -> list[Chunk]:
-    """读取所有商品文件并转换为 Chroma chunks。"""
+    """Load all product files and convert them into Chroma chunks."""
     chunks: list[Chunk] = []
     product_files = list(iter_product_files(data_dir))
     if not product_files:
@@ -220,13 +220,13 @@ def load_all_chunks(data_dir: Path) -> list[Chunk]:
 
 
 def batched(items: list[Chunk], size: int) -> Iterable[list[Chunk]]:
-    """按固定大小分批，降低 embedding 和 upsert 的单批压力。"""
+    """Yield fixed-size batches to bound embedding and upsert load."""
     for start in range(0, len(items), size):
         yield items[start : start + size]
 
 
 def upsert_chunks(collection: Any, chunks: list[Chunk], batch_size: int) -> None:
-    """分批计算向量并写入 Chroma。"""
+    """Embed and upsert chunks in batches."""
     for chunk_batch in batched(chunks, batch_size):
         collection.upsert(
             ids=[chunk.id for chunk in chunk_batch],
@@ -236,7 +236,7 @@ def upsert_chunks(collection: Any, chunks: list[Chunk], batch_size: int) -> None
 
 
 def print_stats(chunks: list[Chunk]) -> None:
-    """打印索引组成，用于构建后的快速检查。"""
+    """Print index composition for a quick post-build check."""
     chunk_counts = Counter(chunk.metadata["chunk_type"] for chunk in chunks)
     category_counts = Counter(chunk.metadata["category"] for chunk in chunks)
 
@@ -250,7 +250,7 @@ def print_stats(chunks: list[Chunk]) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    """解析离线索引构建命令的参数。"""
+    """Parse offline index-build arguments."""
     parser = argparse.ArgumentParser(description="Build the Chroma RAG index.")
     parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
     parser.add_argument("--persist-dir", type=Path, default=DEFAULT_PERSIST_DIR)
@@ -262,7 +262,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    """从商品 JSON 文件构建 Chroma 索引。"""
+    """Build the Chroma index from product JSON files."""
     args = parse_args()
     chunks = load_all_chunks(args.data_dir)
     print_stats(chunks)

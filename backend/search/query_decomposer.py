@@ -1,30 +1,23 @@
 from __future__ import annotations
 
-"""多需求拆解（multi-intent decomposition）。
+"""Multi-intent decomposition for shopping queries.
 
-职责（窄而清晰）：
-    把【单句内】包含多个购物需求的 query 拆成若干互相独立的子需求，
-    每个子需求随后各自走一遍标准检索管线（SearchService.search）。
+Split several shopping needs in one utterance into independent subrequests, each of
+which runs through ``SearchService.search``.
 
-    典型场景是"场景化购物"——一句话隐含多个品类：
+Example:
         "我想去三亚旅游，推荐衣服和防晒吗？"
             → [ SubRequest(label="防晒", query="三亚旅游 海边 防晒"),
                 SubRequest(label="衣服", query="三亚旅游 夏季 速干衣") ]
 
-为什么和 query_understanding 分开：
-    - understand_query 解决"一个需求 → 结构化 ParsedQuery"；
-    - decompose 解决"一句话 → 几个需求"。两者是正交的两层，
-      混在一起会让单个 LLM 任务过载、难调试。拆开后各管一件事。
+Decomposition is separate from query understanding: one decides how many needs exist,
+while the other maps one need to a structured ``ParsedQuery``.
 
-为什么不动 ParsedQuery 契约：
-    每个子需求最终仍是一个独立、完整的 ParsedQuery，下游 where_builder /
-    retriever / reranker / 前端卡片格式全部零改动。decompose 只是在
-    RecommendTool 入口多了一次"要不要 fan-out"的判断。
+Each subrequest still produces a complete ``ParsedQuery``, preserving all downstream
+contracts. Decomposition only decides whether ``RecommendTool`` should fan out.
 
-降级原则：
-    decompose 是【锦上添花】，绝不能成为新的失败点。LLM 不可用 / 超时 /
-    畸形输出时，一律退化为"单需求 = 原 query"，让 recommend 走回老路，
-    保证可用性不退步。
+Decomposition is optional. LLM failure, timeout, or malformed output falls back to one
+subrequest containing the original query.
 """
 
 import json
@@ -33,26 +26,23 @@ from dataclasses import dataclass
 from typing import Any
 
 from llm.client import get_client, get_model_id
-# 复用 llm_parser 里已经打磨过的容错 JSON 解析（豆包 function calling 偶发畸形输出）。
+# Reuse the tolerant function-call JSON parser.
 from search.llm_parser import _loads_arguments
 
 
 logger = logging.getLogger(__name__)
 
 
-# 拆解出的子需求上限：场景化购物再多也很少超过 4 个品类，
-# 设上限防止 LLM 把一个需求过度切碎（如把"防晒"拆成"防晒霜/防晒衣/防晒帽"），
-# 反而稀释每类的召回质量、拖慢响应（每个子需求都要一次完整检索）。
+# Bound fan-out so the model cannot over-split one need and dilute retrieval quality.
 MAX_SUB_REQUESTS = 4
 
 
 @dataclass(frozen=True)
 class SubRequest:
-    """单个子需求。
+    """One independent shopping subrequest.
 
-    label: 人类可读的需求名（如"防晒"、"衣服"），用于分组展示和 composer 话术。
-    query: 喂给 SearchService 的检索子查询，应自带场景语境（如"三亚海边 防晒"），
-           让向量召回更精准。
+    ``label`` is used for grouped display and composition. ``query`` includes sufficient
+    scenario context for standalone retrieval.
     """
 
     label: str
@@ -132,15 +122,12 @@ SYSTEM_PROMPT = """你是电商导购的"需求拆解器"。唯一职责：判�
 
 
 def decompose_query(query: str, timeout: float = 6.0) -> list[SubRequest]:
-    """把 query 拆成子需求列表。
+    """Split a query into one or more subrequests.
 
-    返回至少含 1 个元素的列表：
-        - 单需求（最常见）：返回 [SubRequest(label=query, query=query)]，
-          调用方据此走原单路检索，零额外开销。
-        - 多需求：返回多个 SubRequest，调用方 fan-out 检索后合并。
+    A single need returns the original query and uses the normal retrieval path. Multiple
+    needs return independent requests for fan-out and merge.
 
-    任何异常（LLM 失败 / 超时 / 畸形输出 / 空结果）都【吞掉】并退化为单需求，
-    保证 recommend 主链路永不因 decompose 失败而中断。
+    Every failure is contained and falls back to one request.
     """
     fallback = [SubRequest(label=query, query=query)]
     try:
@@ -157,7 +144,7 @@ def decompose_query(query: str, timeout: float = 6.0) -> list[SubRequest]:
             timeout=timeout,
         )
         requests = _extract_requests(response)
-    except Exception:  # noqa: BLE001 - decompose 是增强项，失败一律退化为单需求
+    except Exception:  # noqa: BLE001 - decomposition is optional
         logger.warning("decompose_query failed, fallback to single request", exc_info=True)
         return fallback
 
@@ -168,7 +155,7 @@ def decompose_query(query: str, timeout: float = 6.0) -> list[SubRequest]:
 def _extract_requests(response: Any) -> list[dict[str, Any]]:
     message = response.choices[0].message
     if not message.tool_calls:
-        raise ValueError("decompose LLM 没有调用 split_shopping_requests")
+        raise ValueError("The decomposition LLM did not call split_shopping_requests")
     raw = message.tool_calls[0].function.arguments
     args = _loads_arguments(raw)
     requests = args.get("requests")
@@ -178,7 +165,7 @@ def _extract_requests(response: Any) -> list[dict[str, Any]]:
 
 
 def _normalize(requests: list[dict[str, Any]], original_query: str) -> list[SubRequest]:
-    """清洗 LLM 输出：去空、去重、截断到上限。"""
+    """Remove empty or duplicate output and enforce the request limit."""
     seen_queries: set[str] = set()
     out: list[SubRequest] = []
     for item in requests:
@@ -186,7 +173,7 @@ def _normalize(requests: list[dict[str, Any]], original_query: str) -> list[SubR
             continue
         label = str(item.get("label") or "").strip()
         sub_query = str(item.get("query") or "").strip()
-        # query 缺失时退回 label，label 也缺失则跳过。
+        # Fall back from a missing query to its label; skip when both are empty.
         sub_query = sub_query or label
         label = label or sub_query
         if not sub_query or sub_query in seen_queries:

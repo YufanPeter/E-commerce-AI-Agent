@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-"""运行时 Chroma 检索器，供后续 API 服务复用。
+"""Runtime Chroma retriever shared by API services.
 
-FastAPI 等常驻服务应在启动时创建一个 ``ChromaRetriever``，之后所有用户
-请求复用同一个实例，让 Chroma client 和 embedding 模型保持热状态。
+Long-running services should create one ``ChromaRetriever`` at startup and reuse it so
+the Chroma client and embedding connection remain warm.
 """
 
 from dataclasses import dataclass
@@ -20,7 +20,7 @@ from rag.chroma_store import (
 
 @dataclass(frozen=True)
 class RetrievedChunk:
-    """一次 Chroma 命中的标准化结果，便于后续排序和聚合。"""
+    """Normalized Chroma hit used by downstream ranking and aggregation."""
 
     chunk_id: str
     document: str
@@ -37,7 +37,7 @@ class RetrievedChunk:
 
 
 class ChromaRetriever:
-    """对已有商品知识向量库的轻量运行时封装。"""
+    """Lightweight runtime wrapper around the product knowledge collection."""
 
     def __init__(
         self,
@@ -45,7 +45,7 @@ class ChromaRetriever:
         collection_name: str = DEFAULT_COLLECTION,
         embedding_model: str = DEFAULT_EMBEDDING_MODEL,
     ) -> None:
-        """加载 collection 和 embedding 模型，用于后续重复检索。"""
+        """Load the collection and embedding function for repeated retrieval."""
         self.collection = create_collection(
             persist_dir=persist_dir,
             collection_name=collection_name,
@@ -54,7 +54,7 @@ class ChromaRetriever:
         )
 
     def count(self) -> int:
-        """返回当前 collection 中的 chunk 数量。"""
+        """Return the current number of chunks in the collection."""
         return self.collection.count()
 
     def search(
@@ -63,10 +63,10 @@ class ChromaRetriever:
         top_k: int = 10,
         where: dict[str, Any] | None = None,
     ) -> list[RetrievedChunk]:
-        """根据用户 query 检索语义证据 chunk。
+        """Retrieve semantic evidence chunks for a user query.
 
-        ``where`` 是 Chroma metadata 过滤器，适合做类目、product_id 等粗过滤。
-        价格、SKU、品牌排除等硬业务约束后续应由 SQLite Product Store 兜底。
+        ``where`` is a Chroma metadata prefilter for category or product ID. Hard business
+        constraints such as price, SKU, and brand exclusion are enforced by ProductStore.
         """
         result = self.collection.query(
             query_texts=[query],
@@ -77,7 +77,7 @@ class ChromaRetriever:
         return self._parse_result(result)
 
     def _parse_result(self, result: dict[str, Any]) -> list[RetrievedChunk]:
-        """把 Chroma 嵌套返回结构转换成更好用的结果对象。"""
+        """Convert Chroma's nested response into normalized result objects."""
         ids = result.get("ids", [[]])[0]
         documents = result.get("documents", [[]])[0]
         metadatas = result.get("metadatas", [[]])[0]

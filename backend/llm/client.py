@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-"""豆包 Ark / OpenAI 兼容客户端的薄封装。
+"""Thin wrapper around an OpenAI-compatible Doubao Ark client.
 
-Ark 协议完全兼容 OpenAI SDK，因此直接复用 ``openai.OpenAI`` 即可。
-本模块只做两件事：
-1. 从环境变量加载 ARK_API_KEY / ARK_BASE_URL / ARK_MODEL；
-2. 提供一个进程内单例客户端，避免重复创建连接。
+Ark uses the OpenAI SDK protocol. This module loads provider configuration from the
+environment and exposes process-wide clients to reuse HTTP connections.
 """
 
 import os
@@ -26,13 +24,13 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _load_env_once() -> None:
-    """从仓库根的 .env 加载配置，已存在的环境变量不会被覆盖。"""
+    """Load repository-root ``.env`` values without overriding the environment."""
     load_dotenv(PROJECT_ROOT / ".env", override=False)
 
 
 @lru_cache(maxsize=1)
 def get_client() -> OpenAI:
-    """进程内单例。首次调用时建立 HTTP 连接池。"""
+    """Return the process-wide chat client, creating its connection pool lazily."""
     from openai import OpenAI
 
     _load_env_once()
@@ -40,11 +38,9 @@ def get_client() -> OpenAI:
     base_url = os.getenv("ARK_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3/")
     if not api_key:
         raise RuntimeError(
-            "缺少 ARK_API_KEY。请复制 .env.example 为 .env 并填入豆包 API Key。"
+            "ARK_API_KEY is missing. Create a root .env file and provide a compatible chat API key."
         )
-    # 必须设置超时：OpenAI SDK 默认 600s，一旦 ARK 响应挂起会让整条检索链
-    # 无限卡在 socket read 上（前端表现为一直「检索中」）。给一个合理上限并
-    # 允许一次自动重试，让偶发网络抖动快速失败而非永久阻塞。
+    # Bound the SDK timeout so a stalled provider cannot block the retrieval chain.
     timeout = float(os.getenv("ARK_TIMEOUT", "30"))
     max_retries = int(os.getenv("ARK_MAX_RETRIES", "1"))
     return OpenAI(
@@ -56,22 +52,21 @@ def get_client() -> OpenAI:
 
 
 def get_model_id() -> str:
-    """返回当前默认模型 / endpoint id。"""
+    """Return the configured default model or endpoint ID."""
     _load_env_once()
     model = os.getenv("ARK_MODEL")
     if not model:
-        raise RuntimeError("缺少 ARK_MODEL。请在 .env 中指定豆包 endpoint id。")
+        raise RuntimeError("ARK_MODEL is missing. Set the general model or endpoint ID in .env.")
     return model
 
 
 @lru_cache(maxsize=1)
 def get_embedding_client() -> OpenAI:
-    """embedding 专用客户端单例。
+    """Return the process-wide embedding client.
 
-    豆包 embedding 接入点通常与聊天模型使用不同的 API Key（甚至不同 base_url），
-    所以单独维护一个客户端。配置回退顺序：
-    - API Key：ARK_EMBEDDING_API_KEY → ARK_API_KEY
-    - base_url：ARK_EMBEDDING_BASE_URL → ARK_BASE_URL → 默认 Ark 地址
+    Embeddings may use a separate API key and base URL. Keys fall back from
+    ``ARK_EMBEDDING_API_KEY`` to ``ARK_API_KEY``; base URLs fall back from
+    ``ARK_EMBEDDING_BASE_URL`` to ``ARK_BASE_URL`` and then the default Ark endpoint.
     """
     from openai import OpenAI
 
@@ -79,8 +74,8 @@ def get_embedding_client() -> OpenAI:
     api_key = os.getenv("ARK_EMBEDDING_API_KEY") or os.getenv("ARK_API_KEY")
     if not api_key:
         raise RuntimeError(
-            "缺少 embedding 的 API Key。请在 .env 中设置 ARK_EMBEDDING_API_KEY"
-            "（或复用 ARK_API_KEY）。"
+            "The embedding API key is missing. Set ARK_EMBEDDING_API_KEY in .env "
+            "or reuse ARK_API_KEY."
         )
     base_url = (
         os.getenv("ARK_EMBEDDING_BASE_URL")
@@ -99,19 +94,19 @@ def get_embedding_client() -> OpenAI:
 
 @lru_cache(maxsize=1)
 def get_rerank_client() -> httpx.Client:
-    """rerank 专用 HTTP 客户端单例（智谱 ``/paas/v4/rerank``）。
+    """Return the process-wide reranking HTTP client.
 
-    精排改为云端 rerank API，避免后端镜像安装 sentence-transformers / torch 等
-    超大本地推理依赖。智谱 rerank 用 Bearer API Key 鉴权，直接复用 httpx。
+    Cloud reranking avoids large local inference dependencies such as PyTorch and
+    sentence-transformers. The configured service uses bearer authentication.
 
-    配置只读取 ZHIPU_API_KEY；调试阶段不做其他 key 回退，避免接错服务。
+    Only ``ZHIPU_API_KEY`` is accepted to prevent accidental cross-provider credentials.
     """
     _load_env_once()
     api_key = os.getenv("ZHIPU_API_KEY")
     if not api_key:
         raise RuntimeError(
-            "缺少 rerank 的 API Key。请在 .env 中设置 ZHIPU_API_KEY；"
-            "不需要 rerank 时请设置 USE_RERANK=0。"
+            "The reranking API key is missing. Set ZHIPU_API_KEY in .env, "
+            "or set USE_RERANK=0 when reranking is not required."
         )
     timeout = float(os.getenv("RERANK_TIMEOUT", os.getenv("ARK_TIMEOUT", "30")))
     return httpx.Client(
@@ -124,15 +119,15 @@ def get_rerank_client() -> httpx.Client:
 
 
 def get_rerank_base_url() -> str:
-    """返回 rerank 接口地址。"""
+    """Return the reranking endpoint URL."""
     _load_env_once()
     return os.getenv("RERANK_BASE_URL", DEFAULT_RERANK_BASE_URL)
 
 
 def get_rerank_model_id() -> str:
-    """返回 rerank 模型名（如智谱 ``rerank``）。"""
+    """Return the configured reranking model name."""
     _load_env_once()
     model = os.getenv("RERANK_MODEL")
     if not model:
-        raise RuntimeError("缺少 RERANK_MODEL。请在 .env 中设置 RERANK_MODEL=rerank。")
+        raise RuntimeError("RERANK_MODEL is missing. Set the reranking model ID in .env.")
     return model

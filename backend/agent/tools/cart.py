@@ -1,23 +1,18 @@
 from __future__ import annotations
 
-"""CartTool：对话式购物车与下单（"把刚才那款加进来"/"删掉第二个"/"下单吧"）。
+"""Conversational cart management and checkout.
 
-这是"高级"档需求：对话式 CRUD + 多轮状态管理 + 业务闭环。
+This tool combines conversational CRUD, multi-turn state, and a complete purchase flow.
 
-架构：
-    intent_router 把购物相关的"管车/下单"意图粗分到 cart，CartTool 再用
-    **统一工具调用层**（agent.llm_actions.dispatch_action）把这句话细分到
-    具体动作（add/remove/set_quantity/view/checkout）并抽参数。
-    动作选定后，用确定性代码操作 CartStore（SQLite），副作用可控可测。
+Architecture:
+    The intent router sends cart/checkout requests here. ``dispatch_action`` selects
+    add, remove, set_quantity, view, or checkout and extracts arguments. Deterministic
+    code then applies the selected operation to the SQLite-backed ``CartStore``.
 
-指代消解复用 reference 模块：
-    - "把刚才那款/这个加进来" → last_focus_product_id（product_detail 写的）
-      或 last_hits[0]
-    - "删掉第二个" → 购物车当前明细的第 2 行（注意：是购物车的顺序，
-      不是推荐列表的顺序）
+Reference resolution reuses the shared resolver. Demonstratives use the focused product
+or recent hits, while cart ordinals refer to cart-line order, not recommendation order.
 
-降级：LLM 动作分发失败时，退回一个安全默认——展示当前购物车，
-      让用户看到状态而不是报错。
+If LLM action dispatch fails, the safe fallback is to show the current cart.
 """
 
 import logging
@@ -36,7 +31,7 @@ from store.product_store import ProductStore
 
 logger = logging.getLogger(__name__)
 
-# 用户在"选规格"环节放弃时的取消词。命中则清掉待选状态、不加购。
+# Cancellation terms that clear pending SKU selection without adding an item.
 _CANCEL_WORDS = ("算了", "不加了", "不要了", "取消", "先不", "不用了", "不买了")
 
 
@@ -93,24 +88,20 @@ class CartTool:
         product_store: ProductStore | None = None,
     ) -> None:
         self._store = cart_store or CartStore()
-        # 全库商品检索：用户"点名"加购（把小米/oppo 加进来）但当前推荐列表里
-        # 没有该商品时，直接去整库按关键词定位，而不是回退到上一轮聚焦的商品。
+        # Catalog-wide lookup handles named products absent from the current results.
         self._products = product_store or ProductStore()
 
     def run(self, query: str, session: AgentSession, slots: dict[str, Any]) -> ToolResult:
-        # router 常把"把小米加进来"verbose 改写成注入了列表里其它商品名的
-        # query（如带上 OPPO Reno…），名称/规格定位若用改写句会错配成别的
-        # 商品。这里一律用用户原句做"定位"，只把改写句留给动作分类。
+        # Use the raw utterance for product/SKU resolution because a router rewrite may
+        # inject contextual product names. The rewritten query is used only for action type.
         raw_query = self._user_text(session, query)
 
-        # 上一轮在等用户选规格（多 SKU 商品）：这一轮优先当作"规格回答"处理，
-        # 而不是再走一次动作分发——否则"暗夜黑 42码"会被误判成新指令。
+        # Treat a turn as an SKU answer while a multi-SKU selection is pending.
         pending = session.get("pending_cart")
         if pending:
             return self._resolve_pending_sku(raw_query, session, pending)
 
-        # 上一轮在等用户选"加哪一款"（指代定位不到唯一商品时）：这一轮当作
-        # "选商品回答"处理（序号 / 品牌名 / 取消）。
+        # Treat a turn as a product selection while an ambiguous add is pending.
         pending_add = session.get("pending_add")
         if pending_add:
             return self._resolve_pending_add(raw_query, session, pending_add)
@@ -126,25 +117,26 @@ class CartTool:
                 return self._remove(args)
             if action == "checkout":
                 return self._checkout(args)
-            return self._view()  # view 及未知动作的安全兜底
+            return self._view()  # Safe fallback for view and unknown actions.
         except CartNotFoundError as exc:
             return self._plain(str(exc) + "。要不先看看购物车或换一件？")
 
-    # ------------------------------ 动作分发 ------------------------------
+    # ------------------------------ Action dispatch ------------------------------
 
     @staticmethod
     def _user_text(session: AgentSession, fallback: str) -> str:
-        """取本轮用户原句（history 里最后一条 user 消息）。
+        """Return the raw utterance from the latest user history entry.
 
-        orchestrator 在路由前已 add_user，所以这里能拿到未被 router 改写的
-        原话；用于名称/规格定位，避免被改写句注入的其它商品名误导。"""
+        The orchestrator stores it before routing, allowing name and SKU resolution to
+        avoid unrelated product names introduced by rewriting.
+        """
         for msg in reversed(session.history):
             if msg.role == "user":
                 return msg.content
         return fallback
 
     def _decide(self, query: str, session: AgentSession) -> tuple[str, dict[str, Any]]:
-        """用统一工具调用层选动作；LLM 失败时退回 view（展示状态而非报错）。"""
+        """Select an action, falling back to cart view when LLM dispatch fails."""
         try:
             decision = dispatch_action(query, session, _ACTIONS, purpose=_PURPOSE)
             return decision.action, decision.args
@@ -152,56 +144,48 @@ class CartTool:
             logger.warning("cart action dispatch failed, fallback to view: %r", exc)
             return "view", {}
 
-    # ------------------------------ 各动作 ------------------------------
+    # ------------------------------ Actions ------------------------------
 
     def _add(self, query: str, session: AgentSession, args: dict[str, Any]) -> ToolResult:
-        """定位要加车的商品并进入加购流程。
+        """Resolve the product and begin the add-to-cart flow.
 
-        定位优先级：显式序号 → 当前列表名称命中 → 全库点名检索 →
-        上一轮详情聚焦 → 唯一候选默认；都不满足且候选有多个时列出反问，
-        绝不静默抓第一个、也绝不在找不到时回退成无关商品。
+        Priority is explicit ordinal, current-list name, catalog lookup, focused product,
+        then a sole candidate. Ambiguous candidates trigger clarification; an unrelated
+        product is never selected silently.
         """
         last_hits = session.recall_hits()
         qty = _as_int(args.get("quantity"), default=1)
 
-        # 原句里显式点到的品牌（最可靠的意图信号）。这一步要在「显式序号」之前算：
-        # router 常把"把小米加进来"改写成注入了屏幕上其它商品名（如 OPPO Reno）的
-        # query，动作分发 LLM 读到改写句后会吐出指向那件商品的 index。若无脑采信这个
-        # index，就会把"加小米"错配成"加 OPPO"。所以——原句点了名的品牌优先于 index。
+        # An explicitly named brand in the raw utterance is more reliable than an index
+        # inferred from rewritten context, so calculate brand matches first.
         brand_hits = self._products.match_brands_in_text(query)
         brand_ids = {c.product_id for c in brand_hits}
 
-        # 1) 显式序号：只采信用户原句里真的出现的"第N个/最后一个"。
-        # dispatch_action 的 args.index 可能来自 router/LLM 对上下文的猜测；
-        # 用户只说"帮我加入购物车"时若上一轮刚聚焦了小米，不能让这个猜测
-        # 覆盖 last_focus_product_id，错加成列表第一个 iPad。
+        # 1. Trust only ordinals explicitly present in the raw utterance.
         parsed = resolve_indices(query, len(last_hits))
         idx = (parsed[0] + 1) if parsed else None
         if idx is not None:
             i = int(idx) - 1
             if 0 <= i < len(last_hits):
                 target_id = last_hits[i]["product_id"]
-                # 仅当 index 与原句点名的品牌不矛盾时才采信：原句没点品牌（纯说"第N个"）
-                # 或点的就是这件商品 → 用 index；否则判定 index 是改写句注入的幻觉，弃用。
+                # Accept the index only when it does not conflict with an explicit brand.
                 if not brand_ids or target_id in brand_ids:
                     return self._begin_add(target_id, qty, session, query, source="explicit_index")
 
-        # 2) 当前推荐列表里名称/品牌命中（快路径：屏幕上就有，直接定位）
+        # 2. Match a name or brand in the current recommendation list.
         named = resolve_by_name(query, last_hits)
         if len(named) == 1:
             return self._begin_add(last_hits[named[0]]["product_id"], qty, session, query, source="context_name")
         if len(named) > 1:
-            # 同品牌多品类（「华为耳机」命中华为耳机+华为手机）→ 先让 LLM 按子品类
-            # 语义挑唯一一款，挑不出再列候选反问，避免反复追问。
+            # Semantically resolve same-brand matches across categories before clarifying.
             subset = [last_hits[i] for i in named]
             picked = resolve_one(query, self._enrich_candidates(subset))
             if picked is not None:
                 return self._begin_add(subset[picked]["product_id"], qty, session, query, source="semantic_context_match")
             return self._ask_which_product(subset, session)
 
-        # 3) 全库点名检索（text2sql 思路）：先拿原句直接和库里品牌名做子串匹配，
-        #    "请你把小米加入购物车"这种带语气前缀也能稳稳命中"小米"；品牌没命中
-        #    再退回抽词按 title 搜型号/品类（如"北面冲锋衣"）。覆盖所有品类。
+        # 3. Search the full catalog: direct brand substring first, then extracted
+        # model/category keywords against titles.
         keyword = extract_name_query(query)
         found = brand_hits
         if not found and keyword:
@@ -211,24 +195,23 @@ class CartTool:
             return self._begin_add(found[0].product_id, qty, session, query, source=source)
         if len(found) > 1:
             hits = [{"product_id": c.product_id, "title": c.title} for c in found]
-            # 把检索结果回写工作记忆，使后续"第N个/某品牌"能接着定位。
+            # Store catalog matches so subsequent turns can refer to them.
             session.set("last_hits", hits)
             return self._ask_which_product(hits, session)
 
-        # 4) 上一轮详情聚焦的商品（"这个加进来"——没有任何点名词时才用）
+        # 4. Use the focused product for an unnamed demonstrative request.
         focus = session.get("last_focus_product_id")
         if focus and not keyword:
             return self._begin_add(focus, qty, session, query, source="focus")
 
-        # 5) 用户明确点了名（有 keyword/品牌词）却全库都没找到 → 不要静默回退成
-        #    屏幕上那件无关商品，如实告知没找到，避免"加小米却加成 OPPO"。
+        # 5. A named but missing product must not fall back to an unrelated visible item.
         if keyword or brand_ids:
             return self._plain(
                 f"没有找到和「{keyword or query}」匹配的商品哦，"
                 "换个说法或者先让我帮你推荐几款？"
             )
 
-        # 6) 只有一个候选时才默认加；多个候选无法定位 → 反问列出，避免误加
+        # 6. Default only when a single candidate exists; otherwise clarify.
         if len(last_hits) == 1:
             return self._begin_add(last_hits[0]["product_id"], qty, session, query, source="only_candidate")
         if last_hits:
@@ -242,7 +225,7 @@ class CartTool:
     def _ask_which_product(
         self, hits: list[dict[str, Any]], session: AgentSession
     ) -> ToolResult:
-        """指代定位不到唯一商品时，列出候选让用户选（序号或品牌名）。"""
+        """List candidates when reference resolution cannot identify one product."""
         candidates = [
             {"product_id": h["product_id"], "title": h.get("title", "")} for h in hits
         ]
@@ -263,9 +246,10 @@ class CartTool:
     def _enrich_candidates(
         self, candidates: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
-        """给候选补上 brand/category/sub_category，供 LLM 语义消歧用依据。
+        """Enrich candidates with catalog fields for semantic disambiguation.
 
-        富化失败（取详情异常）不影响主流程——LLM 仍可只凭 title 消歧。"""
+        Enrichment failures do not block title-only resolution.
+        """
         enriched: list[dict[str, Any]] = []
         for cand in candidates:
             item = dict(cand)
@@ -284,7 +268,7 @@ class CartTool:
     def _resolve_pending_add(
         self, query: str, session: AgentSession, pending_add: dict[str, Any]
     ) -> ToolResult:
-        """用户对"加哪一款"的回答：定位到唯一商品后进入加购；仍模糊则继续问。"""
+        """Resolve an answer to a pending product choice, or ask again."""
         if self._is_cancel(query):
             session.set("pending_add", None)
             return self._plain("好的，先不加了。还有什么我可以帮你的？")
@@ -294,17 +278,17 @@ class CartTool:
             session.set("pending_add", None)
             return self._plain("想加哪款呢？先让我帮你推荐几款吧～")
 
-        # 用户改点了候选之外的别的品牌商品 → 放弃当前候选，重新定位。
+        # Restart resolution when the user names a product outside the pending candidates.
         switched = self._switch_intent(
             query, session, [c["product_id"] for c in candidates]
         )
         if switched is not None:
             return switched
 
-        # 统一分层定位：序号 → 名称唯一 → LLM 语义消歧（「华为耳机」选真无线耳机那款）。
+        # Shared layered resolution: ordinal, unique name, then semantic disambiguation.
         picked = resolve_one(query, self._enrich_candidates(candidates))
         if picked is None:
-            # 仍定位不到：保留候选，再问一次
+            # Preserve candidates and ask again when unresolved.
             return self._ask_which_product(candidates, session)
 
         session.set("pending_add", None)
@@ -313,18 +297,18 @@ class CartTool:
     def _switch_intent(
         self, query: str, session: AgentSession, current_ids: list[str]
     ) -> ToolResult | None:
-        """检测用户是否在 pending（选规格/选商品）中途改点了别的品牌商品。
+        """Detect a switch to another brand during pending product/SKU selection.
 
-        判据：原句里直接出现某个【品牌】名（子串匹配，不抽词），且命中的商品
-        不在当前 pending 商品集合里。规格值如 256GB/宇宙橙不等于任何品牌名，
-        不会误判成换商品。命中则清掉 pending 重新定位；否则返回 None 继续 pending。"""
-        # 直接拿原句和库里品牌名做子串匹配，"请你把小米加入"这类带语气前缀也稳。
+        A direct brand substring whose product is outside the pending set triggers a
+        restart. SKU values cannot trigger this brand-based test.
+        """
+        # Match raw text directly against catalog brands, including polite prefixes.
         found = self._products.match_brands_in_text(query)
         if not found:
             return None
         found_ids = {c.product_id for c in found}
         if found_ids & set(current_ids):
-            return None  # 说的还是当前商品（同品牌）→ 不算换
+            return None  # The same brand remains within the current selection.
         session.set("pending_cart", None)
         session.set("pending_add", None)
         return self._add(query, session, {})
@@ -337,8 +321,7 @@ class CartTool:
         query: str,
         source: str = "unknown",
     ) -> ToolResult:
-        """加购入口：单规格直接加；多规格先尝试从这句话解析规格，
-        仍无法唯一确定则记录待选状态并反问用户。"""
+        """Add a single SKU directly or begin multi-SKU clarification."""
         resolution = self._build_resolution(product_id, query, source)
         skus = self._store.list_skus(product_id)
         if not skus:
@@ -347,13 +330,12 @@ class CartTool:
         if len(skus) == 1:
             return self._commit_add(product_id, skus[0]["sku_id"], qty, resolution=resolution)
 
-        # 多规格：先看用户这句话里是否已经点明了规格（如"暗夜黑 42码"）
+        # Check whether the current utterance already identifies one SKU.
         matched = self._filter_skus(query, skus)
         if len(matched) == 1:
             return self._commit_add(product_id, matched[0]["sku_id"], qty, resolution=resolution)
 
-        # 仍不能唯一确定 → 记录待选状态，按维度反问。
-        # spec_text 累积用户已经说过的规格词，供后续逐维度追问时叠加过滤。
+        # Store pending state and accumulated specification text for later filtering.
         title = self._store.product_title(product_id)
         session.set("pending_cart", {
             "product_id": product_id,
@@ -365,7 +347,7 @@ class CartTool:
         return self._ask_spec(product_id, title, matched if matched else skus, resolution=resolution)
 
     def _build_resolution(self, product_id: str, query: str, source: str) -> dict[str, Any]:
-        """记录本轮隐式/显式指代最终解析到哪款商品，供 debug 和文案确认。"""
+        """Record the resolved product for diagnostics and confirmation copy."""
         title = self._store.product_title(product_id)
         return {
             "original_query": query,
@@ -378,13 +360,12 @@ class CartTool:
     def _resolve_pending_sku(
         self, query: str, session: AgentSession, pending: dict[str, Any]
     ) -> ToolResult:
-        """用户对"选规格"的回答：解析出唯一 SKU 后加购；仍模糊则继续问。"""
+        """Resolve a pending SKU answer and add it, or continue clarification."""
         if self._is_cancel(query):
             session.set("pending_cart", None)
             return self._plain("好的，先不加了。还有什么我可以帮你的？")
 
-        # 用户在选规格中途改点了别的品牌商品（"把oppo加入"）→ 放弃当前 pending，
-        # 重新定位，而不是把这句话硬当成给旧商品选规格。
+        # Restart product resolution when another brand is named during SKU selection.
         switched = self._switch_intent(query, session, [pending["product_id"]])
         if switched is not None:
             return switched
@@ -396,7 +377,7 @@ class CartTool:
             session.set("pending_cart", None)
             return self._plain("这款规格信息好像丢失了，麻烦重新说一次要加哪款～")
 
-        # 叠加历史已说过的规格 + 本轮回答，一起过滤（逐维度收敛的关键）。
+        # Combine previous and current specification terms to narrow dimensions gradually.
         combined = f"{pending.get('spec_text', '')} {query}".strip()
         matched = self._filter_skus(combined, skus)
         if len(matched) != 1:
@@ -413,7 +394,7 @@ class CartTool:
                 resolution=pending.get("resolution"),
             )
 
-        # 还没缩到唯一：记住累积规格，基于已过滤集合继续追问剩余维度
+        # Preserve accumulated terms and ask about remaining dimensions.
         pending = {**pending, "spec_text": combined}
         session.set("pending_cart", pending)
         return self._ask_spec(
@@ -430,10 +411,10 @@ class CartTool:
         qty: int,
         resolution: dict[str, Any] | None = None,
     ) -> ToolResult:
-        """确定 SKU 后真正写入购物车并产出确认结果。
+        """Persist a resolved SKU and return the confirmation result.
 
-        加购是确定性操作，无需 LLM 再润色一段话——直接给简短确认，
-        既省一次 LLM 调用、也避免"选完规格还要等一段废话"的体验。"""
+        This deterministic action uses concise local copy, avoiding another LLM call.
+        """
         line = self._store.add_product(product_id, sku_id=sku_id, quantity=qty)
         snapshot = self._snapshot()
         spec = "、".join(f"{k}{v}" for k, v in line.options.items()) if line.options else ""
@@ -462,16 +443,15 @@ class CartTool:
         skus: list[dict[str, Any]],
         resolution: dict[str, Any] | None = None,
     ) -> ToolResult:
-        """按"可变维度"反问用户选规格（避免罗列几十个 SKU 组合）。"""
+        """Ask for varying SKU dimensions instead of listing every combination."""
         dims = self._varying_dims(skus)
         if not dims:
-            # 理论不该发生（多 SKU 但无可变维度）；兜底用第一个 SKU。
+            # Defensive fallback for multiple SKUs with no varying dimension.
             return self._commit_add(product_id, skus[0]["sku_id"], 1)
 
-        # 选项交给前端的交互卡片渲染，文案只保留一句引导语，避免文字与卡片重复罗列。
+        # Let the client render options; keep narrative copy concise.
         text = f"已理解为把「{title}」加入购物车。这款有多个规格可选，下面选一下你想要的款式吧～"
-        # dimensions：有序数组（name + values），前端按此顺序稳定渲染可点击 chip。
-        # 同时保留 options（dict）做向后兼容。
+        # Ordered dimensions produce stable chips; retain ``options`` for compatibility.
         dimensions = [{"name": dim, "values": values} for dim, values in dims.items()]
         return ToolResult(
             tool_name=self.name,
@@ -487,13 +467,14 @@ class CartTool:
             needs_composer=False,
         )
 
-    # ------------------------------ 规格解析 ------------------------------
+    # ------------------------------ SKU parsing ------------------------------
 
     @staticmethod
     def _varying_dims(skus: list[dict[str, Any]]) -> "OrderedDict[str, list[str]]":
-        """提取在给定 SKU 集合里取值多于一个的维度（颜色/尺码/容量…）。
+        """Return dimensions with more than one value in the given SKU set.
 
-        纯数字型维度（尺码/容量）按数值升序排列，便于阅读；其它维度保持出现顺序。"""
+        Numeric values are sorted ascending; other dimensions preserve appearance order.
+        """
         dim_values: "OrderedDict[str, list[str]]" = OrderedDict()
         for sku in skus:
             for key, val in sku["options"].items():
@@ -506,7 +487,7 @@ class CartTool:
 
     @staticmethod
     def _sort_values(values: list[str]) -> list[str]:
-        """若每个取值都含数字（尺码/容量），按数字升序；否则保持原顺序。"""
+        """Sort numerically when every value contains a number; otherwise preserve order."""
         keyed: list[tuple[int, str]] = []
         for v in values:
             match = re.search(r"\d+", v)
@@ -518,18 +499,14 @@ class CartTool:
     def _filter_skus(
         self, query: str, skus: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
-        """按用户这句话里能识别到的规格值过滤 SKU（覆盖所有品类）。
+        """Filter SKUs by specification values recognized in the user utterance.
 
-        没识别到任何规格 → 原样返回（触发反问）；识别到几个维度 →
-        取交集，返回满足全部约束的 SKU。
+        No recognized value returns the original set and triggers clarification. Values
+        across dimensions are intersected so every returned SKU satisfies all constraints.
 
-        两段式匹配，确定性优先：
-        ① 精确整值匹配（主路径）：用户这句里**原样包含**某个规格取值的完整字符串
-           即采纳。前端规格卡发的就是库里的 canonical 值（如 '12GB+512GB'/'M码'/
-           '幻影紫'），所以点选场景永远走这条、零歧义、永不死循环。同维度多个值都
-           整串命中时取**最长**的那个（'12GB+512GB' 胜过假想子串），杜绝共享前缀误配。
-        ② 模糊打分回退（仅当某维度精确匹配没命中）：用户打字/语音的近似说法
-           （如只说 '512' 或 '深灰'）才退回 token 打分，取唯一最高分；并列则不约束。
+        Matching is deterministic first: exact canonical values win, with the longest
+        match breaking shared-prefix cases. A unique token-score winner is used only when
+        exact matching fails; ties leave the dimension unconstrained.
         """
         dims = self._varying_dims(skus)
         constraints: dict[str, str] = {}
@@ -546,21 +523,21 @@ class CartTool:
 
     @staticmethod
     def _pick_dim_value(values: list[str], query: str) -> str | None:
-        """在某维度的候选取值里，选出用户这句话指定的那个；选不出返回 None。"""
+        """Select the dimension value named by the user, or return ``None``."""
         q = query or ""
         q_lower = q.lower()
-        # ① 精确整值命中（取最长，避免子串型误配）。大小写不敏感。
+        # Exact case-insensitive match; prefer the longest to avoid substring collisions.
         exact = [
             v for v in values
             if v and (v in q or v.lower() in q_lower)
         ]
         if exact:
             exact.sort(key=len, reverse=True)
-            # 最长唯一 → 采纳；若并列最长（理论上 canonical 值不会，稳妥起见）则不约束
+            # Accept one longest match; leave a theoretical tie unconstrained.
             if len(exact) == 1 or len(exact[0]) > len(exact[1]):
                 return exact[0]
             return None
-        # ② 模糊打分回退：取唯一最高分，并列视为歧义不约束。
+        # Fuzzy fallback accepts a unique highest score; ties remain ambiguous.
         best_val: str | None = None
         best_score = 0
         tie = False
@@ -576,25 +553,20 @@ class CartTool:
 
     @staticmethod
     def _value_match_score(value: str, query: str) -> int:
-        """用户话里命中了该规格取值的多少个 token（数字/中文片段/英文整词）。
+        """Score specification-value tokens matched in the user utterance.
 
-        分数越高代表匹配越完整，用于同维度多取值的消歧。
+        Higher scores indicate more complete matches within one dimension.
 
-        匹配按"整 token"进行，避免松散的片段误配（例如规格值
-        '灰色 Asphalt Grey' 里的 'sp' 撞上商品名 'Osprey' 的 'sp'）：
-        - 数字型（尺码/容量，如 '42码'/'256GB'/'20L'）：作为独立数字整段命中。
-        - 中文片段（如 '灰色'/'暗夜黑实战色'）：整段中文子串命中；
-          较长（≥3 字）的中文值额外允许 ≥2 字连续片段命中。
-        - 英文单词（如 'Black'）：作为完整单词（≥3 字母）命中，
-          不做任意 2 字母片段匹配。"""
+        Whole-token matching avoids loose substring collisions. Numbers require numeric
+        boundaries, Chinese runs use meaningful substrings, and Latin words require at
+        least three letters.
+        """
         value = (value or "").strip()
         if not value:
             return 0
         q = query.lower()
         score = 0
-        # 0) 字母尺码（M码/L码/XL码/S/XXL 等）：字母前缀 ≤3，整段带左右边界命中。
-        #    左边界 (?<![a-z]) 关键——否则 'L码' 会命中 'XL码'、'S' 命中 'XS'。
-        #    右边界：带'码'时'码'即右锚；裸字母要求右侧非字母。尺码识别成功记 1 分。
+        # Letter sizes use boundaries so L does not match XL and S does not match XS.
         size_match = re.fullmatch(r"([A-Za-z]{1,3})(码)?", value)
         if size_match:
             token = value.lower()
@@ -602,12 +574,11 @@ class CartTool:
             if re.search(rf"(?<![a-z]){re.escape(token)}{right_guard}", q):
                 score += 1
             return score
-        # 1) 数字 token：要求是独立数字（前后非数字），避免 28 命中 280
+        # Numeric tokens require boundaries so 28 does not match 280.
         for num in re.findall(r"\d+", value):
             if re.search(rf"(?<!\d){re.escape(num)}(?!\d)", query):
                 score += 1
-        # 2) 中文连续片段：≥2 字才整段命中（避免 "码"/"色" 这类单字单位误配）；
-        #    ≥3 字的长值额外允许 ≥2 字连续片段命中（如 "暗夜黑" 命中 "暗夜黑实战色"）
+        # Chinese runs require at least two characters; longer values allow bigrams.
         for run in re.findall(r"[\u4e00-\u9fff]+", value):
             if len(run) >= 2 and run in query:
                 score += 1
@@ -616,7 +587,7 @@ class CartTool:
                     if run[i:i + 2] in query:
                         score += 1
                         break
-        # 3) 英文整词（≥3 字母）
+        # Latin words require at least three letters.
         for word in re.findall(r"[a-zA-Z]{3,}", value):
             if word.lower() in q:
                 score += 1
@@ -627,7 +598,7 @@ class CartTool:
     def _match_ordinal(
         query: str, skus: list[dict[str, Any]]
     ) -> dict[str, Any] | None:
-        """规格较少时支持"第二个/第2种"这类序号选择。"""
+        """Support ordinal selection when the SKU set is small."""
         if len(skus) > 9:
             return None
         idxs = resolve_indices(query, len(skus))
@@ -696,10 +667,10 @@ class CartTool:
             ),
         )
 
-    # ------------------------------ 辅助 ------------------------------
+    # ------------------------------ Helpers ------------------------------
 
     def _target_line(self, cart_index: Any):
-        """把"购物车第 N 件"定位到具体 CartLine；缺省取第一件。"""
+        """Resolve a cart ordinal to a line, defaulting to the first line."""
         lines = self._store.list_items()
         if not lines:
             raise CartNotFoundError("购物车是空的")

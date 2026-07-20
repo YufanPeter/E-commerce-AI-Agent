@@ -26,12 +26,11 @@ from llm.client import get_client, get_model_id
 logger = logging.getLogger(__name__)
 
 
-# 已注册的 tool 名。新增 tool 时同步更新。
-# 把它写死在路由层而不是动态扫描，是为了让 enum 在 prompt 时就锁定，
-# 避免运行时 tool 表变化导致 router 输出 enum 之外的值。
+# Registered tool names. Keep this list in sync when adding a tool. Defining it here
+# fixes the prompt enum and prevents runtime registry changes from producing new values.
 #
-# refine/compare/product_detail 当前是档子实现，在 Step 5 里会改为
-# “粗分类 LLM + 状态机细化”的两段决策，不依赖 router LLM 直接选到。
+# Refine, compare, and product detail use coarse LLM routing followed by state-based
+# refinement, so correctness does not depend on a single exact router decision.
 KNOWN_TOOLS: tuple[str, ...] = (
     "recommend",
     "refine",
@@ -45,12 +44,12 @@ KNOWN_TOOLS: tuple[str, ...] = (
 
 @dataclass(frozen=True)
 class IntentDecision:
-    """Router 的输出：选哪个 tool，附带改写后的 query 和置信度。"""
+    """Router output containing the selected tool, rewritten query, and confidence."""
 
-    tool: str                   # 必属于 KNOWN_TOOLS
-    rewritten_query: str        # 结合上下文改写后的 query，比如把"再便宜点"改成完整问题
+    tool: str                   # Must be a member of KNOWN_TOOLS.
+    rewritten_query: str        # Context-expanded query, including implicit follow-ups.
     confidence: str             # "high" | "medium" | "low"
-    reasoning: str              # debug 用，不展示给用户
+    reasoning: str              # Diagnostic only; never shown to the user.
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -132,14 +131,12 @@ SYSTEM_PROMPT = """你是电商导购 Agent 的路由器，唯一职责是把用
 
 
 def route(query: str, session: AgentSession, timeout: float = 6.0) -> IntentDecision:
-    """主入口。LLM 失败时抛异常，由 orchestrator 决定降级。"""
+    """Route one turn, raising LLM failures for the orchestrator to handle."""
     user_content = _build_user_content(query, session)
 
     client = get_client()
-    # 已强制 tool_choice，但 LLM 仍偶发抖动：① 完全不调用 route_to_tool；
-    # ② 调用了但 tool 字段漏填（返回 null）。两者都靠重试一次显著压低概率。
-    # 仍失败才退回 recommend——电商 70% 流量是推荐，是最安全的默认，
-    # 绝不退回 clarify（会把明确的购物意图错判成"太模糊"，反问用户品类）。
+    # Even with a forced tool choice, the model may omit the function call or tool field.
+    # One retry handles most cases; recommendation is the safest final shopping default.
     last_exc: Exception | None = None
     args: dict[str, Any] | None = None
     for attempt in range(2):
@@ -160,8 +157,7 @@ def route(query: str, session: AgentSession, timeout: float = 6.0) -> IntentDeci
             last_exc = exc
             logger.warning("Router empty response (attempt %d/2), retrying", attempt + 1)
             continue
-        # tool 字段漏填或不在已知集合内时也重试：模型常常 reasoning/rewritten_query
-        # 都对、只漏了 enum 字段，重试一次往往就补上了。
+        # Retry a missing or unknown tool field; the rest of the response is often valid.
         if candidate.get("tool") in KNOWN_TOOLS:
             args = candidate
             break
@@ -170,14 +166,14 @@ def route(query: str, session: AgentSession, timeout: float = 6.0) -> IntentDeci
             "Router returned invalid tool %r (attempt %d/2), retrying",
             candidate.get("tool"), attempt + 1,
         )
-        args = candidate  # 留作兜底用（取其 rewritten_query 等字段）
+        args = candidate  # Retain partial fields for fallback.
 
     if args is None:
         raise last_exc  # type: ignore[misc]
 
     tool = args.get("tool")
     if tool not in KNOWN_TOOLS:
-        # 重试后仍漏填：退回 recommend（购物安全默认），而非 clarify。
+        # After retry exhaustion, prefer recommendation over unnecessary clarification.
         logger.warning("Router tool still invalid %r after retry, defaulting to recommend", tool)
         tool = "recommend"
 
@@ -190,7 +186,7 @@ def route(query: str, session: AgentSession, timeout: float = 6.0) -> IntentDeci
 
 
 def _build_user_content(query: str, session: AgentSession) -> str:
-    """把当前 query + 最近对话拼成 router 的输入。"""
+    """Combine the current query with recent conversation context."""
     if not session.history:
         return f"当前 query：{query}"
     return (

@@ -96,7 +96,7 @@ def test_search_service_raises_when_api_rerank_fails(monkeypatch):
         ).search("轻量跑鞋", top_k_products=2)
 
 
-# --------------------- 否定/反选：product 级剔除 ---------------------
+# --------------------- Product-level negative filtering ---------------------
 
 def _drink_chunk(pid: str, chunk_type: str, document: str, title: str, sub_category: str) -> RetrievedChunk:
     return RetrievedChunk(
@@ -115,7 +115,7 @@ def _drink_chunk(pid: str, chunk_type: str, document: str, title: str, sub_categ
 
 
 class _MultiChunkRetriever:
-    """模拟东鹏特饮：多个 chunk，只有部分含品类词，评价 chunk 不含。"""
+    """Simulate a product whose category appears in only some of its chunks."""
 
     def __init__(self, chunks):
         self._chunks = chunks
@@ -125,12 +125,12 @@ class _MultiChunkRetriever:
 
 
 def test_negative_category_excludes_whole_product(monkeypatch):
-    """说'不要功能饮料'：即便商品的评价 chunk 不含品类词，整个商品也要被剔除。"""
+    """Exclude the whole product even when its review chunk lacks the prohibited category term."""
     chunks = [
-        # 功能饮料：评价 chunk 文本不含"功能饮料"，但 title/sub_category 含
+        # The review chunk lacks the category term, but title and subcategory contain it.
         _drink_chunk("dp", "user_review", "熬夜喝很提神，口感不错", "东鹏特饮 维生素功能饮料 500ml", "功能饮料"),
         _drink_chunk("dp", "marketing", "添加牛磺酸和咖啡因", "东鹏特饮 维生素功能饮料 500ml", "功能饮料"),
-        # 普通饮料：应保留
+        # A regular beverage should remain.
         _drink_chunk("milk", "marketing", "纯牛奶醇香", "某某纯牛奶 250ml", "牛奶"),
     ]
     parsed = ParsedQuery(
@@ -148,12 +148,12 @@ def test_negative_category_excludes_whole_product(monkeypatch):
     ).search("推荐饮料 不要功能饮料", top_k_products=5)
 
     pids = [hit.product_id for hit in result.hits]
-    assert "dp" not in pids          # 整个功能饮料商品被剔除（含评价 chunk）
-    assert "milk" in pids            # 普通饮料保留
+    assert "dp" not in pids          # Exclude the whole product, including its review chunk.
+    assert "milk" in pids            # Keep the regular beverage.
 
 
 def test_negative_keyword_in_document_excludes_product(monkeypatch):
-    """否定词只出现在某 chunk 文本里时，也要剔除该商品的全部 chunk。"""
+    """Exclude all product chunks when a prohibited term appears in any one chunk."""
     chunks = [
         _drink_chunk("x", "marketing", "经典原味", "X 饮料", "饮料"),
         _drink_chunk("x", "ingredient", "配料含阿斯巴甜", "X 饮料", "饮料"),
@@ -179,9 +179,10 @@ def test_negative_keyword_in_document_excludes_product(monkeypatch):
 
 
 def test_sub_category_exclude_postfilter_fallback(monkeypatch):
-    """P0 结构化反选的后置兜底：sub_category_exclude 命中的商品整体剔除。
+    """Apply a post-filter fallback that excludes products matching `sub_category_exclude`.
 
-    （模拟 where $nin 漏网/SQLite 回退路径，确保后置过滤这道防线也生效。）"""
+    Simulates candidates leaking through `$nin` or a SQLite fallback to verify the final guard.
+    """
     chunks = [
         _drink_chunk("dp", "user_review", "熬夜喝很提神", "东鹏特饮 500ml", "功能饮料"),
         _drink_chunk("dp", "marketing", "牛磺酸咖啡因", "东鹏特饮 500ml", "功能饮料"),
@@ -202,13 +203,13 @@ def test_sub_category_exclude_postfilter_fallback(monkeypatch):
     ).search("推荐饮料 不要功能饮料", top_k_products=5)
 
     pids = [hit.product_id for hit in result.hits]
-    assert "dp" not in pids   # 东鹏：功能饮料被剔
-    assert "rb" not in pids   # 红牛：功能饮料被剔
-    assert "tea" in pids      # 茶饮保留
+    assert "dp" not in pids   # Exclude the first energy drink.
+    assert "rb" not in pids   # Exclude the second energy drink.
+    assert "tea" in pids      # Keep the tea.
 
 
 def test_synonym_negative_normalized_then_excludes(monkeypatch):
-    """用户/LLM 给的是'能量饮料'，库里是'功能饮料'——归一后仍能剔除。"""
+    """Normalize a user or LLM synonym before excluding the matching catalog category."""
     chunks = [
         _drink_chunk("rb", "user_review", "提神效果好", "红牛 250ml", "功能饮料"),
         _drink_chunk("tea", "marketing", "清爽乌龙", "东方树叶 500ml", "茶饮"),
@@ -216,7 +217,7 @@ def test_synonym_negative_normalized_then_excludes(monkeypatch):
     parsed = ParsedQuery(
         original_query="饮料 不要能量饮料",
         retrieval_query="饮料",
-        negative_ingredients=["能量饮料"],  # 故意给同义词，考验归一
+        negative_ingredients=["能量饮料"],  # Deliberately use a synonym to exercise normalization.
     )
     monkeypatch.setattr("search.search_service.understand_query", lambda query: parsed)
 
@@ -232,7 +233,7 @@ def test_synonym_negative_normalized_then_excludes(monkeypatch):
 
 
 def test_brand_exclude_postfilter_blocks_leaked_candidates(monkeypatch):
-    """即使 retriever 忽略 where 漏回 Apple/华为，最终商品结果也不能含被排除品牌。"""
+    """Enforce brand exclusions even if the retriever ignores `where` and leaks candidates."""
     chunks = [
         _brand_chunk("iphone", "Apple 苹果", 0.1),
         _brand_chunk("huawei", "华为", 0.2),

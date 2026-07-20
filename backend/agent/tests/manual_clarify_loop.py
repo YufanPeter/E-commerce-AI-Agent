@@ -1,6 +1,6 @@
-"""手动验证 clarify → recommend 多轮闭环（流式）。
+"""Manually verify the streaming clarify-to-recommend multi-turn loop.
 
-跑法：
+Run:
     cd backend && python -m agent.tests.manual_clarify_loop
 """
 from __future__ import annotations
@@ -19,11 +19,11 @@ def main() -> None:
     session = AgentSession()
 
     turns = [
-        "随便看看",         # → 应该 clarify
-        "美妆，500 以内",   # → 应该 recommend（融合上下文）
+        "随便看看",         # Expected to clarify.
+        "美妆，500 以内",   # Expected to recommend using merged context.
     ]
     for q in turns:
-        print(f"\n>>> 用户: {q}")
+        print(f"\n>>> User: {q}")
         narrative = []
         for ev in agent.handle_turn_stream(q, session):
             t = ev["type"]

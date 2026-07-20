@@ -9,9 +9,9 @@ from search.visual_index import VisualIndex, load_visual_index
 
 def test_score_self_is_one():
     idx = VisualIndex({"a": [1.0, 0.0], "b": [0.0, 1.0]})
-    # 与自身向量的余弦应为 1（归一化后点积）
+    # A vector's cosine similarity with itself should be 1 after normalization.
     assert math.isclose(idx.score([1.0, 0.0], "a"), 1.0, abs_tol=1e-6)
-    # 正交向量余弦为 0
+    # Orthogonal vectors have zero cosine similarity.
     assert math.isclose(idx.score([1.0, 0.0], "b"), 0.0, abs_tol=1e-6)
 
 
@@ -21,7 +21,7 @@ def test_score_unknown_product_returns_none():
 
 
 def test_score_is_magnitude_invariant():
-    # 余弦只看方向，不看模长：放大查询向量不改变分数
+    # Cosine similarity depends on direction, so scaling the query does not change scores.
     idx = VisualIndex({"a": [3.0, 4.0]})
     s1 = idx.score([3.0, 4.0], "a")
     s2 = idx.score([30.0, 40.0], "a")
@@ -55,6 +55,6 @@ def test_empty_index_is_graceful():
 
 
 def test_load_missing_file_returns_empty_index(tmp_path):
-    # 索引文件不存在时返回空索引而不报错（视觉重排自动失效）
+    # A missing index file returns an empty index and disables visual reranking without raising.
     idx = load_visual_index(tmp_path / "nope.json")
     assert len(idx) == 0

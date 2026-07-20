@@ -86,10 +86,10 @@ def _llm_pick(
     candidates: list[dict[str, Any]],
     timeout: float,
 ) -> list[int]:
-    """底层：调一次 LLM，返回命中的 0-based 索引列表（保序去重、越界已过滤）。
+    """Call the LLM once and return valid zero-based candidate indices.
 
-    无法确定 / LLM 不可用 / 解析失败 都返回空列表。candidates 每项建议含
-    title/brand/category/sub_category，信息越全消歧越准。
+    The result preserves order and uniqueness. Uncertainty, unavailability, or parsing
+    failure returns an empty list. Rich candidate fields improve disambiguation.
     """
     text = (query or "").strip()
     if not text or len(candidates) < 2:
@@ -114,8 +114,8 @@ def _llm_pick(
             temperature=0.0,
             timeout=timeout,
         )
-    except Exception as exc:  # noqa: BLE001 - 消歧是增强项，任何失败都安全降级
-        logger.warning("llm_match 调用失败，降级为规则反问：%r", exc)
+    except Exception as exc:  # noqa: BLE001 - disambiguation failures degrade safely
+        logger.warning("llm_match failed; falling back to rule-based clarification: %r", exc)
         return []
 
     result: list[int] = []
@@ -131,10 +131,10 @@ def llm_pick_candidate(
     candidates: list[dict[str, Any]],
     timeout: float = 5.0,
 ) -> int | None:
-    """让 LLM 在候选里挑用户最可能指向的唯一一款，返回 0-based 索引。
+    """Return the zero-based index of the single most likely referenced candidate.
 
-    返回 None 表示「无法确定」或「LLM 不可用」——调用方应据此继续走反问，
-    绝不能把 None 当成「第 0 款」。
+    ``None`` means uncertain or unavailable; callers should clarify and must not treat
+    it as candidate zero.
     """
     picked = _llm_pick(query, candidates, timeout)
     return picked[0] if picked else None
@@ -146,9 +146,9 @@ def llm_pick_candidates(
     k: int = 2,
     timeout: float = 5.0,
 ) -> list[int]:
-    """让 LLM 在候选里挑用户指向的最多 k 款，返回 0-based 索引列表（保序去重）。
+    """Return up to ``k`` referenced candidate indices in stable unique order.
 
-    返回空列表表示「无法确定」或「LLM 不可用」，调用方据此继续反问。
+    An empty list means uncertain or unavailable and should trigger clarification.
     """
     if k <= 0:
         return []
@@ -156,7 +156,7 @@ def llm_pick_candidates(
 
 
 def _extract_indices(response: Any) -> list[int]:
-    """从 function-calling 响应里取出 indices 整数列表。解析失败返回空列表。"""
+    """Extract integer indices from a function-call response, or return an empty list."""
     try:
         choice = response.choices[0]
         tool_calls = choice.message.tool_calls or []
@@ -166,11 +166,11 @@ def _extract_indices(response: Any) -> list[int]:
         data = json.loads(arguments) if isinstance(arguments, str) else (arguments or {})
         raw = data.get("indices")
         if raw is None:
-            single = data.get("index")  # 兼容模型偶发只回单个 index
+            single = data.get("index")  # Accept the occasional singular field.
             return [int(single)] if single not in (None, 0) else []
         if isinstance(raw, (int, float)):
             return [int(raw)]
         return [int(x) for x in raw]
     except (AttributeError, IndexError, ValueError, TypeError, json.JSONDecodeError) as exc:
-        logger.warning("llm_match 响应解析失败：%r", exc)
+        logger.warning("Failed to parse the llm_match response: %r", exc)
         return []

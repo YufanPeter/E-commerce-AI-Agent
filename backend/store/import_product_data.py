@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""将商品 JSON 数据导入 SQLite 商品库。"""
+"""Import product JSON data into the SQLite catalog."""
 
 from __future__ import annotations
 
@@ -18,30 +18,30 @@ DEFAULT_INIT_SQL = ROOT_DIR / "backend" / "db" / "init.sql"
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="将 data/*/data/*.json 商品文件导入 SQLite。"
+        description="Import product files from data/*/data/*.json into SQLite"
     )
     parser.add_argument(
         "--data-dir",
         type=Path,
         default=DEFAULT_DATA_DIR,
-        help=f"商品数据根目录。默认：{DEFAULT_DATA_DIR}",
+        help=f"Product-data root directory (default: {DEFAULT_DATA_DIR})",
     )
     parser.add_argument(
         "--db",
         type=Path,
         default=DEFAULT_DB_PATH,
-        help=f"SQLite 数据库路径。默认：{DEFAULT_DB_PATH}",
+        help=f"SQLite database path (default: {DEFAULT_DB_PATH})",
     )
     parser.add_argument(
         "--init-sql",
         type=Path,
         default=DEFAULT_INIT_SQL,
-        help=f"Schema SQL 路径。默认：{DEFAULT_INIT_SQL}",
+        help=f"Schema SQL path (default: {DEFAULT_INIT_SQL})",
     )
     parser.add_argument(
         "--reset",
         action="store_true",
-        help="导入前删除已有 SQLite 文件，确保用最新 schema 重新构建。",
+        help="Delete the existing SQLite file before importing so the latest schema is rebuilt",
     )
     return parser.parse_args()
 

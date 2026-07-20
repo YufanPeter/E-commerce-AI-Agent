@@ -1,15 +1,15 @@
 from __future__ import annotations
 
-"""交互式 CLI demo（流式）。
+"""Interactive streaming CLI demo.
 
-用法：
+Usage:
     cd backend && python -m agent.cli
     > 推荐 500 以内的敏感肌精华
     > /exit
 
-环境变量：
-    LOG_LEVEL=INFO       打开内部日志
-    AGENT_STREAM=0       强制非流式（默认 1=流式）
+Environment variables:
+    LOG_LEVEL=INFO       Enable internal logs.
+    AGENT_STREAM=0       Force blocking mode (streaming is enabled by default).
 """
 
 import json
@@ -18,11 +18,11 @@ import os
 import sys
 import time
 
-# --- 必须在 import chromadb / sentence_transformers 之前完成的环境设置 ---
-# 1. 关闭 chromadb 的 posthog telemetry，否则会在控制台喷错误日志（无害但烦）。
+# --- These environment settings must precede chromadb/sentence_transformers imports. ---
+# 1. Disable Chroma's PostHog telemetry to avoid harmless but noisy console errors.
 os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
 os.environ.setdefault("CHROMA_TELEMETRY_IMPL", "none")
-# 2. 让 HuggingFace 直接用本地缓存，跳过启动时去 huggingface.co 检查模型更新。
+# 2. Use the local Hugging Face cache without checking for model updates at startup.
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
@@ -31,15 +31,15 @@ from agent.session import AgentSession
 
 
 def _warmup() -> None:
-    """同步预热：把 LLM client + SearchService 拉起来，避免首条提问卡顿。"""
+    """Synchronously initialize the LLM client and search service."""
     t0 = time.perf_counter()
-    print("  ⏳ 加载 LLM 客户端 ...", end="", flush=True)
+    print("  Loading the LLM client...", end="", flush=True)
     from llm.client import get_client
     get_client()
     print(f" {time.perf_counter() - t0:.1f}s")
 
     t0 = time.perf_counter()
-    print("  ⏳ 加载 Chroma + embedding 模型 ...", end="", flush=True)
+    print("  Loading Chroma and the embedding model...", end="", flush=True)
     from search.search_service import get_search_service
     svc = get_search_service()
     svc.search("预热", top_k_chunks=3, top_k_products=1)
@@ -57,8 +57,8 @@ def _print_meta(meta: dict) -> None:
 
 def _print_tool_result(tr: dict) -> None:
     payload = tr.get("payload") or {}
-    # 新格式：payload.products（精简卡片） + payload.debug.hits_full（详情）
-    # 打印用 hits_full 能拿到 score/sub_category 等调试信息
+    # New payload format: compact cards in products and full records in debug.hits_full.
+    # Prefer full records here so CLI diagnostics include score and subcategory fields.
     hits = (payload.get("debug") or {}).get("hits_full") or payload.get("products") or []
     if hits:
         print(f"[tool={tr['tool_name']}] {len(hits)} hits:")
@@ -71,7 +71,7 @@ def _print_tool_result(tr: dict) -> None:
     else:
         payload_preview = json.dumps(payload, ensure_ascii=False)[:200]
         print(f"[tool={tr['tool_name']}] payload: {payload_preview}")
-    print("\n助手：", end="", flush=True)
+    print("\nAssistant: ", end="", flush=True)
 
 
 def _run_streaming(agent: Agent, session: AgentSession, line: str) -> None:
@@ -97,7 +97,7 @@ def _run_streaming(agent: Agent, session: AgentSession, line: str) -> None:
         print(f"\n[fatal] {exc!r}")
         return
 
-    print()  # 换行收尾
+    print()  # Finish the streamed line.
     total = time.perf_counter() - t_start
     ttfb = first_token_t - t_start if first_token_t else None
     timings = (final_event or {}).get("timings") or {}
@@ -135,16 +135,16 @@ def main() -> int:
 
     streaming = os.getenv("AGENT_STREAM", "1") != "0"
 
-    print("🚀 正在启动 Agent（首次启动需加载模型与向量索引）...")
+    print("Starting the agent. The first run loads models and vector indexes...")
     t_start = time.perf_counter()
     _warmup()
-    print(f"✅ 预热完成，总耗时 {time.perf_counter() - t_start:.1f}s\n")
+    print(f"Warmup complete in {time.perf_counter() - t_start:.1f}s\n")
 
     agent = Agent()
     session = AgentSession()
     mode = "stream" if streaming else "blocking"
-    print(f"会话 id: {session.session_id}  模式: {mode}  （/exit 退出，/reset 新开会话）")
-    print("现在可以提问了，例如：500 以内的防晒霜\n")
+    print(f"Session ID: {session.session_id}  mode: {mode}  (/exit to quit, /reset for a new session)")
+    print("Ask a shopping question, for example: 500 以内的防晒霜\n")
 
     runner = _run_streaming if streaming else _run_non_streaming
 
@@ -161,7 +161,7 @@ def main() -> int:
             return 0
         if line == "/reset":
             session = AgentSession()
-            print(f"已重置，新会话 id: {session.session_id}")
+            print(f"Reset complete. New session ID: {session.session_id}")
             continue
 
         runner(agent, session, line)

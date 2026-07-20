@@ -1,4 +1,4 @@
-"""query_decomposer 单元测试：不依赖网络，用 fake 响应覆盖核心分支。"""
+"""Network-independent unit tests for `query_decomposer` using fake responses."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from search.query_decomposer import (
 
 
 def _fake_response(requests: list[dict[str, str]]) -> Any:
-    """模拟 Ark function-calling 返回 split_shopping_requests 的最小骨架。"""
+    """Build the minimum function-calling response for `split_shopping_requests`."""
     args = json.dumps({"requests": requests})
     tool_call = SimpleNamespace(function=SimpleNamespace(arguments=args))
     msg = SimpleNamespace(tool_calls=[tool_call], content=None)
@@ -72,7 +72,7 @@ class TestDecomposeQuery:
         with patch("search.query_decomposer.get_client") as mock_client:
             mock_client.return_value.chat.completions.create.side_effect = RuntimeError("boom")
             out = decompose_query("推荐点东西")
-        # 失败时退化为单需求 = 原 query
+        # Fall back to one request containing the original query after failure.
         assert out == [SubRequest(label="推荐点东西", query="推荐点东西")]
 
     def test_empty_requests_degrades_to_single(self):

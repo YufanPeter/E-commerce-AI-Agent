@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-"""Tool 协议与统一返回契约。
+"""Tool protocol and shared result contract.
 
-为什么叫 Tool 而不是 Skill：
-    当前每个实现都是“一次原子能力调用”（search/静态文本），
-    本质就是 Tool。未来如果出现“为完成一个任务需要多个 Tool
-    编排 + 决策”的模块，会在 Tool 之上另起一层 Skill（方案 B）。
+Why Tool rather than Skill:
+    Each current implementation is one atomic capability call, such as search or a
+    static response. A future module that orchestrates several tools and decisions can
+    introduce a separate Skill layer above this protocol.
 
-为什么用 Protocol 而不是 ABC：
-    Tool 实现可能来自不同子系统（recommend 包 SearchService、
-    clarify 只用静态模板、fallback 完全无 IO），强行继承父类反而别扭。
-    Protocol 只约束接口、不绑定继承，更灵活。
+Why Protocol rather than ABC:
+    Implementations span different subsystems: recommendation wraps SearchService,
+    clarification uses static templates, and fallback performs no I/O. A protocol
+    constrains the interface without imposing inheritance.
 """
 
 from dataclasses import dataclass, field
@@ -21,15 +21,13 @@ from agent.session import AgentSession
 
 @dataclass(frozen=True)
 class ToolResult:
-    """所有 Tool 的统一返回契约。
+    """Shared return contract for every tool.
 
-    payload: 结构化数据，必须 JSON 可序列化。前端用它渲染卡片/表格。
-    composer_hint: 给 AnswerComposer 的额外提示词片段（如“用对比口吻”），
-                   不会直接展示给用户。
-    narrative_override: 若设置，composer 跳过 LLM 直接用这段文本作为最终回答。
-                        适合 clarify / fallback 这种无需 LLM 加工的固定话术。
-    needs_composer: False 时 orchestrator 不会调 composer。
-                    与 narrative_override 配合：固定回答场景。
+    ``payload`` contains JSON-serializable data rendered by the client.
+    ``composer_hint`` adds private guidance for ``AnswerComposer``.
+    ``narrative_override`` supplies a final response without an LLM call, which suits
+    fixed clarification and fallback messages. When ``needs_composer`` is false, the
+    orchestrator skips composition.
     """
 
     tool_name: str
@@ -50,15 +48,15 @@ class ToolResult:
 
 @runtime_checkable
 class Tool(Protocol):
-    """Tool 接口契约。"""
+    """Interface contract implemented by all tools."""
 
     name: str
 
     def run(self, query: str, session: AgentSession, slots: dict[str, Any]) -> ToolResult:
-        """执行 tool。
+        """Execute the tool.
 
-        query:   用户原句（或 router 改写后的 query）
-        session: 当前会话上下文（含历史 / 偏好 / 工作记忆）
-        slots:   router 抽取的额外参数（如 rewritten_query, intent_args）
+        ``query`` is the original or router-rewritten user text. ``session`` contains
+        conversation history, preferences, and working memory. ``slots`` contains
+        additional router arguments such as ``rewritten_query`` and ``intent_args``.
         """
         ...

@@ -1,6 +1,6 @@
-"""_loads_arguments 容错解析回归测试。
+"""Regression tests for fault-tolerant `_loads_arguments` parsing.
 
-固化豆包 function calling 已知畸形样例，确保多级容错不被后续改动破坏。
+Captures known malformed function-calling responses so future changes preserve layered recovery.
 """
 
 import pytest
@@ -19,7 +19,7 @@ def test_code_fence_stripped():
 
 
 def test_tool_call_protocol_leak_and_truncation():
-    """豆包在 JSON 闭合前插入 </function> 停止标记 → 截断 + 协议噪声。"""
+    """Repair truncated JSON containing a protocol stop marker before its closing delimiters."""
     raw = (
         '{"requests": [{"label": "衣服", "query": "三亚夏季旅游 速干衣 短袖"}, '
         '{"label": "防晒", "query": "三亚海边旅游 防晒霜"}]\n</function>\n</seed:tool_call>'
@@ -33,7 +33,7 @@ def test_tool_call_protocol_leak_and_truncation():
 
 
 def test_pure_truncation_missing_closers():
-    """纯截断：缺最外层 } 与 ]，靠括号配平补全。"""
+    """Balance missing outer object and array delimiters in purely truncated JSON."""
     raw = '{"requests": [{"label": "包", "query": "双肩包"}'
     assert _loads_arguments(raw) == {"requests": [{"label": "包", "query": "双肩包"}]}
 

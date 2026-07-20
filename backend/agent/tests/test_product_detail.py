@@ -124,7 +124,7 @@ def test_resolves_title_keyword():
 
 
 def test_multiple_name_matches_asks_clarification(monkeypatch):
-    # 这组测试验证「澄清状态机」，与 LLM 消歧无关 → stub 成「定不了」保证确定性。
+    # These tests cover the clarification state machine, so stub unresolved LLM disambiguation for determinism.
     import agent.tools.resolve as rv
     monkeypatch.setattr(rv, "llm_pick_candidate", lambda *a, **k: None)
     session = _session_with_hits()
@@ -134,29 +134,29 @@ def test_multiple_name_matches_asks_clarification(monkeypatch):
 
     assert result.needs_composer is False
     assert "哪一款" in (result.narrative_override or "")
-    # 追问时必须记住候选子集 + 用户原本想问的话，供下一轮把“第一款”正确归位。
+    # A clarification must retain the candidate subset and original question for the next turn.
     pending = session.get("pending_detail")
     assert pending is not None
     assert [c["product_id"] for c in pending["candidates"]] == ["p2", "p3"]
 
 
 def test_pending_ordinal_reply_maps_to_candidate_subset_not_global_list(monkeypatch):
-    """复现并验证截图 bug：澄清后回答“第一款”应命中候选子集第 1 个，而非 last_hits[0]。"""
+    """Resolve a post-clarification ordinal within the candidate subset, not global `last_hits`."""
     import agent.tools.resolve as rv
     monkeypatch.setattr(rv, "llm_pick_candidate", lambda *a, **k: None)
     session = _session_with_hits()
     tool = ProductDetailTool(product_store=_FakeStore(), evidence_retriever=_EmptyRetriever())
 
     first = tool.run("小米的续航怎么样", session, {})
-    assert first.needs_composer is False  # 先澄清
+    assert first.needs_composer is False  # Clarify first.
     assert session.get("pending_detail") is not None
 
     second = tool.run("第一款", session, {})
-    # 候选是 [p2, p3]，“第一款”=p2（小米平板），绝不是 last_hits[0]=p1（理肤泉）。
+    # The first candidate in [p2, p3] is p2, not p1 from global `last_hits`.
     assert second.payload["product"]["product_id"] == "p2"
-    # 原始问的“续航”focus 必须被保留，而不是退化成 general。
+    # Preserve the original performance focus instead of degrading to general.
     assert second.payload["focus_aspect"] == "performance"
-    # 解析成功后待定态清空，避免粘住下一轮。
+    # Clear pending state after successful resolution so it cannot affect the next turn.
     assert session.get("pending_detail") is None
 
 
@@ -180,7 +180,7 @@ def test_pending_topic_change_releases_clarification(monkeypatch):
     tool.run("小米的续航怎么样", session, {})
     assert session.get("pending_detail") is not None
 
-    # 用户换了话题（点名另一商品的属性），不应再纠结在候选里。
+    # A topic change naming another product should release the pending candidate set.
     third = tool.run("理肤泉那款敏感肌能用吗", session, {})
     assert third.payload["product"]["product_id"] == "p1"
     assert session.get("pending_detail") is None
@@ -288,17 +288,17 @@ def test_review_question_prioritizes_review_chunks_from_rag():
     assert "配件偏贵" in result.payload["evidence"][0]["text"]
 
 
-# --------------------- LLM 语义消歧（截图 bug：「华为耳机」死循环） ---------------------
+# --------------------- LLM semantic disambiguation regression ---------------------
 
 def test_llm_disambiguates_multiple_name_matches(monkeypatch):
-    """品牌相同、品类不同（「小米平板」vs「小米手机」），规则两个都中→交给 LLM 挑唯一一款。"""
+    """Let the LLM choose one subcategory when rules match same-brand products in different categories."""
     import agent.tools.product_detail as pd
 
     captured = {}
 
     def fake_pick(query, candidates, timeout=5.0):
         captured["candidates"] = candidates
-        # 模拟 LLM 看懂「平板」对应子品类→选中 p2
+        # Simulate the LLM mapping the tablet wording to p2's subcategory.
         for i, c in enumerate(candidates):
             if "平板" in str(c.get("sub_category", "")):
                 return i
@@ -312,16 +312,16 @@ def test_llm_disambiguates_multiple_name_matches(monkeypatch):
         "小米平板那款详细说说", session, {}
     )
 
-    # 直接命中 p2，不再反问、不留 pending。
+    # Resolve p2 directly without clarification or pending state.
     assert result.needs_composer is True
     assert result.payload["product"]["product_id"] == "p2"
     assert session.get("pending_detail") is None
-    # 候选必须带上结构化字段，LLM 才有依据。
+    # Candidates need structured fields to support the LLM decision.
     assert "sub_category" in captured["candidates"][0]
 
 
 def test_llm_unavailable_falls_back_to_clarification(monkeypatch):
-    """LLM 不可用（返回 None）时，必须安全降级为反问，绝不乱选。"""
+    """Fall back safely to clarification rather than selecting arbitrarily when the LLM is unavailable."""
     import agent.tools.resolve as rv
 
     monkeypatch.setattr(rv, "llm_pick_candidate", lambda *a, **k: None)
@@ -337,10 +337,10 @@ def test_llm_unavailable_falls_back_to_clarification(monkeypatch):
 
 
 def test_llm_picks_within_pending_candidates(monkeypatch):
-    """澄清待定后，用户回「那个平板」——序号/品牌子串都不唯一，LLM 在候选子集里挑中。"""
+    """Use the LLM within the pending candidate subset when ordinals and brand substrings are not unique."""
     import agent.tools.resolve as rv
 
-    # 第一轮先制造 pending（关掉 LLM，强制走反问）。
+    # Disable the LLM on the first turn to force clarification and pending state.
     monkeypatch.setattr(rv, "llm_pick_candidate", lambda *a, **k: None)
     session = _session_with_hits()
     tool = ProductDetailTool(product_store=_FakeStore(), evidence_retriever=_EmptyRetriever())
@@ -348,7 +348,7 @@ def test_llm_picks_within_pending_candidates(monkeypatch):
     assert first.needs_composer is False
     assert session.get("pending_detail") is not None
 
-    # 第二轮打开 LLM：在候选 [p2, p3] 里按子品类挑中平板 p2。
+    # On the second turn, use subcategory semantics to select tablet p2 from [p2, p3].
     def fake_pick(query, candidates, timeout=5.0):
         for i, c in enumerate(candidates):
             if "平板" in str(c.get("sub_category", "")):
@@ -358,13 +358,13 @@ def test_llm_picks_within_pending_candidates(monkeypatch):
     monkeypatch.setattr(rv, "llm_pick_candidate", fake_pick)
     second = tool.run("要那个平板", session, {})
     assert second.payload["product"]["product_id"] == "p2"
-    # 原始「续航」focus 仍要保留。
+    # Preserve the original performance focus.
     assert second.payload["focus_aspect"] == "performance"
     assert session.get("pending_detail") is None
 
 
 def test_llm_pick_candidate_returns_none_on_few_candidates():
-    """护栏：候选少于 2 个或 query 为空时，不该浪费一次 LLM 调用，直接 None。"""
+    """Return None without an LLM call when fewer than two candidates exist or the query is empty."""
     from agent.tools.llm_match import llm_pick_candidate
 
     assert llm_pick_candidate("华为耳机", []) is None

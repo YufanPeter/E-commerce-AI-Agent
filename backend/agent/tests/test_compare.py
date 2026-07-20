@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-"""CompareTool 与 comparison builder 的纯逻辑单测（mock LLM，不触网）。
+"""Offline logic tests for CompareTool and the comparison builder with a mocked LLM.
 
-覆盖：指代定位、显式 id、确定性价格行、LLM 行的对齐/去重/降级。
+Covers reference resolution, explicit IDs, deterministic price rows, and dimension alignment,
+deduplication, and fallbacks.
 """
 
 from unittest.mock import patch
@@ -58,7 +59,7 @@ _DETAILS = [
 
 
 def _fake_build(details, focus="", timeout=None):
-    """绕过真实 LLM，直接返回确定性结构（价格行 + 一个假维度）。"""
+    """Return a deterministic price row and mock dimension without calling the LLM."""
     from agent.comparison import _price_row, _product_header
 
     return {
@@ -89,13 +90,13 @@ class TestResolveTargets:
         assert set(ids) == {"p2", "p3"}
 
     def test_named_products_win_over_generic_pair_words(self):
-        """用户点名两款时，"这两款/两个"不能把目标覆盖成默认前两个。"""
+        """Generic pair wording must not override two explicitly named products."""
         tool = self._tool()
         ids = tool._resolve_targets("我想对比一下小米和华为这两款", _HITS)
         assert ids == ["p2", "p3"]
 
     def test_rewritten_names_do_not_match_generic_pro_tokens(self):
-        """router 改写里有 Pro 时，不能因 Apple iPhone Pro 在前而误命中默认 Apple。"""
+        """Do not match the first Apple product merely because a rewritten target contains `Pro`."""
         hits = [
             {"product_id": "a1", "title": "Apple iPhone 17 Pro"},
             {"product_id": "a2", "title": "Apple iPhone 17 Pro Max"},
@@ -107,7 +108,7 @@ class TestResolveTargets:
         assert ids == ["xm", "hw"]
 
     def test_partial_name_match_does_not_default_to_first_two(self):
-        """点名两款但上一轮只找到其中一款时，不能用"这两款"兜底成前两个。"""
+        """Do not default to the first two products when only one of two named targets is present."""
         hits = [
             {"product_id": "a1", "title": "Apple iPhone 17 Pro"},
             {"product_id": "a2", "title": "Apple iPhone 17 Pro Max"},
@@ -157,16 +158,16 @@ class TestCompareRun:
             res = tool.run("对比第一个和第二个", sess, {})
         comp = res.payload["comparison"]
         assert [p["product_id"] for p in comp["products"]] == ["p1", "p2"]
-        # 参与对比的商品回写 last_hits，供后续接续指代
+        # Write compared products back to `last_hits` for subsequent references.
         assert [h["product_id"] for h in sess.recall_hits()] == ["p1", "p2"]
 
 
 class TestPendingCompareClarification:
-    """对比定位不到 2 款时挂起追问，下一轮回答能正确接续。"""
+    """Persist a clarification when fewer than two products resolve, then resume on the next turn."""
 
     def test_ambiguous_sets_pending_compare(self):
         tool = CompareTool(product_store=_FakeStore(_DETAILS))
-        # 只点到一款（华为）→ 无法凑齐两款 → 反问并挂起。
+        # Resolving only one product should ask a clarification and store pending state.
         sess = _session_with_hits(_HITS)
         res = tool.run("对比华为", sess, {})
         assert res.payload["comparison"] is None
@@ -180,17 +181,17 @@ class TestPendingCompareClarification:
             res = tool.run("第一个和第三个", sess, {})
         comp = res.payload["comparison"]
         assert [p["product_id"] for p in comp["products"]] == ["p1", "p3"]
-        # 成功后清掉待定态。
+        # Clear pending state after a successful comparison.
         assert sess.get("pending_compare") is None
 
     def test_selection_reply_detection(self):
         from agent.tools.compare import is_compare_selection_reply
 
-        # 序号 / 连接词 / 点名两款 → 是选择应答
+        # Ordinals, conjunctions, and two named products are selection replies.
         assert is_compare_selection_reply("第一个和第三个", 3) is True
         assert is_compare_selection_reply("华为和小米", 3) is True
         assert is_compare_selection_reply("小米跟苹果", 3) is True
-        # 开新检索 / 加购 → 不是
+        # A new search or cart request is not a selection reply.
         assert is_compare_selection_reply("推荐几款平板", 3) is False
         assert is_compare_selection_reply("加入购物车", 3) is False
         assert is_compare_selection_reply("", 3) is False
@@ -202,19 +203,19 @@ class TestComparisonBuilder:
 
         row = _price_row(_DETAILS)
         assert row["label"] == "价格"
-        assert row["highlight"] == 2  # p3 最便宜（6999）
+        assert row["highlight"] == 2  # p3 is the least expensive product.
 
     def test_build_comparison_requires_two(self):
         from agent.comparison import build_comparison
 
         try:
             build_comparison([_DETAILS[0]])
-            assert False, "应抛异常"
+            assert False, "expected ValueError"
         except ValueError:
             pass
 
     def test_build_comparison_is_pure_lookup_no_llm(self):
-        """运行时不调用任何 LLM：用 mock 索引查表，价格行确定性，文本维度不判优。"""
+        """Use a mock index without any LLM call; price is deterministic and text dimensions have no winner."""
         from agent import comparison
 
         index = comparison.CompareIndex({
@@ -227,21 +228,21 @@ class TestComparisonBuilder:
         labels = [r["label"] for r in result["rows"]]
         assert labels[0] == "价格"
         assert labels[1:] == comparison._CATEGORY_DIMENSIONS["数码电子"]
-        # 价格行高亮最便宜者；文本维度不判优（highlight=None）
+        # Highlight the cheapest price while leaving text dimensions without a winner.
         assert result["rows"][0]["highlight"] == 1  # p2(7499) < p1(8999)
         assert all(r["highlight"] is None for r in result["rows"][1:])
-        # 维度值来自索引
+        # Dimension values come from the index.
         assert result["rows"][1]["values"] == ["A19 强", "澎湃"]
-        # 选购建议已下线：recommendation 恒为空
+        # Purchase advice is disabled, so recommendation remains empty.
         assert result["recommendation"] == ""
 
     def test_missing_index_degrades_to_price_only(self):
-        """索引缺失（空索引）→ 维度值全部占位「—」。"""
+        """Use placeholder values for all dimensions when the index is empty."""
         from agent import comparison
 
         with patch.object(comparison, "get_compare_index", return_value=comparison.CompareIndex({})):
             result = comparison.build_comparison(_DETAILS[:2])
-        # 仍有维度行（占位），但值都是「—」
+        # Dimension rows remain present, but all values are placeholders.
         assert result["rows"][0]["label"] == "价格"
         for row in result["rows"][1:]:
             assert row["values"] == ["—", "—"]
@@ -249,12 +250,12 @@ class TestComparisonBuilder:
 
 
 class TestFixedDimensions:
-    """维度由代码固定，保证稳定可复现、同类目一致。"""
+    """Use code-defined dimensions for stable, reproducible comparisons within a category."""
 
     def test_same_category_uses_category_dimensions(self):
         from agent.comparison import _dimensions_for, _CATEGORY_DIMENSIONS
 
-        dims = _dimensions_for(_DETAILS[:2])  # 都是数码电子
+        dims = _dimensions_for(_DETAILS[:2])  # Both products are electronics.
         assert dims == _CATEGORY_DIMENSIONS["数码电子"]
 
     def test_cross_category_falls_back_to_generic(self):
@@ -265,7 +266,7 @@ class TestFixedDimensions:
         assert _dimensions_for([digital, clothes]) == _GENERIC_DIMENSIONS
 
     def test_all_dimensions_for_category_includes_generic(self):
-        """离线抽取要把类目专属 + 通用维度都抽（支持跨类目对比）。"""
+        """Include category-specific and generic dimensions for offline extraction and cross-category comparison."""
         from agent.comparison import all_dimensions_for_category, _CATEGORY_DIMENSIONS, _GENERIC_DIMENSIONS
 
         dims = all_dimensions_for_category("数码电子")
@@ -277,31 +278,31 @@ class TestFixedDimensions:
 
 
 def test_run_uses_llm_fallback_when_rules_find_one(monkeypatch):
-    """规则只定位到 <2 款时，run() 用 LLM 语义兜底补到 2 款再对比。"""
+    """Use LLM fallback to complete a pair when deterministic rules resolve fewer than two products."""
     import agent.tools.compare as compare_module
 
     tool = CompareTool(product_store=_FakeStore(_DETAILS))
     monkeypatch.setattr(compare_module, "build_comparison", _fake_build)
-    # 规则路径定不到 2 款（只点名了一款"小米"），LLM 兜底补齐挑出 p2+p3
+    # Rules resolve one named product; the LLM fallback completes the pair with p2 and p3.
     monkeypatch.setattr(
         compare_module, "resolve_many", lambda query, cands, k=2: [1, 2]
     )
     sess = _session_with_hits(_HITS)
     res = tool.run("对比小米和另一个旗舰这两款", sess, {})
-    # 成功生成对比（而非反问）
+    # Produce a comparison instead of another clarification.
     assert res.payload["comparison"] is not None
     ids = [p["product_id"] for p in res.payload["comparison"]["products"]]
     assert ids == ["p2", "p3"]
 
 
 def test_run_asks_when_llm_also_fails(monkeypatch):
-    """LLM 兜底也定不到 2 款 → 反问并记 pending_compare，绝不乱比。"""
+    """Ask and store pending state when the LLM fallback also cannot resolve two products."""
     import agent.tools.compare as compare_module
 
     tool = CompareTool(product_store=_FakeStore(_DETAILS))
     monkeypatch.setattr(compare_module, "resolve_many", lambda query, cands, k=2: [])
     sess = _session_with_hits(_HITS)
-    # 只点名一款（小米）→ 规则定到 1 款；LLM 兜底也空 → 反问
+    # Rules resolve one named product and the empty LLM fallback requires clarification.
     res = tool.run("对比小米这款和另一个", sess, {})
     assert res.payload["comparison"] is None
     assert "哪几款" in (res.narrative_override or "")

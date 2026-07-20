@@ -84,7 +84,7 @@ class ProductDetail:
 
 
 class ProductStore:
-    """封装 SQLite 商品库查询，作为 Agent tools 的事实来源。"""
+    """SQLite catalog queries used as the factual source for agent tools."""
 
     def __init__(self, db_path: Path = DEFAULT_DB_PATH) -> None:
         self.db_path = db_path
@@ -99,10 +99,10 @@ class ProductStore:
         product_ids: Sequence[str] | None = None,
         limit: int | None = None,
     ) -> list[ProductCandidate]:
-        """按硬条件筛选候选商品。
+        """Filter candidate products by hard constraints.
 
-        价格约束基于 SKU 最低价和是否存在匹配 SKU，而不是只看
-        products.base_price，避免漏掉低价规格。
+        Price constraints use SKU ranges and matching SKU existence rather than one
+        ``products.base_price`` value.
         """
         if product_ids is not None and not product_ids:
             return []
@@ -163,7 +163,7 @@ class ProductStore:
         ]
 
     def get_products_by_ids(self, product_ids: Sequence[str]) -> list[ProductCandidate]:
-        """按 product_id 回表商品基础信息，并保持输入顺序。"""
+        """Return product facts by ID while preserving input order."""
         if not product_ids:
             return []
 
@@ -174,15 +174,13 @@ class ProductStore:
     def search_by_keyword(
         self, keyword: str, limit: int = 8, brand_only: bool = False
     ) -> list[ProductCandidate]:
-        """按关键词在全库做不区分大小写的模糊匹配。
+        """Run a case-insensitive keyword match over the full catalog.
 
-        给对话式工具（如 cart 加购）做"点名定位"用：用户说"把小米/oppo
-        加进来"时，不论当前推荐列表里有没有，都能从整库精确找到对应商品。
-        命中可能 0/1/多个，由调用方决定直接成交还是反问。
+        Conversational tools use this to locate named products outside the current result
+        list. Callers decide whether zero, one, or several matches require clarification.
 
-        brand_only=True 时只匹配 brand 字段（不看 title），用于"是否切换到
-        别的品牌"这种判断——规格值（256GB/宇宙橙）不会命中任何品牌，可避免
-        把规格回答误判成换商品。
+        With ``brand_only=True``, only the brand field is matched so SKU values cannot be
+        mistaken for a switch to another product.
         """
         kw = (keyword or "").strip()
         if not kw:
@@ -210,12 +208,11 @@ class ProductStore:
         return self.get_products_by_ids(ids)
 
     def match_brands_in_text(self, text: str, limit: int = 8) -> list[ProductCandidate]:
-        """拿原句直接和库里所有品牌名做子串匹配，命中品牌则返回其商品。
+        """Match raw utterance substrings against every catalog brand.
 
-        不依赖分词/剥停用词——"请你把小米加入购物车"这类带语气前缀也能稳稳命中
-        "小米"，避免了"逐个补停用词"的打地鼠。品牌名按空白拆词（如"Apple 苹果"
-        →["apple","苹果"]），任一长度≥2 的词是句子的子串即算命中；规格值
-        （256GB/宇宙橙/深空黑）不等于任何品牌词，故不会把规格回答误判成换品牌。
+        This avoids tokenization and stopword maintenance. Brand names are split on
+        whitespace, and any token of at least two characters may match. SKU values do not
+        equal brand tokens and therefore cannot trigger a product switch.
         """
         t = (text or "").lower()
         if not t:
@@ -250,7 +247,7 @@ class ProductStore:
         return self.get_products_by_ids(ids)
 
     def get_product_detail(self, product_id: str) -> ProductDetail | None:
-        """查询详情页所需的完整商品结构化数据。"""
+        """Return the complete structured product data required by the detail page."""
         with self.connect() as conn:
             row = conn.execute(
                 """
@@ -303,7 +300,7 @@ class ProductStore:
         product_id: str,
         max_price: float | None = None,
     ) -> list[ProductSku]:
-        """查询商品 SKU；传入 max_price 时只返回预算内 SKU。"""
+        """Return product SKUs, optionally limited by a maximum price."""
         clauses = ["product_id = ?", "status = 'active'"]
         params: list[Any] = [product_id]
         if max_price is not None:
@@ -328,14 +325,14 @@ class ProductStore:
         max_price: float | None = None,
         limit: int = 3,
     ) -> list[ProductSku]:
-        """返回满足预算的代表性 SKU，用于解释商品为何通过价格过滤。"""
+        """Return a representative in-budget SKU for price-filter explanations."""
         skus = self.get_skus(product_id, max_price=max_price)
         if max_price is None:
             return skus[:limit]
         return skus[:limit]
 
     def get_faqs(self, product_id: str) -> list[ProductFaq]:
-        """查询商品官方 FAQ 明细。"""
+        """Return official product FAQ entries."""
         with self.connect() as conn:
             rows = conn.execute(
                 """
@@ -361,7 +358,7 @@ class ProductStore:
         polarity: str | None = None,
         limit: int | None = None,
     ) -> list[ProductReview]:
-        """查询商品用户评价，可按评价倾向过滤。"""
+        """Return product reviews, optionally filtered by sentiment."""
         clauses = ["product_id = ?"]
         params: list[Any] = [product_id]
         if polarity:
@@ -392,7 +389,7 @@ class ProductStore:
         ]
 
     def connect(self) -> sqlite3.Connection:
-        """创建带 Row factory 的 SQLite 连接。"""
+        """Create a SQLite connection configured with a row factory."""
         if not self.db_path.exists():
             raise FileNotFoundError(f"SQLite 商品库不存在：{self.db_path}")
         conn = sqlite3.connect(self.db_path)
@@ -451,22 +448,22 @@ def price_display(price_range: PriceRange) -> str:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="检查 SQLite 商品库查询。")
+    parser = argparse.ArgumentParser(description="Inspect SQLite product-store queries")
     parser.add_argument("--db", type=Path, default=DEFAULT_DB_PATH)
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    candidates = subparsers.add_parser("candidates", help="按硬条件查询候选商品")
+    candidates = subparsers.add_parser("candidates", help="Query candidates with hard filters")
     candidates.add_argument("--category")
     candidates.add_argument("--sub-category")
     candidates.add_argument("--max-price", type=float)
     candidates.add_argument("--brand-exclude", action="append", default=[])
     candidates.add_argument("--limit", type=int, default=5)
 
-    detail = subparsers.add_parser("detail", help="查询商品详情")
+    detail = subparsers.add_parser("detail", help="Query product details")
     detail.add_argument("product_id")
 
-    reviews = subparsers.add_parser("reviews", help="查询商品评价")
+    reviews = subparsers.add_parser("reviews", help="Query product reviews")
     reviews.add_argument("product_id")
     reviews.add_argument("--polarity", choices=["positive", "neutral", "negative"])
     reviews.add_argument("--limit", type=int, default=5)
@@ -499,7 +496,7 @@ def main() -> None:
     if args.command == "detail":
         detail = store.get_product_detail(args.product_id)
         if detail is None:
-            print("未找到商品")
+            print("Product not found")
             return
         print(f"{detail.product_id} | {detail.title} | {price_display(detail.price_range)}")
         print(f"SKU: {len(detail.skus)} | FAQ: {len(detail.faqs)} | Reviews: {len(detail.reviews)}")

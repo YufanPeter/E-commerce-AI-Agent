@@ -100,7 +100,7 @@ class ProductDetailTool:
         if not target_id:
             return self._plain(query, clarification or "想了解哪一款呢？可以说「第一个详细说说」。")
 
-        # 解析成功 → 清掉「澄清待定」态，避免下一轮被粘住。
+        # Clear resolved clarification state so it does not capture the next turn.
         session.set("pending_detail", None)
 
         detail = self._store.get_product_detail(target_id)
@@ -139,9 +139,8 @@ class ProductDetailTool:
         if explicit_id:
             return str(explicit_id), None, query
 
-        # ① 优先消费上一轮留下的「澄清待定」：用户正在回答“这几款里要哪一款”。
-        #    这步必须在通用 resolve_indices 之前——否则“第一款”会被映射到整张
-        #    last_hits 的第 0 项（可能是无关商品），而不是刚才追问的候选子集。
+        # First consume pending clarification so ordinals resolve within its candidate
+        # subset rather than the complete previous result list.
         pending = session.get("pending_detail")
         if pending and pending.get("candidates"):
             return self._resolve_pending_detail(query, pending, session)
@@ -172,14 +171,11 @@ class ProductDetailTool:
                 }
                 for i in name_matches[:3]
             ]
-            # 先让 LLM 按语义在候选里挑唯一一款（「华为耳机」→ 子品类·真无线耳机）。
-            # resolve_one 底层会走「序号→名称唯一→LLM 消歧」分层，把"靠 title 子串"
-            # 升级成"对商品库结构化字段做语义匹配"，避免同品牌不同品类反复反问。
+            # Resolve by ordinal, unique name, then semantic matching over catalog fields.
             picked = resolve_one(query, candidates)
             if picked is not None:
                 return str(candidates[picked]["product_id"]), None, query
-            # 记住「我们在哪几款里追问」+「用户原本想问的属性」，下一轮才能把
-            # “第一款”正确映射到候选子集，并保留 focus（如“续航”）。
+            # Retain the clarification subset and requested focus for the next turn.
             session.set("pending_detail", {"candidates": candidates, "focus_query": query})
             titles = "、".join(str(c["title"])[:16] for c in candidates)
             return None, f"你提到的商品有点多，是想了解「{titles}」里的哪一款？", query
@@ -202,17 +198,16 @@ class ProductDetailTool:
         pending: dict[str, Any],
         session: AgentSession,
     ) -> tuple[str | None, str | None, str]:
-        """消费上一轮的澄清追问。用户这句要么选中某个候选，要么换了话题。"""
+        """Consume a pending clarification as either a selection or a topic change."""
         candidates = pending.get("candidates") or []
         focus_query = f"{pending.get('focus_query', '')} {query}".strip()
 
-        # ① 先在候选子集里找唯一命中（序号优先，其次品牌名）。
+        # Look for a unique match in the candidate subset, preferring ordinals.
         resolved = _pick_from_candidates(query, candidates)
         if resolved is not None:
             return resolved, None, focus_query
 
-        # ② 没在候选里唯一命中：可能是换了话题、点名了候选之外的其他商品。
-        #    清掉 pending 防递归，用正常解析看看会落到谁。
+        # Temporarily clear pending state and try normal resolution for a topic change.
         candidate_ids = {str(c["product_id"]) for c in candidates}
         last_hits = session.recall_hits()
         session.set("pending_detail", None)
@@ -220,10 +215,10 @@ class ProductDetailTool:
             query, last_hits, session, {}
         )
         if target_id and str(target_id) not in candidate_ids:
-            # 明确指向候选之外的另一款 → 用户确实换了话题，采用之。
+            # A clear match outside the subset confirms a topic change.
             return target_id, clarification, fallback_query
 
-        # ③ 仍指向候选内 / 解析不出 → 恢复 pending，继续在候选里追问。
+        # Restore pending state when the answer still needs clarification.
         session.set("pending_detail", pending)
         titles = "、".join(str(c.get("title", ""))[:16] for c in candidates[:3])
         return None, f"想了解「{titles}」里的哪一款呢？说「第一款」或直接报品牌名都行。", query
@@ -234,12 +229,12 @@ class ProductDetailTool:
             item = dict(hit)
             try:
                 detail = self._store.get_product_detail(hit["product_id"])
-            except Exception:  # noqa: BLE001 - 定位增强失败不应影响原始标题匹配
+            except Exception:  # noqa: BLE001 - enrichment must not break title matching
                 detail = None
             if detail is not None:
                 item.setdefault("title", detail.title)
                 item["brand"] = detail.brand
-                # 带上品类/子品类，LLM 消歧才能把「耳机」对应到「真无线耳机」那款。
+                # Include category fields so semantic disambiguation has enough context.
                 item["category"] = detail.category
                 item["sub_category"] = detail.sub_category
             enriched.append(item)
@@ -275,7 +270,7 @@ class ProductDetailTool:
                 top_k=max(limit * 2, 8),
                 where={"product_id": detail.product_id},
             )
-        except Exception as exc:  # noqa: BLE001 - RAG 是增强项，失败回退 ProductStore
+        except Exception as exc:  # noqa: BLE001 - RAG failures fall back to ProductStore
             logger.warning("product_detail RAG evidence failed, fallback to store: %r", exc)
             return []
 
@@ -318,31 +313,33 @@ def _has_deictic(query: str) -> bool:
     return any(word in (query or "") for word in _DEICTIC_WORDS)
 
 
-# 明显的“开新检索/换品类”信号——出现这些词时，pending_detail 不再粘住。
+# Signals that release pending detail state for a new search or category.
 _NEW_SEARCH_WORDS: tuple[str, ...] = (
     "推荐", "找", "有哪些", "有什么", "想买", "给我", "来几款", "换个", "换成", "看看别的",
 )
 
-# 对比意图词——出现时这句不是「选哪一款」的应答，而是想转去对比，不该粘在 detail。
+# Comparison intent also releases pending detail state.
 _COMPARE_INTENT_WORDS: tuple[str, ...] = (
     "对比", "比较", "区别", "哪个好", "哪款好", "哪个更", "哪款更", "差异",
 )
 
 
 def _pick_from_candidates(query: str, candidates: list[dict[str, Any]]) -> str | None:
-    """把用户应答映射到澄清候选子集里的某个商品。
+    """Map a clarification answer to one product in the candidate subset.
 
-    统一走共享分层 resolver（序号→名称唯一→LLM 语义消歧）；
-    定不了返回 None，调用方继续追问。"""
+    The shared resolver uses ordinal, unique-name, then semantic LLM matching. Return
+    ``None`` when unresolved so the caller can ask again.
+    """
     picked = resolve_one(query, candidates)
     return str(candidates[picked]["product_id"]) if picked is not None else None
 
 
 def is_detail_selection_reply(query: str) -> bool:
-    """判断这句是否像在回答“这几款里要哪一款”，用于 pending_detail 的粘性判定。
+    """Return whether the query resembles an answer to a pending detail question.
 
-    命中条件：含序号/数字（“第一款”“第2个”）、含指代词、或是很短的应答（如品牌名）。
-    出现明显的开新检索词（推荐/找/换个…）或对比意图词则判否，让待定态及时释放。"""
+    Ordinals, demonstratives, and short names count as answers. New-search or comparison
+    signals release the pending state instead.
+    """
     text = (query or "").strip()
     if not text:
         return False
