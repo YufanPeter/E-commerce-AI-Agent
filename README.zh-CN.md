@@ -27,7 +27,7 @@ CartPilot 是一款面向 iOS 的对话式智能导购。用户可以通过文�
 ## Demo
 
 <p align="center">
-  <a href="demo_pic.png"><img src="demo_pic.png" alt="CartPilot iOS App 首页" width="200"></a>
+  <a href="assets/demo_pic.png"><img src="assets/demo_pic.png" alt="CartPilot iOS App 首页" width="200"></a>
 </p>
 
 <p align="center"><sub>CartPilot iOS App — 通过文字、语音或商品图片开启导购对话。</sub></p>

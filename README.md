@@ -27,7 +27,7 @@ The project uses a native SwiftUI client, a FastAPI backend, a controllable `rou
 ## Demo
 
 <p align="center">
-  <a href="demo_pic.png"><img src="demo_pic.png" alt="CartPilot iOS app home screen" width="300"></a>
+  <a href="assets/demo_pic.png"><img src="assets/demo_pic.png" alt="CartPilot iOS app home screen" width="300"></a>
 </p>
 
 <p align="center"><sub>CartPilot iOS app — start a shopping conversation with text, voice, or a product image.</sub></p>
