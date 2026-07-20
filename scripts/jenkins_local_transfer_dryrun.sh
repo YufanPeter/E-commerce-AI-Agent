@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# 模拟 Jenkinsfile local-transfer 流水线（无需 Jenkins 实例）。
-# 用法：./scripts/jenkins_local_transfer_dryrun.sh
+# Simulate the Jenkinsfile local-transfer pipeline without a Jenkins instance.
+# Usage: ./scripts/jenkins_local_transfer_dryrun.sh
 
 set -euo pipefail
 

@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
 #
-# 本地构建 Docker 镜像并部署到火山云 ECS（118.196.64.197）。
+# Build the Docker image locally and deploy it to the configured ECS host.
 #
-# 用法：
+# Usage:
 #   ./scripts/deploy_to_server.sh
 #   IMAGE_TAG=v1 ./scripts/deploy_to_server.sh
-#   SKIP_BUILD=1 ./scripts/deploy_to_server.sh   # 跳过构建，仅同步 compose 并重启
+#   SKIP_BUILD=1 ./scripts/deploy_to_server.sh   # Skip the build; sync Compose configuration and restart
 #
-# 环境变量：
-#   REMOTE_HOST   默认 118.196.64.197
-#   REMOTE_USER   默认 root
-#   SSH_KEY       默认 ~/ecomm.pem
-#   REMOTE_DIR    默认 /opt/ecommerce-ai-agent
-#   IMAGE_NAME    默认 cartpilot-backend
-#   IMAGE_TAG     默认 latest
-#   SKIP_BUILD    设为 1 跳过 docker build / save / load
+# Environment variables:
+#   REMOTE_HOST   Defaults to 118.196.64.197
+#   REMOTE_USER   Defaults to root
+#   SSH_KEY       Defaults to ~/ecomm.pem
+#   REMOTE_DIR    Defaults to /opt/ecommerce-ai-agent
+#   IMAGE_NAME    Defaults to cartpilot-backend
+#   IMAGE_TAG     Defaults to latest
+#   SKIP_BUILD    Set to 1 to skip Docker build, save, and load
 
 set -euo pipefail
 
@@ -59,28 +59,28 @@ EOF
 }
 
 if [ ! -f "${SSH_KEY}" ]; then
-  err "SSH 密钥不存在：${SSH_KEY}"
+  err "SSH key not found: ${SSH_KEY}"
   exit 1
 fi
 
 if [ ! -f "${REPO_ROOT}/.env" ]; then
-  err "未找到 ${REPO_ROOT}/.env，请先配置 API 密钥"
+  err "${REPO_ROOT}/.env not found; configure API credentials first"
   exit 1
 fi
 
 if [ "${SKIP_BUILD}" != "1" ] && [ "${BUILD_ON_REMOTE}" != "1" ]; then
   if ! command -v docker >/dev/null 2>&1; then
-    err "本地未安装 docker"
+    err "Docker is not installed locally"
     exit 1
   fi
-  log "构建镜像 ${FULL_IMAGE} …"
+  log "Building image ${FULL_IMAGE}..."
   if ! docker build -f "${REPO_ROOT}/deploy/Dockerfile" -t "${FULL_IMAGE}" "${REPO_ROOT}"; then
-    warn "本地构建失败，改为在远程 ECS 上构建 …"
+    warn "Local build failed; switching to a remote build..."
     BUILD_ON_REMOTE=1
   fi
 fi
 
-log "检查远程 Docker 环境 …"
+log "Checking the remote Docker environment..."
 ensure_docker_mirror "${REMOTE}"
 ssh "${SSH_OPTS[@]}" "${REMOTE}" "set -eu
   if ! command -v docker >/dev/null 2>&1; then
@@ -91,12 +91,12 @@ ssh "${SSH_OPTS[@]}" "${REMOTE}" "set -eu
   mkdir -p '${REMOTE_DIR}'
 "
 
-log "同步 compose 与 .env …"
+log "Synchronizing Compose configuration and .env..."
 scp "${SSH_OPTS[@]}" "${REPO_ROOT}/deploy/docker-compose.prod.yml" "${REMOTE}:${REMOTE_DIR}/${COMPOSE_FILE}"
 scp "${SSH_OPTS[@]}" "${REPO_ROOT}/.env" "${REMOTE}:${REMOTE_DIR}/.env"
 
 if [ "${SKIP_BUILD}" != "1" ] && [ "${BUILD_ON_REMOTE}" = "1" ]; then
-  log "同步源码并在远程构建 ${FULL_IMAGE} …"
+  log "Synchronizing source and building ${FULL_IMAGE} remotely..."
   rsync -az --delete \
     --exclude '.git/' --exclude '.venv/' --exclude 'client/' --exclude 'docs/' \
     --exclude '__pycache__/' --exclude '.pytest_cache/' --exclude '.DS_Store' \
@@ -107,26 +107,26 @@ if [ "${SKIP_BUILD}" != "1" ] && [ "${BUILD_ON_REMOTE}" = "1" ]; then
     docker build -f deploy/Dockerfile -t '${FULL_IMAGE}' .
   "
 elif [ "${SKIP_BUILD}" != "1" ]; then
-  log "传输镜像到远程（可能较慢）…"
+  log "Transferring the image to the remote host; this may take a while..."
   docker save "${FULL_IMAGE}" | gzip | ssh "${SSH_OPTS[@]}" "${REMOTE}" "gunzip | docker load"
 fi
 
-log "启动容器 …"
+log "Starting containers..."
 ssh "${SSH_OPTS[@]}" "${REMOTE}" "set -eu
   cd '${REMOTE_DIR}'
   IMAGE_REF='${FULL_IMAGE}' docker compose -f '${COMPOSE_FILE}' up -d --remove-orphans
 "
 
-log "等待 /health …"
+log "Waiting for /health..."
 for _ in $(seq 1 40); do
   if ssh "${SSH_OPTS[@]}" "${REMOTE}" "curl -fsS --max-time 5 http://127.0.0.1:8000/health" 2>/dev/null; then
     printf '\n'
-    log "部署成功 ✅  http://${REMOTE_HOST}:8000/health"
+    log "Deployment succeeded: http://${REMOTE_HOST}:8000/health"
     exit 0
   fi
   sleep 3
 done
 
-warn "健康检查超时，查看远程日志："
+warn "Health check timed out. Remote logs:"
 ssh "${SSH_OPTS[@]}" "${REMOTE}" "cd '${REMOTE_DIR}' && docker compose -f '${COMPOSE_FILE}' logs --tail=100 backend" || true
 exit 1

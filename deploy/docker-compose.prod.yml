@@ -1,9 +1,9 @@
-# 火山云 ECS 生产部署用 compose（无 build，仅运行镜像）
-# 部署目录示例：/opt/ecommerce-ai-agent/
+# Production Compose configuration that runs a prebuilt image without a build step.
+# Example deployment directory: /opt/ecommerce-ai-agent/
 #   .env
 #   docker-compose.prod.yml
 #
-# 启动：
+# Start:
 #   IMAGE_REF=cartpilot-backend:<tag> docker compose -f docker-compose.prod.yml up -d
 
 services:

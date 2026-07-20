@@ -17,7 +17,7 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# 火山云 ECS 内网 apt 源，避免 deb.debian.org 超时
+# Use the deployment environment's internal apt mirror to avoid public mirror timeouts.
 RUN set -eu; \
     if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
       sed -i 's|deb.debian.org|mirrors.ivolces.com|g; s|security.debian.org|mirrors.ivolces.com|g' /etc/apt/sources.list.d/debian.sources; \
