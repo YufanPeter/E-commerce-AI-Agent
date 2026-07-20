@@ -1,38 +1,46 @@
-# 语音输入 ASR 测试样例
+# ASR Voice Input Test Cases
 
-## 首次授权
+[English](asr_voice_input_cases.md) | [简体中文](asr_voice_input_cases.zh-CN.md)
 
-前置：首次安装 App，尚未授予语音识别与麦克风权限。
+## First authorization
 
-步骤：
-- 点击输入框右侧麦克风按钮。
-- 系统依次请求语音识别与麦克风权限。
-- 允许权限后开始说话：`推荐一款适合油皮的洗面奶`。
+Precondition: the app is newly installed and has no speech-recognition or microphone permission.
 
-期望：
-- 麦克风按钮切换为录音态图标。
-- 识别到的文字实时填入输入框。
-- 点击发送后停止录音，并复用现有文本导购/RAG/流式回复链路。
+Steps:
 
-## 权限拒绝
+1. Tap the microphone button beside the input field.
+2. Grant speech-recognition and microphone permissions when prompted.
+3. Say: `推荐一款适合油皮的洗面奶`.
 
-前置：用户拒绝语音识别或麦克风权限。
+Expected:
 
-步骤：
-- 点击麦克风按钮。
+- The microphone button switches to its recording state.
+- Recognized text appears in the input field in real time.
+- Sending stops recording and reuses the existing text, RAG, and streaming-response path.
 
-期望：
-- 不启动录音。
-- 输入框下方展示明确的权限提示。
-- 文本输入和发送功能不受影响。
+## Permission denied
 
-## 手动停止
+Precondition: speech-recognition or microphone permission is denied.
 
-前置：已授权，正在语音输入。
+Steps:
 
-步骤：
-- 再次点击麦克风按钮。
+1. Tap the microphone button.
 
-期望：
-- 录音立即停止，按钮恢复普通麦克风图标。
-- 已识别的文字保留在输入框中，用户可以编辑或发送。
+Expected:
+
+- Recording does not start.
+- A clear permission message appears below the input field.
+- Text entry and sending remain available.
+
+## Manual stop
+
+Precondition: permissions are granted and recording is active.
+
+Steps:
+
+1. Tap the microphone button again.
+
+Expected:
+
+- Recording stops immediately and the normal microphone icon returns.
+- Recognized text remains editable and can be sent.
