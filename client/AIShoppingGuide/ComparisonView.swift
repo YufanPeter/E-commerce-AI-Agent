@@ -1,17 +1,15 @@
 import SwiftUI
 
-/// 商品对比页：用两个下拉菜单（仿苹果官网机型选择器）从候选商品里各挑 1 件，
-/// 下方渲染结构化对比表（维度行 + 更优项高亮）与选购建议。固定对比 2 件。
+/// Product comparison screen with two candidate pickers and a structured comparison table.
 ///
-/// 候选商品来自对话里这条 AI 消息推荐的列表（点「对比商品」小按钮带入）。
-/// 数据来自后端 `/compare`（与对话里的 compare 工具复用同一套逻辑）。
+/// Candidates come from one assistant recommendation and data comes from `/compare`.
 struct ComparisonView: View {
-    /// 候选商品（当前推荐列表），供下拉菜单选择对比对象。
+    /// Current recommendation candidates available to both pickers.
     let candidates: [Product]
 
     private let productService = RESTProductService()
 
-    /// 左/右两个对比槽位选中的商品 id；nil 表示未选。默认预选前两件。
+    /// Product IDs selected in the left and right slots; defaults to the first two.
     @State private var leftID: String?
     @State private var rightID: String?
     @State private var comparison: ProductComparisonPayload?
@@ -24,7 +22,7 @@ struct ComparisonView: View {
         _rightID = State(initialValue: candidates.count > 1 ? candidates[1].id : nil)
     }
 
-    /// 两个槽位是否已选好且互不相同。
+    /// Whether both slots contain different products.
     private var canCompare: Bool {
         guard let l = leftID, let r = rightID else { return false }
         return l != r
@@ -56,7 +54,7 @@ struct ComparisonView: View {
         .navigationBarTitleDisplayMode(.inline)
     }
 
-    // MARK: - 下拉选择器（仿苹果机型选择器，固定两件）
+    // MARK: - Two-product pickers
 
     private var comparisonSetupPanel: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -128,7 +126,7 @@ struct ComparisonView: View {
         .buttonStyle(.tactile)
     }
 
-    // MARK: - 状态视图
+    // MARK: - State views
 
     private var loadingState: some View {
         HStack(spacing: 10) {
@@ -180,8 +178,7 @@ struct ComparisonView: View {
     }
 }
 
-/// 可复用的对比表：商品表头 + 维度行（更优项高亮）。
-/// 对话流里的对比卡片与对比页都用它，保证渲染一致。
+/// Reusable comparison table shared by the conversation card and full screen.
 struct ComparisonTable: View {
     let comparison: ProductComparisonPayload
 
@@ -250,7 +247,7 @@ struct ComparisonTable: View {
     }
 }
 
-/// 对话流里的紧凑对比卡片：直接复用对比表 + 一句建议。
+/// Compact conversation comparison card that reuses the shared table.
 struct ComparisonCard: View {
     let comparison: ProductComparisonPayload
 

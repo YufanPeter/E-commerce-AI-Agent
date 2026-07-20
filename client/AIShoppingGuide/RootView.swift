@@ -15,7 +15,7 @@ enum AppTab: String, CaseIterable {
     }
 }
 
-/// 底部导航栏：直接使用与 Preference 页肤质选择器相同的原生分段控件逻辑。
+/// Bottom navigation built with the same native segmented-control approach as the skin-type selector.
 struct NativeTabBar: View {
     @Binding var selectedTab: AppTab
 
@@ -25,7 +25,7 @@ struct NativeTabBar: View {
     }
 }
 
-/// 原生 UISegmentedControl 封装：纯图标、可放大、选中段为系统紫色。
+/// Native `UISegmentedControl` wrapper with scalable icons and the system purple selection color.
 struct SegmentedTabControl: UIViewRepresentable {
     @Binding var selectedTab: AppTab
 
@@ -39,14 +39,14 @@ struct SegmentedTabControl: UIViewRepresentable {
             return img ?? UIImage()
         })
         control.selectedSegmentIndex = AppTab.allCases.firstIndex(of: selectedTab) ?? 0
-        // 滑块保持白色，仅图标在选中时染紫
+        // Keep the selection indicator white and tint only the selected icon purple.
         control.selectedSegmentTintColor = UIColor.white
         control.apportionsSegmentWidthsByContent = false
         control.addTarget(context.coordinator,
                           action: #selector(Coordinator.valueChanged(_:)),
                           for: .valueChanged)
 
-        // 放进容器，让分段控件填满容器，高度由 SwiftUI 的 frame 决定
+        // Fill the container while allowing the SwiftUI frame to control the height.
         let container = UIView()
         container.backgroundColor = .clear
         control.translatesAutoresizingMaskIntoConstraints = false
@@ -67,7 +67,7 @@ struct SegmentedTabControl: UIViewRepresentable {
         if control.selectedSegmentIndex != idx {
             control.selectedSegmentIndex = idx
         }
-        // 选中段图标染紫，其余为次要灰色
+        // Tint the selected icon purple and use the secondary gray for the others.
         for (i, tab) in AppTab.allCases.enumerated() {
             let tint: UIColor = (i == idx) ? UIColor(AppTheme.primary) : UIColor(AppTheme.textSecondary)
             let config = UIImage.SymbolConfiguration(pointSize: 26, weight: .semibold)
@@ -120,7 +120,7 @@ struct RootView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .animation(.easeOut(duration: 0.16), value: selectedTab)
 
-            // 底部模糊遮罩：卡片滑到导航栏区域时自然淡出，保证导航栏清晰可读
+            // Fade cards naturally behind a bottom blur so the navigation remains legible.
             Rectangle()
                 .fill(AppTheme.surface.opacity(0.94))
                 .frame(height: AppTheme.bottomTabBarHeight + 64)
@@ -156,8 +156,8 @@ struct RootView: View {
         }
     }
 
-    /// App 冷启动：从后端加载已有购物车（GET /cart），让购物车跨启动保留。
-    /// 购物车在后端 SQLite 持久化，启动即拉取真实状态，避免"启动空车 + 首次加购回灌历史"导致的总价错乱。
+    /// On a cold launch, load the persisted cart from the backend with `GET /cart`.
+    /// Fetching the SQLite-backed state immediately prevents totals from being corrupted by a stale empty cart.
     private func loadBackendCartOnLaunch() async {
         let service = RESTProductService()
         guard let snapshot = try? await service.fetchAgentCart() else { return }
@@ -182,7 +182,7 @@ struct RootView: View {
     }
 }
 
-/// 后端不可达时显示的顶部引导横幅；可达时自动隐藏。
+/// Guidance banner shown when the backend is unreachable and hidden automatically after recovery.
 struct BackendStatusBanner: View {
     @ObservedObject var monitor: BackendHealthMonitor
     @State private var isRechecking = false
@@ -420,7 +420,7 @@ struct LiquidTabBar: View {
             .frame(width: width, height: 64)
     }
 
-    /// 分段选择器风格的竖向分隔线：靠近滑块的那几条淡出。
+    /// Segmented-control-style dividers that fade near the selection indicator.
     @ViewBuilder
     private func segmentDividers(metrics: TabBarMetrics, pillX: CGFloat) -> some View {
         let dividerHeight: CGFloat = 22
@@ -428,7 +428,7 @@ struct LiquidTabBar: View {
         ForEach(1..<metrics.tabs.count, id: \.self) { i in
             let x = metrics.leadingX(for: i)
             let pillCenter = pillX + metrics.itemWidth / 2
-            // 滑块越靠近该分隔线，线越淡
+            // Fade the divider as the selection indicator approaches it.
             let distance = abs(x - pillCenter)
             let fade = max(0, min(1, distance / (metrics.itemWidth * 0.6)))
             Rectangle()

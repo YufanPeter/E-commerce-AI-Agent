@@ -223,13 +223,13 @@ struct ChatMessage: Identifiable, Codable {
     var state: MessageState = .ready
     var products: [Product] = []
     var canRetry: Bool = false
-    /// 多规格商品加购时，AI 给出的可交互规格选择卡片；无则为 nil。
+    /// Interactive variant-selection card returned by the AI when adding a multi-variant product; otherwise nil.
     var specSelection: SpecSelection? = nil
-    /// 商品对比结果：AI 返回的结构化对比表；无则为 nil。
+    /// Structured product comparison returned by the AI; otherwise nil.
     var comparison: ProductComparisonPayload? = nil
-    /// 拍照找货：用户这条消息附带的本地图片（缩略图渲染用）；无则为 nil。
+    /// Local image attached to this message for visual search and thumbnail rendering; otherwise nil.
     var localImageData: Data? = nil
-    /// AI 返回的结构化内容（JSON 格式）
+    /// Structured content returned by the AI in JSON format.
     var structuredContent: StructuredContent? = nil
     /// 商品卡片已先展示时，最终 composer 完成后追加的完成态说明。
     var completionSummary: String? = nil
@@ -242,7 +242,7 @@ struct ChatMessage: Identifiable, Codable {
 struct StructuredContent: Codable {
     let opening: String
     let items: [StructuredItem]
-    /// 可直接填入输入框的追问 Prompt，点击后不自动发送。
+    /// Follow-up prompt that can populate the input field without being sent automatically.
     let followup: [String]
 
     enum CodingKeys: String, CodingKey {
@@ -285,7 +285,7 @@ struct StructuredItem: Codable {
 }
 
 extension StructuredContent {
-    /// 从 composer 返回的 narrative JSON 解析结构化内容。
+    /// Parses structured content from the narrative JSON returned by the composer.
     static func parse(from text: String) -> StructuredContent? {
         guard let json = firstJSONObject(in: text),
               let data = json.data(using: .utf8)
@@ -331,7 +331,7 @@ extension StructuredContent {
     }
 }
 
-/// 导购推荐理由文案：去掉价格等冗余信息。
+/// Shopping recommendation copy with redundant details such as prices removed.
 enum RecommendationCopy {
     private static let pricePatterns = [
         #"售价\s*[¥￥]?\s*[\d,]+(?:\.\d+)?起?"#,
@@ -360,7 +360,7 @@ enum RecommendationCopy {
 }
 
 extension ChatMessage {
-    /// 从本条 AI 消息的结构化 JSON 里取某商品的专属解说（与列表页逻辑一致）。
+    /// Returns the product-specific explanation from this AI message's structured JSON.
     func recommendationDescription(for productID: String) -> String? {
         guard sender == .ai, state == .ready else { return nil }
         guard let content = structuredContent ?? StructuredContent.parse(from: text) else { return nil }
@@ -381,15 +381,15 @@ struct ProductDetailContext: Identifiable, Hashable {
     var id: String { product.id }
 }
 
-/// 多规格商品的一个可选维度（如「颜色」对应一组取值）。
+/// One selectable dimension of a multi-variant product, such as color and its values.
 struct SpecDimension: Identifiable, Hashable, Codable {
     var id = UUID()
     let name: String
     let values: [String]
 }
 
-/// 一次「请选择规格」交互所需的全部数据：商品 + 各维度可选值。
-/// 用户在卡片上逐维度点选后，组合成自然语言发回后端完成精确加购。
+/// Data required for one variant-selection interaction: the product and values for each dimension.
+/// The selected values are converted to natural language and sent to the backend for an exact cart addition.
 struct SpecSelection: Identifiable, Hashable, Codable {
     var id = UUID()
     let productID: String
@@ -397,10 +397,10 @@ struct SpecSelection: Identifiable, Hashable, Codable {
     let dimensions: [SpecDimension]
 }
 
-/// 一段完整对话：对应后端一个 session_id，整段 transcript 本地持久化。
+/// A complete conversation associated with one backend session ID and persisted locally.
 struct Conversation: Identifiable, Codable {
     let id: UUID
-    /// 后端会话 id：重开历史后继续追问仍接到同一上下文。
+    /// Backend session ID used to preserve context when reopening a conversation.
     let sessionID: String
     var title: String
     var createdAt: Date
@@ -423,7 +423,7 @@ struct Conversation: Identifiable, Codable {
         self.messages = messages
     }
 
-    /// 是否已有真实用户消息（用于判断空白对话不入库）。
+    /// Whether the conversation contains a real user message, used to avoid saving empty conversations.
     var hasUserMessage: Bool {
         messages.contains { $0.sender == .user }
     }
@@ -432,7 +432,7 @@ struct Conversation: Identifiable, Codable {
         messages.reduce(0) { $0 + $1.products.count }
     }
 
-    /// 历史列表副标题：相对时间 +（可选）商品数。
+    /// History-list subtitle containing relative time and, optionally, the product count.
     var subtitle: String {
         let time = Conversation.relativeLabel(for: updatedAt)
         return productCount > 0 ? "\(time) · \(productCount) 个商品" : time

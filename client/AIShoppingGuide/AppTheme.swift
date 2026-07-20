@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 
 struct AppTheme {
-    // 白色为主 + 一点米色点缀；陶土色强调，去掉科技感的青绿与发光。
+    // White and warm beige surfaces with a restrained terracotta accent.
     static let primary = Color.dynamic(lightHex: "CE8763", darkHex: "EBA886")      // 浅陶土/暖赭强调色
     static let secondary = Color.dynamic(lightHex: "F5EFE7", darkHex: "2A231D")     // 浅米填充
     static let softBlue = Color.dynamic(lightHex: "F6F0E8", darkHex: "211C17")      // 用户气泡（浅米）

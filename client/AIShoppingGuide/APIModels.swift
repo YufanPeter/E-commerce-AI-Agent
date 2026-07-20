@@ -1,6 +1,6 @@
 import Foundation
 
-/// 空态首页推荐：分类入口 + 动态热门搜索，均源自后端 /suggestions（真实库存）。
+/// Empty-state categories and dynamic searches sourced from real inventory via /suggestions.
 struct HomeSuggestions: Equatable {
     let categories: [String]
     let hotSearches: [String]
@@ -143,7 +143,7 @@ struct ProductComparisonRequest: Codable, Hashable {
     let focus: String?
 }
 
-/// 对比表里的一个商品表头（轻量，与后端 /compare 的 products[] 对齐）。
+/// Lightweight comparison-table product header aligned with /compare products[].
 struct ComparisonProductPayload: Codable, Hashable, Identifiable {
     let productID: String
     let title: String
@@ -162,7 +162,7 @@ struct ComparisonProductPayload: Codable, Hashable, Identifiable {
     }
 }
 
-/// 对比表的一行维度：label + 各商品的值（按 products 顺序）+ 更优者序号。
+/// One comparison dimension with values ordered by product and an optional winner index.
 struct ComparisonRowPayload: Codable, Hashable, Identifiable {
     let label: String
     let values: [String]
@@ -209,7 +209,7 @@ struct AgentRequestPayload: Codable, Hashable {
     let cart: CartSnapshotPayload?
     let locale: String
     let timezone: String
-    /// 拍照找货：图片的 base64（可带 data URI 前缀）。纯文本请求为 nil。
+    /// Optional base64 image data for visual search; nil for text-only requests.
     let imageBase64: String?
 
     init(

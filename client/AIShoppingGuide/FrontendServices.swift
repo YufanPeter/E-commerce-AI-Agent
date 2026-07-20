@@ -1,12 +1,12 @@
 import Foundation
 import SwiftUI
 
-/// 后端连接配置（集中管理，便于真机调试时切换到局域网 IP）。
+/// Centralized backend connection configuration for switching to a LAN address during device testing.
 ///
-/// - iOS 模拟器：保持默认 `http://127.0.0.1:8000`（与 Mac 共享 localhost）。
-/// - iOS 真机：把后端用 `HOST=0.0.0.0 ./scripts/start_backend.sh` 启动，
-///   再把下面的 `defaultBaseURL` 改成 Mac 的局域网地址，例如
-///   `http://192.168.1.23:8000`（脚本就绪后会在终端打印该地址）。
+/// - iOS Simulator: keep the default `http://127.0.0.1:8000`, which shares the Mac's localhost.
+/// - Physical iOS device: start the backend with `HOST=0.0.0.0 ./scripts/start_backend.sh`,
+///   then change `defaultBaseURL` below to the Mac's LAN address, for example
+///   `http://192.168.1.23:8000`. The startup script prints this address when ready.
 enum BackendConfig {
     static let defaultBaseURL: URL = {
         if let env = ProcessInfo.processInfo.environment["BACKEND_BASE_URL"],
@@ -21,14 +21,14 @@ enum BackendConfig {
         #endif
     }()
 
-    /// 健康检查端点。
+    /// Health-check endpoint.
     static var healthURL: URL { defaultBaseURL.appendingPathComponent("health") }
 
-    /// 购物车清空端点：App 冷启动调用，清掉后端跨重启残留的购物车。
+    /// Cart reset endpoint used to clear backend state when required.
     static var cartResetURL: URL { defaultBaseURL.appendingPathComponent("cart/reset") }
 }
 
-/// 后端可达性状态。
+/// Backend reachability state.
 enum BackendReachability: Equatable {
     case unknown
     case checking
@@ -36,8 +36,8 @@ enum BackendReachability: Equatable {
     case unreachable
 }
 
-/// 启动时及后续轮询后端 `/health`，向 UI 暴露可达性状态，
-/// 让 App 在后端未启动时给出明确引导，而不是等用户发消息才报错。
+/// Polls `/health` at startup and afterward, exposing reachability to the UI so the app can
+/// provide immediate guidance instead of waiting for a message request to fail.
 @MainActor
 final class BackendHealthMonitor: ObservableObject {
     @Published private(set) var status: BackendReachability = .unknown
@@ -51,7 +51,7 @@ final class BackendHealthMonitor: ObservableObject {
         self.session = session
     }
 
-    /// 主动检查一次后端是否就绪。
+    /// Performs an immediate backend readiness check.
     @discardableResult
     func check() async -> BackendReachability {
         status = .checking
@@ -60,7 +60,7 @@ final class BackendHealthMonitor: ObservableObject {
         return result
     }
 
-    /// 开始周期性轮询；后端不可达时每 3 秒重试，可达后降到每 15 秒做保活探测。
+    /// Starts periodic polling: every 3 seconds while unreachable and every 15 seconds after recovery.
     func startMonitoring() {
         guard pollTask == nil else { return }
         pollTask = Task { [weak self] in
@@ -237,7 +237,7 @@ final class RESTProductService: ProductServicing {
         try await get(ProductPayload.self, path: "products/\(productID)")
     }
 
-    /// 单品详情补充文案（与导购 composer 同逻辑）；失败返回 nil。
+    /// Fetches supplemental product-detail copy using the shopping-guide composer; returns nil on failure.
     func fetchProductPitch(productID: String) async -> String? {
         var request = URLRequest(url: baseURL.appendingPathComponent("products/\(productID)/pitch"))
         request.httpMethod = "POST"
@@ -319,8 +319,8 @@ final class RESTProductService: ProductServicing {
         return try await request(type, url: url)
     }
 
-    /// 拉取后端当前购物车快照（GET /cart）。App 冷启动恢复购物车用。
-    /// 与 SSE cartSnapshot 走同一套 lines→items 解析，保证渲染一致。
+    /// Fetches the current backend cart snapshot with `GET /cart` for cold-launch restoration.
+    /// Uses the same lines-to-items parser as SSE cart snapshots to keep rendering consistent.
     func fetchAgentCart() async throws -> CartSnapshotPayload {
         let url = baseURL.appendingPathComponent("cart")
         let data: Data
@@ -430,7 +430,7 @@ final class RESTProductService: ProductServicing {
         )
     }
 
-    /// 用首轮对话生成精炼的会话标题（POST /title）。失败返回 nil，调用方退回截句标题。
+    /// Generates a concise title from the first exchange with `POST /title`; returns nil on failure.
     func fetchTitle(userText: String, assistantText: String?) async -> String? {
         var request = URLRequest(url: baseURL.appendingPathComponent("title"))
         request.httpMethod = "POST"
@@ -452,7 +452,7 @@ final class RESTProductService: ProductServicing {
         return title
     }
 
-    /// 拉取空态首页推荐（GET /suggestions）：分类入口 + 动态热门搜索，均源自真实库存。
+    /// Fetches empty-state suggestions with `GET /suggestions`: category shortcuts and inventory-backed trending searches.
     func fetchSuggestions() async -> HomeSuggestions? {
         let url = baseURL.appendingPathComponent("suggestions")
         guard
@@ -588,22 +588,22 @@ final class RESTPreferenceService: PreferenceServicing {
     }
 }
 
-/// 跨轮复用 session_id 的线程安全存储。
+/// Thread-safe storage for reusing the session ID across turns.
 private actor SessionIDStore {
     private var sessionID: String?
     func current() -> String? { sessionID }
     func update(_ value: String) { sessionID = value }
 }
 
-/// 真实 Agent 服务：连接后端 `/chat/stream`（SSE），驱动 LLM + RAG 流水线。
+/// Production agent service that connects to `/chat/stream` over SSE and drives the LLM and RAG pipeline.
 ///
-/// 后端事件 → 客户端事件映射：
-///   - `session`     → 记录 session_id（多轮上下文复用，不向 UI 透出）
-///   - `status`      → 阶段提示（routing→understanding / tool→retrieving / compose→generating）
-///   - `tool_result` → 取出商品 ID，调 `/products` 补全完整数据后以 `.products` 透出
-///   - `token`       → 文本增量（拼接为最终回答）
-///   - `done`        → 结束
-///   - `error`       → 抛出 RESTServiceError
+/// Backend-to-client event mapping:
+///   - `session` records the session ID for multi-turn context without exposing it to the UI.
+///   - `status` maps pipeline stages to understanding, retrieving, or generating states.
+///   - `tool_result` extracts product IDs, fetches complete records from `/products`, and emits `.products`.
+///   - `token` emits incremental text that is assembled into the final response.
+///   - `done` ends the stream.
+///   - `error` throws `RESTServiceError`.
 final class RESTAgentService: AgentServicing {
     private let baseURL: URL
     private let productService: RESTProductService
@@ -614,13 +614,13 @@ final class RESTAgentService: AgentServicing {
         self.productService = RESTProductService(baseURL: baseURL)
     }
 
-    /// 流式请求超时放宽：首轮会触发后端加载 embedding 模型，冷启动可能 ~60s。
+    /// Allows a longer streaming timeout because the first request may spend about 60 seconds loading the embedding model.
     private static func makeStreamingConfig() -> URLSessionConfiguration {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 120
         config.timeoutIntervalForResource = 300
         config.waitsForConnectivity = true
-        // SSE：禁用缓存，避免响应被本地缓存层攒着不实时下发。
+        // Disable caching so the local cache layer does not buffer the SSE response.
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
         config.urlCache = nil
         return config
@@ -662,9 +662,9 @@ final class RESTAgentService: AgentServicing {
         if let image = payload.imageBase64 { body["image_base64"] = image }
         urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        // 用 URLSessionDataDelegate 做增量 SSE 解析：URLSession.AsyncBytes 在 iOS 上
-        // 会把流式响应攒在缓冲里不实时下发，导致 UI 卡在中间状态。delegate 的
-        // didReceive(data:) 是每个网络 chunk 立即回调，最可靠。
+        // Parse SSE incrementally with URLSessionDataDelegate. On iOS, URLSession.AsyncBytes can
+        // buffer streamed responses and leave the UI in an intermediate state. The delegate's
+        // didReceive(data:) callback delivers each network chunk immediately and is more reliable.
         let config = Self.makeStreamingConfig()
         let (rawStream, rawCont) = AsyncThrowingStream<SSERawEvent, Error>.makeStream()
         let delegate = SSEDelegate(continuation: rawCont)
@@ -713,15 +713,15 @@ final class RESTAgentService: AgentServicing {
             )
 
         case "tool_result":
-            // 多规格加购：后端要求用户选规格 → 透出可交互的规格选择卡片，
-            // 不再继续解析商品/购物车（此时尚未真正加购）。
+            // If the backend requests a variant, emit an interactive selection card and stop
+            // parsing products or cart state because no item has been added yet.
             if let spec = Self.extractSpecSelection(fromToolResult: bytes) {
                 continuation.yield(
                     AgentStreamEventPayload(type: .specSelection, specSelection: spec)
                 )
                 return
             }
-            // 商品对比：compare 工具返回结构化对比表 → 透出可渲染的对比卡片。
+            // Convert a structured comparison-tool result into a renderable comparison card.
             if let comparison = Self.extractComparison(fromToolResult: bytes) {
                 continuation.yield(
                     AgentStreamEventPayload(type: .comparison, comparison: comparison)
@@ -729,9 +729,9 @@ final class RESTAgentService: AgentServicing {
                 return
             }
             if Self.isCartToolResult(bytes) {
-                // 必须同步 await：购物车快照要在 done 之前按顺序透出，否则
-                // 加购很快返回时（needs_composer=False）detached Task 还没取完
-                // 商品就被 done 收尾，导致购物车显示为空 / 价格错位。
+                // Await synchronously so the cart snapshot is emitted before `done`. When an add
+                // returns quickly (`needs_composer=false`), a detached task might otherwise be
+                // terminated before product loading finishes, producing an empty cart or mismatched prices.
                 if let snapshot = try? await Self.extractCartSnapshot(
                     fromToolResult: bytes,
                     productService: productService
@@ -744,13 +744,13 @@ final class RESTAgentService: AgentServicing {
             }
             let ids = Self.extractProductIDs(fromToolResult: bytes)
             guard !ids.isEmpty else { return }
-            // 补全：Agent 只给精简卡片，这里用商品 ID 取完整数据用于渲染。
+            // The agent emits compact cards; fetch full records by product ID for rendering.
             if let payloads = try? await productService.fetchProducts(productIDs: ids), !payloads.isEmpty {
                 continuation.yield(AgentStreamEventPayload(type: .products, products: payloads))
             }
 
         case "token":
-            // data 是 JSON 编码的字符串，例如 data: "一段文本"
+            // `data` is a JSON-encoded string, for example `data: "some text"`.
             if let piece = try? JSONDecoder().decode(String.self, from: bytes), !piece.isEmpty {
                 continuation.yield(AgentStreamEventPayload(type: .textDelta, textDelta: piece))
             } else if !data.isEmpty {
@@ -790,7 +790,7 @@ final class RESTAgentService: AgentServicing {
         }
     }
 
-    /// 从 tool_result 的 payload.products[] 中按顺序抽取 product_id。
+    /// Extracts product IDs from `tool_result.payload.products` while preserving their order.
     private static func extractProductIDs(fromToolResult bytes: Data) -> [String] {
         guard
             let obj = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
@@ -812,8 +812,8 @@ final class RESTAgentService: AgentServicing {
         return true
     }
 
-    /// 从 cart 工具的 `ask_spec` 结果中解析规格选择卡片所需数据。
-    /// 仅当 action==ask_spec 且带有有序的 `dimensions` 时返回，否则 nil。
+    /// Parses the data required for a variant-selection card from a cart tool's `ask_spec` result.
+    /// Returns a value only when `action == ask_spec` and ordered `dimensions` are present.
     private static func extractSpecSelection(fromToolResult bytes: Data) -> SpecSelection? {
         guard
             let obj = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
@@ -839,8 +839,8 @@ final class RESTAgentService: AgentServicing {
         return SpecSelection(productID: productID, title: title, dimensions: dimensions)
     }
 
-    /// 从 compare 工具的结果中解析对比卡片数据；comparison 为 null（如未定位到
-    /// 足够商品）时返回 nil，让对话退回纯文本提示。
+    /// Parses comparison-card data from a compare-tool result. Returns nil when `comparison` is null,
+    /// such as when too few products were identified, so the conversation can fall back to plain text.
     private static func extractComparison(fromToolResult bytes: Data) -> ProductComparisonPayload? {
         guard
             let obj = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
@@ -976,17 +976,17 @@ final class RESTAgentService: AgentServicing {
     }
 }
 
-/// 一条已切分好的原始 SSE 事件（event 名 + 合并后的 data 文本）。
+/// A complete raw SSE event containing its event name and merged data text.
 private struct SSERawEvent {
     let event: String
     let data: String
 }
 
-/// 基于 `URLSessionDataDelegate` 的 SSE 增量解析器。
+/// Incremental SSE parser built on `URLSessionDataDelegate`.
 ///
-/// 每收到一个网络 chunk（`didReceive data:`）就立即按字节查找 `\n`，切出完整行后
-/// 解析 `event:` / `data:`，遇到空行即把累积的事件 yield 给上层 `AsyncThrowingStream`。
-/// 这样能保证 token/done 等后续事件实时到达，避免 `URLSession.AsyncBytes` 的缓冲问题。
+/// Each network chunk received by `didReceive(data:)` is scanned byte by byte for `\n`. Complete lines
+/// are parsed as `event:` or `data:`, and a blank line yields the accumulated event to `AsyncThrowingStream`.
+/// This keeps token and completion events real-time and avoids `URLSession.AsyncBytes` buffering.
 private final class SSEDelegate: NSObject, URLSessionDataDelegate {
     private var buffer = Data()
     private var eventName = ""
@@ -1017,7 +1017,7 @@ private final class SSEDelegate: NSObject, URLSessionDataDelegate {
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
         buffer.append(data)
-        // 按 \n(0x0A) 逐行切分；\n 不会出现在 UTF-8 多字节序列中间，按字节切分是安全的。
+        // Split on newline bytes (0x0A), which cannot occur inside a multibyte UTF-8 sequence.
         while let idx = buffer.firstIndex(of: 0x0A) {
             let lineData = buffer.subdata(in: buffer.startIndex..<idx)
             buffer.removeSubrange(buffer.startIndex...idx)
@@ -1028,7 +1028,7 @@ private final class SSEDelegate: NSObject, URLSessionDataDelegate {
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        // flush 残留字节与最后一个事件块
+        // Flush remaining bytes and the final event block.
         if !buffer.isEmpty {
             let line = String(decoding: buffer, as: UTF8.self)
             buffer.removeAll()
