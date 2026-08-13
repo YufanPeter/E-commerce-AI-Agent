@@ -1,3 +1,5 @@
+
+
 # CartPilot — Multimodal E-commerce AI Agent
 
 [English](README.md) | [简体中文](README.zh-CN.md)
@@ -124,7 +126,7 @@ python -m rag.build_chroma --reset
 cd ..
 ```
 
-`rag.build_chroma` calls the embedding endpoint configured in `.env`.
+`rag.build_chroma` calls the embedding endpoint configured in `.env`. Generated files (the SQLite database at `backend/storage/ecommerce_agent.sqlite3` and the Chroma index at `backend/storage/chroma/`) should not be committed to version control.
 
 ### 4. Start the backend
 
