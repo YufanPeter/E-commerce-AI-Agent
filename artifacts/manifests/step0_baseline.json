@@ -1,0 +1,109 @@
+{
+  "schema_version": 1,
+  "step": "0.1+0.2",
+  "captured_at": "2026-09-10T21:54:07.8996690+08:00",
+  "source": {
+    "repository": "https://github.com/YufanPeter/E-commerce-AI-Agent.git",
+    "branch": "main",
+    "commit": "361184104f40ff0add11315b684729ab76c27b95",
+    "commit_time": "2026-07-20T14:17:27+08:00",
+    "commit_author": "YufanPeter",
+    "commit_subject": "chore: move demo screenshot to assets/ folder",
+    "license": "MIT",
+    "working_branch": "codex/step0"
+  },
+  "runtime": {
+    "os": "Windows-11-10.0.26200-SP0",
+    "architecture": "AMD64",
+    "python": {
+      "version": "3.12.10",
+      "executable": "C:\\Users\\Admin\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
+      "pip_version": "26.2.1"
+    },
+    "git_version": "2.54.0.windows.1",
+    "node_version": "24.16.0",
+    "npm_version": "11.13.0"
+  },
+  "python_dependencies": {
+    "declaration_file": "backend/requirements.txt",
+    "declared": [
+      "chromadb==1.5.9",
+      "openai>=1.40.0",
+      "python-dotenv>=1.0.0",
+      "fastapi>=0.111.0",
+      "uvicorn[standard]>=0.30.0",
+      "httpx>=0.27",
+      "pytest>=7.0"
+    ],
+    "observed_global_environment": {
+      "chromadb": "NOT INSTALLED",
+      "openai": "NOT INSTALLED",
+      "python-dotenv": "NOT INSTALLED",
+      "fastapi": "NOT INSTALLED",
+      "uvicorn": "NOT INSTALLED",
+      "httpx": "0.28.1",
+      "pytest": "9.1.1"
+    },
+    "project_virtual_environment": "NOT CREATED"
+  },
+  "configuration": {
+    "root_env_file": "NOT PRESENT",
+    "credential_values_recorded": false,
+    "chat_model": "NOT CONFIGURED",
+    "embedding_model": "NOT CONFIGURED",
+    "rerank_model": "NOT CONFIGURED",
+    "intended_text_baseline": {
+      "USE_HYBRID": "1",
+      "USE_RERANK": "0"
+    },
+    "template": ".env.example"
+  },
+  "catalog": {
+    "product_count": 100,
+    "sku_count": 585,
+    "git_tree": "31a9aa580d9cdceaef84445033892f209e2bdc35"
+  },
+  "upstream_eval": {
+    "git_tree": "83a0a699a0314055dfe3f59048e64ca4641622b0",
+    "unique_total_not_verified": true,
+    "record_count_sum": 121,
+    "files": {
+      "negative_labels.json": {
+        "cases": 2,
+        "sha256": "f1b6afa0594d13c6eb855b14469136623f0f525b41e664e7f402461f4251ed5f"
+      },
+      "retrieval_labels.json": {
+        "cases": 40,
+        "sha256": "7b1eeb101cb0cad1d59b613410c1b41cb0ee2b6f9682f3310dced03fbfa0b06e"
+      },
+      "routing_labels.json": {
+        "cases": 50,
+        "sha256": "e8f94dcb14eff685f4894c3a16625f94d1fa8a44a0a9a6ca50cbf85a7f0ccc83"
+      },
+      "semantic_intent_labels.json": {
+        "cases": 24,
+        "sha256": "8fd5e394e9e1dee168337c40e6c1b0142121f37200d2e11b15085d305bb975bb"
+      },
+      "semantic_rerank_labels.json": {
+        "cases": 5,
+        "sha256": "899a2f4cd1c57b0edd8d07b81d93c323930fd6bd4faf33f77e76aef253f93cf3"
+      }
+    }
+  },
+  "local_generated_state": {
+    "sqlite_product_store": "MISSING: backend/storage/ecommerce_agent.sqlite3",
+    "chroma_metadata_database": "MISSING: backend/storage/chroma/chroma.sqlite3",
+    "tracked_chroma_hnsw_segments_present": true,
+    "compare_index_present": true,
+    "image_index_present": true,
+    "assessment": "NOT READY; rebuild SQLite and a model-consistent Chroma index before retrieval tests"
+  },
+  "checks": {
+    "dependency_install": "NOT RUN",
+    "product_store_import": "NOT RUN",
+    "router_smoke": "NOT RUN",
+    "text_embedding_smoke": "NOT RUN",
+    "backend_health": "NOT RUN",
+    "test_suite": "NOT RUN"
+  }
+}
