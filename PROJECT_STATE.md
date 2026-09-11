@@ -4,7 +4,7 @@
 项目根目录：`C:\Users\Admin\Documents\ChatGPT\Cartpilot`
 状态口径：以当前 Git 工作树、`audit_and_eval.md`、`artifacts/manifests/step0_baseline.json` 和 `artifacts/manifests/phase_a_runtime.json` 为准；未执行项保持 `NOT RUN`。
 
-> 2026-09-11 阶段 A 结论：第一阶段止损规则已完整执行并判定 `GO_FULL`。项目 `.venv`、依赖、SQLite、商品读取、`glm-5.2` Router、`embedding-3` 文本向量、独立 Chroma 完整重建及 FastAPI `/health` 均有真实成功结果。新索引固定 `embedding-3`、2048 维，共 1092 个 chunk；文档侧与查询侧使用同一接口和模型，未复用仓库内旧 HNSW 片段。后端测试为 `254 passed, 7 skipped, 3 warnings`，跳过项未计作通过。最新机器证据见 `artifacts/manifests/phase_a_runtime.json`，完整 pip 解析见 `artifacts/manifests/phase_a_pip_install.json`；本文件后文 Step 0 的 `NOT RUN` 描述是交接 commit `01e3474` 时的历史状态，不得改写成当时已运行。
+> 2026-09-11 阶段 A 结论：第一阶段止损规则已执行并判定 `GO_FULL`。项目 `.venv`、依赖、SQLite、商品读取、`glm-5.2` Router、`embedding-3` 文本向量、独立 Chroma 完整重建及 FastAPI `/health` 均有真实成功结果。新索引固定智谱端点、`embedding-3`、2048 维，共 1092 个 chunk；端点/模型/维度契约已持久化，任一不匹配都会在查询前失败，默认 `ChromaRetriever` 与 `SearchService` 均指向该索引，未复用仓库内旧 HNSW 片段。后端测试为 `260 passed, 7 skipped, 3 warnings`，跳过项未计作通过。计时内容已执行但早期未建立完整主动工时秒表，因此 90 分钟/6 小时合规记为 `PASS_WITH_MEASUREMENT_LIMITATION`，不把命令耗时下界冒充总工时。最新机器证据见 `artifacts/manifests/phase_a_runtime.json`，逐命令记录见 `artifacts/logs/phase_a_runtime_evidence.md`，完整 pip 解析见 `artifacts/manifests/phase_a_pip_install.json`；本文件后文 Step 0 的 `NOT RUN` 描述是交接 commit `01e3474` 时的历史状态，不得改写成当时已运行。
 
 ## 1. 当前目标、阶段及完成情况
 
@@ -29,12 +29,14 @@
 - 已创建项目 `.venv`，安装 `backend/requirements.txt` 并保存完整 pip 解析报告；`pip check` 通过。
 - 已生成 SQLite 商品库并验证 `PRAGMA integrity_check=ok`；商品读取通过。
 - 已以 `USE_HYBRID=1`、`USE_RERANK=0` 完成 FastAPI `/health` 冒烟，返回 HTTP 200。
-- 后端单元测试结果为 `254 passed, 7 skipped, 3 warnings`；跳过项没有计作通过。
+- 后端单元测试结果为 `260 passed, 7 skipped, 3 warnings`；跳过项没有计作通过。
 - 已确认智谱 BigModel OpenAI-compatible Base URL、账号可见 Chat 模型列表、可用 Chat 模型 `glm-5.2` 与文本 Embedding 模型接口 `embedding-3`。
 - 已真实完成 `glm-5.2` Router 冒烟：输入“推荐一双500元以内的跑鞋”，输出 `recommend` / `high`。
 - 用户补充账号资源后，`embedding-3` 直接请求与项目 EmbeddingFunction 均成功，返回 2048 维文本向量。
 - 已用测试驱动把上游 Ark 专用 `/embeddings/multimodal` 调用适配为标准 OpenAI-compatible 文本 `embeddings.create`；契约测试为 `4 passed`。
-- 已在被 Git 忽略的 `backend/storage/chroma_phase_a_embedding3/` 完整重建独立 collection `product_knowledge_embedding3_phase_a`，写入 1092 个 chunk；存储向量维度 2048，真实查询成功。
+- 审查后补充了端点/模型/维度持久化契约、响应索引校验和 Chroma 环境配置，定向测试增至 `10 passed`。
+- 已在被 Git 忽略的 `backend/storage/chroma_phase_a_embedding3/` 完整重建独立 collection `product_knowledge_embedding3_phase_a`，写入 1092 个 chunk；最终契约版重建耗时 51.498 秒，存储向量维度 2048。
+- 默认 `ChromaRetriever()` 的真实查询成功，错误模型或错误端点重新打开均被拒绝；默认 `SearchService()` 读取到 1092 个 chunk。
 - 已保存独立运行清单 `artifacts/manifests/phase_a_runtime.json`，没有覆盖 Step 0 baseline。
 
 ### 尚未完成
@@ -123,7 +125,7 @@
 | Python 目标版本 | 项目 `.venv` 使用 `3.12.10`；`pip check` 通过 |
 | Chat 模型 | 智谱 `glm-5.2`；强制 Function Calling 与项目 Router 入口均已成功 |
 | Embedding 模型 | 智谱 `embedding-3`；标准文本接口可用，文档与查询均为 2048 维 |
-| 阶段 A Chroma | `backend/storage/chroma_phase_a_embedding3/` / `product_knowledge_embedding3_phase_a`；1092 chunks；独立、被 Git 忽略 |
+| 阶段 A Chroma | `backend/storage/chroma_phase_a_embedding3/` / `product_knowledge_embedding3_phase_a`；1092 chunks；智谱端点 / `openai_compatible_text` / `embedding-3` / 2048 维契约；独立、被 Git 忽略 |
 | Rerank 模型 | `NOT CONFIGURED`，默认不使用 |
 | `USE_HYBRID` | `1` |
 | `USE_RERANK` | `0` |
@@ -136,13 +138,13 @@
 
 ### 当前阻塞/前置条件
 
-阶段 A 没有未解决阻塞。Chat 与文本向量两条路径均可用，环境累计计时低于 6 小时止损上限。后续实验仍须固定当前模型、索引和开关，并在任何数据或模型变化后重新建立可归因基线。
+阶段 A 没有运行链路阻塞。Chat 与文本向量两条路径均可用。已捕获的命令/进程时间远低于 6 小时，但它只是主动工时下界；早期没有完整区分文档审阅与用户等待的统一秒表，因此计时合规只能记为 `PASS_WITH_MEASUREMENT_LIMITATION`。后续实验仍须固定当前模型、索引和开关，并在任何数据或模型变化后重新建立可归因基线。
 
 ### 下一任务的具体顺序
 
 1. 阶段 A 到此完成；下一阶段应先建立覆盖矩阵并复核数据，不直接修改 Prompt 或检索策略。
 2. 后续基线固定 `glm-5.2`、`embedding-3`、独立 1092-chunk Chroma、`USE_HYBRID=1`、`USE_RERANK=0`。
-3. 若源码、商品数据树、embedding 模型或维度变化，必须创建新索引并完整重建，不能增量混用当前向量空间。
+3. 若源码、商品数据树、embedding 端点、模型或维度变化，必须创建新索引并完整重建，不能增量混用当前向量空间。
 
 ## 7. 运行中的命令、日志与输出位置
 
@@ -154,6 +156,7 @@
   - `audit_and_eval.md`
   - `artifacts/manifests/step0_baseline.json`
   - `artifacts/manifests/phase_a_runtime.json`
+  - `artifacts/logs/phase_a_runtime_evidence.md`
   - `artifacts/manifests/phase_a_pip_install.json`
   - `.env.example`
   - Git commit `7e95ac1af53459a7180d5a1b821b62d68887be65`

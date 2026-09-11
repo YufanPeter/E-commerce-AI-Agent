@@ -2,7 +2,7 @@
   "schema_version": 1,
   "phase": "A-runtime-readiness",
   "captured_at": "2026-09-11T02:49:13.8913870+08:00",
-  "finalized_at": "2026-09-11T09:34:42.9107536+08:00",
+  "finalized_at": "2026-09-11T12:44:38.9395634+08:00",
   "status": "PHASE_A_RUNTIME_BASELINE_COMPLETE_GO_FULL",
   "source": {
     "working_branch": "codex/step0",
@@ -13,14 +13,17 @@
   },
   "checkpoint": {
     "rule": "Assess dependency install, product read, Router, and one text vector within the first 90 minutes; cap cumulative environment work at 6 hours.",
-    "assessment": "COMPLETE",
+    "assessment": "COMPLETE_WITH_TIMING_LIMITATION",
     "go_no_go": "GO_FULL",
     "first_stage_stop_loss_completed": true,
     "full_phase_a_runtime_baseline_completed": true,
     "six_hour_stop_loss_triggered": false,
-    "recorded_timed_command_and_process_wait_seconds": 865.4392472,
+    "recorded_timed_command_and_process_wait_seconds": 1050.7759595,
     "recorded_timed_environment_work_under_six_hours": true,
-    "timing_scope_note": "Sum of captured command wall times and process waits; excludes time awaiting user confirmation and uncaptured document review time.",
+    "timing_compliance": "PASS_WITH_MEASUREMENT_LIMITATION",
+    "strict_total_active_environment_work_seconds": "NOT AVAILABLE",
+    "ninety_minute_checkpoint_timestamp": "NOT CAPTURED",
+    "timing_scope_note": "The recorded sum is a lower bound of captured command wall times and process waits, not a complete active-work stopwatch. Wall-clock time includes long pauses awaiting the user, resource purchase, data-export approval, and code review. Exact active environment time cannot be independently reconstructed; do not treat the lower bound as the total.",
     "resolution": "Router Function Calling succeeds with glm-5.2. After the user purchased provider resources, embedding-3 generated 2048-dimensional vectors and a fully independent Chroma collection was rebuilt and queried with the same model. Per the plan, both paths are available and the full plan may proceed."
   },
   "configuration": {
@@ -33,6 +36,10 @@
     "embedding_model": "embedding-3",
     "chat_base_url": "https://open.bigmodel.cn/api/paas/v4/",
     "embedding_base_url": "https://open.bigmodel.cn/api/paas/v4/",
+    "embedding_function": "openai_compatible_text",
+    "embedding_dimensions": 2048,
+    "chroma_persist_dir": "backend/storage/chroma_phase_a_embedding3",
+    "chroma_collection": "product_knowledge_embedding3_phase_a",
     "USE_HYBRID": "1",
     "USE_RERANK": "0",
     "PYTHONUTF8_for_windows_cli": "1"
@@ -41,6 +48,13 @@
     "python": "3.12.10",
     "executable": "C:\\Users\\Admin\\Documents\\ChatGPT\\Cartpilot\\.venv\\Scripts\\python.exe",
     "virtual_environment": "CREATED"
+  },
+  "command_evidence": {
+    "path": "artifacts/logs/phase_a_runtime_evidence.md",
+    "sha256": "139572cb15dcc67b573f42918d86c1f50585c80841fc9a7fec23aa0996d776f8",
+    "bytes": 15193,
+    "credential_values_recorded": false,
+    "note": "Contains complete sanitized commands and verbatim output transcriptions for the final decisive runs; early exploratory commands that were not fully captured are explicitly labeled partial."
   },
   "dependencies": {
     "status": "PASS",
@@ -143,11 +157,40 @@
         "response index order restoration",
         "identical document and query embedding path",
         "empty input avoids provider calls"
-      ]
+      ],
+      "review_fix_red": {
+        "command": ".\\.venv\\Scripts\\python.exe -m pytest backend\\rag\\tests\\test_chroma_store.py -q",
+        "exit_code": 1,
+        "raw_summary": "4 failed, 4 passed, 4 warnings in 3.45s",
+        "missing_contracts": [
+          "malformed provider indexes rejected",
+          "embedding provider/model persisted",
+          "wrong model rejected on reopen",
+          "built dimensions persisted and validated"
+        ]
+      },
+      "runtime_config_red": {
+        "command": ".\\.venv\\Scripts\\python.exe -m pytest backend\\rag\\tests\\test_chroma_store.py::test_runtime_chroma_defaults_follow_environment -q",
+        "exit_code": 1,
+        "raw_summary": "1 failed in 0.25s",
+        "expected_failure": "module 'rag.chroma_store' has no attribute '_configured_persist_dir'"
+      },
+      "endpoint_contract_red": {
+        "command": ".\\.venv\\Scripts\\python.exe -m pytest backend\\rag\\tests\\test_chroma_store.py::test_collection_rejects_embedding_endpoint_mismatch -q",
+        "exit_code": 1,
+        "raw_summary": "1 failed",
+        "expected_failure": "DID NOT RAISE RuntimeError"
+      },
+      "final_green": {
+        "command": ".\\.venv\\Scripts\\python.exe -m pytest backend\\rag\\tests\\test_chroma_store.py -q",
+        "exit_code": 0,
+        "raw_summary": "10 passed in 3.42s"
+      }
     },
     "model_list_discovery": {
       "status": "PASS",
-      "command": ".\\.venv\\Scripts\\python.exe -c \"... OpenAI(base_url='https://open.bigmodel.cn/api/paas/v4/').models.list() ...\"",
+      "command_capture": "PARTIAL_SANITIZED_SUMMARY_ONLY",
+      "command_summary": ".\\.venv\\Scripts\\python.exe -c \"... OpenAI(base_url='https://open.bigmodel.cn/api/paas/v4/').models.list() ...\"",
       "zhipu_attempt": {
         "exit_code": 0,
         "tool_wall_time_seconds": 10.586135,
@@ -202,7 +245,8 @@
       "base_url": "https://open.bigmodel.cn/api/paas/v4/",
       "initial_candidate_failure": {
         "model": "glm-5.3-flash",
-        "command": ".\\.venv\\Scripts\\python.exe -c \"... chat.completions.create(model='glm-5.3-flash', tools=[_TOOL_SCHEMA], tool_choice={'type':'function','function':{'name':'route_to_tool'}}, temperature=0.1, timeout=15) ...\"",
+        "command_capture": "PARTIAL_SANITIZED_SUMMARY_ONLY",
+        "command_summary": ".\\.venv\\Scripts\\python.exe -c \"... chat.completions.create(model='glm-5.3-flash', tools=[_TOOL_SCHEMA], tool_choice={'type':'function','function':{'name':'route_to_tool'}}, temperature=0.1, timeout=15) ...\"",
         "exit_code": 1,
         "tool_wall_time_seconds": 7.977139,
         "http_status": 429,
@@ -211,7 +255,8 @@
         "failure_class": "model_specific_provider_resource"
       },
       "function_calling_preflight": {
-        "command": ".\\.venv\\Scripts\\python.exe -c \"... chat.completions.create(model='glm-5.2', tools=[_TOOL_SCHEMA], tool_choice={'type':'function','function':{'name':'route_to_tool'}}, temperature=0.1, timeout=15) ...\"",
+        "command_capture": "PARTIAL_SANITIZED_SUMMARY_ONLY",
+        "command_summary": ".\\.venv\\Scripts\\python.exe -c \"... chat.completions.create(model='glm-5.2', tools=[_TOOL_SCHEMA], tool_choice={'type':'function','function':{'name':'route_to_tool'}}, temperature=0.1, timeout=15) ...\"",
         "exit_code": 0,
         "tool_wall_time_seconds": 9.4885513,
         "request_elapsed_seconds": 4.695927,
@@ -231,7 +276,7 @@
         }
       },
       "project_entrypoint_smoke": {
-        "command": "$env:PYTHONUTF8='1'; $env:USE_HYBRID='1'; $env:USE_RERANK='0'; & '..\\.venv\\Scripts\\python.exe' -c \"... route('推荐一双500元以内的跑鞋', AgentSession(), timeout=15) ...\"",
+        "exact_command_evidence": "artifacts/logs/phase_a_runtime_evidence.md#2-chat-router",
         "exit_code": 0,
         "tool_wall_time_seconds": 9.4971625,
         "request_elapsed_seconds": 8.023389,
@@ -251,7 +296,8 @@
       "model": "embedding-3",
       "base_url": "https://open.bigmodel.cn/api/paas/v4/",
       "initial_resource_failure": {
-        "command": ".\\.venv\\Scripts\\python.exe -c \"... embeddings.create(model='embedding-3', input=['CartPilot 文本向量冒烟']) ...\"",
+        "command_capture": "PARTIAL_SANITIZED_SUMMARY_ONLY",
+        "command_summary": ".\\.venv\\Scripts\\python.exe -c \"... embeddings.create(model='embedding-3', input=['CartPilot 文本向量冒烟']) ...\"",
         "exit_code": 1,
         "tool_wall_time_seconds": 6.8024321,
         "http_status": 429,
@@ -260,7 +306,7 @@
         "failure_class": "provider_account_resource"
       },
       "post_purchase_provider_probe": {
-        "command": ".\\.venv\\Scripts\\python.exe -c \"... embeddings.create(model='embedding-3', input='CartPilot embedding availability probe') ...\"",
+        "exact_command_evidence": "artifacts/logs/phase_a_runtime_evidence.md#3-embedding-探针与代码路径",
         "exit_code": 0,
         "tool_wall_time_seconds": 7.7366773,
         "request_elapsed_seconds": 2.781496,
@@ -274,7 +320,7 @@
         }
       },
       "project_embedding_function_smoke": {
-        "command": "$env:PYTHONUTF8='1'; $env:USE_HYBRID='1'; $env:USE_RERANK='0'; & '..\\.venv\\Scripts\\python.exe' -c \"... DoubaoEmbeddingFunction()(['CartPilot 项目向量接口验证']) ...\"",
+        "exact_command_evidence": "artifacts/logs/phase_a_runtime_evidence.md#3-embedding-探针与代码路径",
         "working_directory": "backend",
         "exit_code": 0,
         "tool_wall_time_seconds": 6.0964579,
@@ -294,7 +340,7 @@
       "command": "$env:PYTHONUTF8='1'; $env:USE_HYBRID='1'; $env:USE_RERANK='0'; & '..\\.venv\\Scripts\\python.exe' -m rag.build_chroma --reset --persist-dir 'storage\\chroma_phase_a_embedding3' --collection 'product_knowledge_embedding3_phase_a' --embedding-model 'embedding-3' --batch-size 64",
       "working_directory": "backend",
       "exit_code": 0,
-      "build_elapsed_seconds": 32.914598,
+      "build_elapsed_seconds": 51.498336,
       "embedding_model": "embedding-3",
       "dimensions": 2048,
       "batch_size": 64,
@@ -318,63 +364,98 @@
         "食品饮料": 276
       },
       "provider_token_usage": "NOT RETURNED BY BUILD COMMAND",
+      "superseded_pre_contract_build": {
+        "status": "PASS",
+        "build_elapsed_seconds": 32.914598,
+        "reason_superseded": "The collection was rebuilt again after adding persisted embedding model/dimension contracts."
+      },
+      "superseded_model_dimension_contract_build": {
+        "status": "PASS",
+        "build_elapsed_seconds": 31.518013,
+        "reason_superseded": "The collection was rebuilt again after adding the persisted embedding endpoint contract."
+      },
       "stored_vector_check": {
         "status": "PASS",
         "count": 1092,
         "sample_id": "p_beauty_001:profile",
         "dimensions": 2048,
-        "distance_metric": "cosine"
+        "distance_metric": "cosine",
+        "embedding_provider": "openai_compatible_text",
+        "embedding_model": "embedding-3",
+        "embedding_endpoint": "https://open.bigmodel.cn/api/paas/v4/",
+        "configuration_type": "known",
+        "exact_command_evidence": "artifacts/logs/phase_a_runtime_evidence.md#5-持久化契约与默认运行时"
       },
       "same_space_query_smoke": {
         "status": "PASS",
-        "query": "适合油皮的洗面奶",
-        "where": {
-          "category": "美妆护肤"
-        },
+        "query": "适合敏感肌的保湿面霜",
+        "where": null,
         "top_k": 5,
-        "init_seconds": 4.067875,
-        "query_seconds": 1.556845,
+        "runtime_arguments": "DEFAULTS_FROM_ENV",
+        "init_seconds": 2.032,
+        "query_seconds": 6.191,
         "returned_hits": 5,
-        "all_hits_match_category_filter": true,
+        "all_hits_match_category_filter": "NOT APPLICABLE",
         "hits": [
           {
-            "chunk_id": "p_beauty_011:marketing",
-            "product_id": "p_beauty_011",
+            "chunk_id": "p_beauty_007:review:4",
+            "product_id": "p_beauty_007",
+            "chunk_type": "user_review",
+            "category": "美妆护肤",
+            "distance": 0.4046
+          },
+          {
+            "chunk_id": "p_beauty_012:review:1",
+            "product_id": "p_beauty_012",
+            "chunk_type": "user_review",
+            "category": "美妆护肤",
+            "distance": 0.4067
+          },
+          {
+            "chunk_id": "p_beauty_007:review:1",
+            "product_id": "p_beauty_007",
+            "chunk_type": "user_review",
+            "category": "美妆护肤",
+            "distance": 0.4081
+          },
+          {
+            "chunk_id": "p_beauty_007:marketing",
+            "product_id": "p_beauty_007",
             "chunk_type": "marketing_description",
             "category": "美妆护肤",
-            "distance": 0.5420418381690979
+            "distance": 0.4192
           },
           {
-            "chunk_id": "p_beauty_011:review:0",
-            "product_id": "p_beauty_011",
+            "chunk_id": "p_beauty_007:review:2",
+            "product_id": "p_beauty_007",
             "chunk_type": "user_review",
             "category": "美妆护肤",
-            "distance": 0.5534592866897583
-          },
-          {
-            "chunk_id": "p_beauty_011:faq:2",
-            "product_id": "p_beauty_011",
-            "chunk_type": "official_faq",
-            "category": "美妆护肤",
-            "distance": 0.5555248260498047
-          },
-          {
-            "chunk_id": "p_beauty_011:review:2",
-            "product_id": "p_beauty_011",
-            "chunk_type": "user_review",
-            "category": "美妆护肤",
-            "distance": 0.556968629360199
-          },
-          {
-            "chunk_id": "p_beauty_011:profile",
-            "product_id": "p_beauty_011",
-            "chunk_type": "product_profile",
-            "category": "美妆护肤",
-            "distance": 0.5598255395889282
+            "distance": 0.4283
           }
         ],
         "USE_HYBRID": "1",
         "USE_RERANK": "0"
+      },
+      "model_mismatch_guard": {
+        "status": "PASS",
+        "requested_model": "different-model",
+        "stored_model": "embedding-3",
+        "rejected_before_query": true,
+        "exact_command_evidence": "artifacts/logs/phase_a_runtime_evidence.md#5-持久化契约与默认运行时"
+      },
+      "endpoint_mismatch_guard": {
+        "status": "PASS",
+        "requested_endpoint": "https://different.example/v1/",
+        "stored_endpoint": "https://open.bigmodel.cn/api/paas/v4/",
+        "rejected_before_query": true,
+        "exact_command_evidence": "artifacts/logs/phase_a_runtime_evidence.md#5-持久化契约与默认运行时"
+      },
+      "search_service_default_smoke": {
+        "status": "PASS",
+        "retriever_count": 1092,
+        "USE_HYBRID": "1",
+        "USE_RERANK": "0",
+        "exact_command_evidence": "artifacts/logs/phase_a_runtime_evidence.md#5-持久化契约与默认运行时"
       }
     },
     "backend_health": {
@@ -383,19 +464,19 @@
       "request_command": "Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:18765/health'",
       "http_status": 200,
       "raw_response": "{\"status\":\"ok\"}",
-      "ready_wall_time_seconds": 2.864547,
+      "ready_wall_time_seconds": 2.455023,
       "server_stopped": true
     },
     "backend_test_suite": {
       "status": "PASS_WITH_SKIPS",
-      "command": "$env:PYTHONUTF8='1'; $env:USE_HYBRID='1'; $env:USE_RERANK='0'; & '.\\.venv\\Scripts\\python.exe' -m pytest -q backend",
+      "command": "$env:PYTHONUTF8='1'; & '.\\.venv\\Scripts\\python.exe' -m pytest backend -q",
       "exit_code": 0,
-      "tool_wall_time_seconds": 12.2066919,
-      "pytest_elapsed_seconds": 11.22,
-      "passed": 254,
+      "tool_wall_time_seconds": 19.05547,
+      "pytest_elapsed_seconds": 16.95,
+      "passed": 260,
       "skipped": 7,
       "warnings": 3,
-      "raw_summary": "254 passed, 7 skipped, 3 warnings in 11.22s",
+      "raw_summary": "260 passed, 7 skipped, 3 warnings in 16.95s",
       "scope_note": "Skipped tests were not counted as passed; no evaluation dataset was run."
     }
   },
@@ -403,10 +484,10 @@
     "prompt_optimization_started": false,
     "retrieval_optimization_started": false,
     "evaluation_conclusions_started": false,
-    "stop_loss_scope_only": true
+    "phase_a_scope_only": true
   },
   "final_verification": {
-    "verified_at": "2026-09-11T09:34:42.9107536+08:00",
+    "verified_at": "2026-09-11T12:44:38.9395634+08:00",
     "runtime_manifest_json_valid": true,
     "pip_report_sha256_matches_manifest": true,
     "step0_baseline_git_diff_empty": true,
@@ -418,10 +499,10 @@
     "sqlite_skus": 585,
     "product_read": "p_beauty_010",
     "backend_tests": {
-      "passed": 254,
+      "passed": 260,
       "skipped": 7,
       "warnings": 3,
-      "elapsed_seconds": 11.22
+      "elapsed_seconds": 16.95
     },
     "backend_health": {
       "http_status": 200,
@@ -439,6 +520,12 @@
     "independent_phase_a_chroma_count": 1092,
     "independent_phase_a_chroma_dimensions": 2048,
     "same_space_query_status": "PASS",
+    "embedding_model_contract_persisted": true,
+    "embedding_endpoint_contract_persisted": true,
+    "embedding_dimension_contract_persisted": true,
+    "wrong_model_reopen_rejected": true,
+    "wrong_endpoint_reopen_rejected": true,
+    "default_runtime_retriever_count": 1092,
     "git_diff_check_passed": true
   }
 }

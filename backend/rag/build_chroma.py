@@ -235,6 +235,23 @@ def upsert_chunks(collection: Any, chunks: list[Chunk], batch_size: int) -> None
         )
 
 
+def persist_collection_dimensions(collection: Any) -> int:
+    """Record the built vector dimension in the collection's model contract."""
+    sample = collection.peek(limit=1).get("embeddings")
+    if sample is None or not len(sample):
+        raise RuntimeError("Cannot record dimensions for an empty Chroma collection")
+    dimensions = len(sample[0])
+    metadata = dict(collection.metadata or {})
+    previous = metadata.get("embedding_dimensions")
+    if previous is not None and int(previous) != dimensions:
+        raise RuntimeError(
+            f"Stored embedding dimension {previous!r} does not match built dimension {dimensions}"
+        )
+    metadata["embedding_dimensions"] = dimensions
+    collection.modify(metadata=metadata)
+    return dimensions
+
+
 def print_stats(chunks: list[Chunk]) -> None:
     """Print index composition for a quick post-build check."""
     chunk_counts = Counter(chunk.metadata["chunk_type"] for chunk in chunks)
@@ -274,8 +291,10 @@ def main() -> None:
         reset=args.reset,
     )
     upsert_chunks(collection, chunks, args.batch_size)
+    dimensions = persist_collection_dimensions(collection)
     print(f"Chroma collection ready: {args.collection}")
     print(f"Indexed chunks: {collection.count()}")
+    print(f"Embedding dimensions: {dimensions}")
     print(f"Persist dir: {args.persist_dir}")
 
 

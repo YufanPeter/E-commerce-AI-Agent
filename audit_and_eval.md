@@ -110,22 +110,23 @@
 | 商品读取 | `PASS_WITH_ENVIRONMENT_NOTE` | 成功读取 `p_beauty_010`；Windows 默认 GBK 无法打印 `¥`，设置 `PYTHONUTF8=1` 后退出码 0，未修改业务代码 |
 | Chat 模型/接口 | `PASS` | 已确认智谱 OpenAI-compatible Chat Completions/Function Calling 接口；`glm-5.3-flash` 返回 HTTP 429 / code 1113 后，用户确认有 `glm-5.2` 资源；`glm-5.2` 强制 Function Calling 与项目 `route()` 入口均成功 |
 | 文本 Embedding 模型/接口 | `PASS` | 用户补充账号资源后，智谱标准 `/embeddings` 与 `embedding-3` 直接请求成功；返回模型 `embedding-3`、2048 维、最小探针 9 tokens、请求耗时 2.781 秒 |
-| Embedding 接口适配 | `PASS` | 以测试驱动将 Ark 专用 `/embeddings/multimodal` 改为 OpenAI-compatible `embeddings.create` 文本批调用；RED 为 `4 failed`，GREEN 为 `4 passed`，批次硬上限 64 |
+| Embedding 接口适配 | `PASS` | 以测试驱动将 Ark 专用 `/embeddings/multimodal` 改为 OpenAI-compatible `embeddings.create` 文本批调用；首轮 RED 为 `4 failed`，审查修复后最终定向测试 `10 passed`，批次硬上限 64 |
 | Router 单次调用 | `PASS` | 使用项目 `route()`、`glm-5.2`、实际 tool schema 与强制 function choice；输入“推荐一双500元以内的跑鞋”，输出 `recommend` / `high`，最终复测耗时 8.023 秒 |
-| 文本向量生成 | `PASS` | 项目 `DoubaoEmbeddingFunction` 真实调用成功，1 个向量、2048 维、耗时 5.170 秒；文档与查询共享同一实现 |
-| 独立 Chroma 完整重建 | `PASS` | 在 `backend/storage/chroma_phase_a_embedding3/` 新建 `product_knowledge_embedding3_phase_a`；`embedding-3`、2048 维、1092/1092 chunks、32.915 秒，未复用旧 HNSW 片段 |
-| Chroma 查询侧验证 | `PASS` | 同一模型查询“适合油皮的洗面奶”，类目过滤为“美妆护肤”，返回 5/5 条匹配结果；查询耗时 1.557 秒 |
+| 文本向量生成 | `PASS` | 项目 OpenAI-compatible EmbeddingFunction 真实调用成功，1 个向量、2048 维、耗时 5.170 秒；文档与查询共享同一实现 |
+| 独立 Chroma 完整重建 | `PASS` | 在 `backend/storage/chroma_phase_a_embedding3/` 新建 `product_knowledge_embedding3_phase_a`；`embedding-3`、2048 维、1092/1092 chunks；最终端点/模型/维度契约版完整重建耗时 51.498 秒，未复用旧 HNSW 片段 |
+| Chroma 契约/运行时 | `PASS` | collection 持久化智谱端点 / `openai_compatible_text` / `embedding-3` / 2048 维；错误模型或错误端点重新打开均在查询前被拒绝；`.env` 默认 `ChromaRetriever` 与 `SearchService` 均读取 1092 条索引 |
+| Chroma 查询侧验证 | `PASS` | 默认 `ChromaRetriever()` 用同一模型查询“适合敏感肌的保湿面霜”，返回 5 条结果；查询命令总耗时 9.239 秒 |
 | FastAPI `/health` | `PASS` | 实际 Uvicorn `127.0.0.1:18765` 返回 HTTP 200 与 `{"status":"ok"}`，随后进程已终止 |
-| 后端单元测试 | `PASS_WITH_SKIPS` | `254 passed, 7 skipped, 3 warnings in 11.22s`；跳过项未计作通过，未运行评测数据集 |
+| 后端单元测试 | `PASS_WITH_SKIPS` | `260 passed, 7 skipped, 3 warnings in 16.95s`；跳过项未计作通过，未运行评测数据集 |
 
 ### 90 分钟检查点与 Go / No-Go
 
 检查点已完成并得到明确结论：依赖可安装、商品可读取、SQLite 与 `/health` 可用；智谱凭据可鉴权且模型列表可读取。`glm-5.3-flash` 无资源不能代表全部 Chat 模型不可用，`glm-5.2` 的实际 Router Function Calling 已成功。`embedding-3` 曾因余额/资源包返回 HTTP 429 / code 1113；用户补充资源并明确授权商品文本向该接口发送后，直接向量、项目适配、独立完整建库和同空间查询均成功。
 
-Go / No-Go 最终判定为 `GO_FULL`。按照最终方案“Router、向量均可用”的规则，可以执行完整后续方案。第一阶段止损规则与阶段 A 可运行实验基线均已完成；累计有记录的命令和进程等待约 865 秒，远低于 6 小时环境止损上限。此处只证明链路可运行，不构成任何检索效果或产品结论。
+Go / No-Go 最终判定为 `GO_FULL`。按照最终方案“Router、向量均可用”的规则，可以执行完整后续方案。第一阶段所要求的运行检查均已完成，但早期没有为主动文档审阅与用户等待分别启停统一秒表：manifest 的命令/进程时间只是主动环境工时下界，不能独立证明精确总工时。因此 90 分钟检查点和 6 小时止损合规均记为 `PASS_WITH_MEASUREMENT_LIMITATION`，不作无证据的精确时间主张。此处只证明链路可运行，不构成任何检索效果或产品结论。
 
 本机额外检查没有发现可直接复用的文本 embedding 缓存：Chroma MiniLM 与 sentence-transformers 缓存均不存在；Hugging Face 中仅有 faster-whisper 语音识别模型。智谱 `embedding-3` 恢复后无需安装本地替代模型；这避免了引入另一向量空间。
 
 没有开始 Prompt 优化、检索优化、评测运行或效果结论。
 
-阶段 A 的代码变更仅限文本 Embedding 接口兼容：`backend/rag/chroma_store.py` 与对应契约测试 `backend/rag/tests/test_chroma_store.py`。完整命令、失败历史、耗时、模型、维度、索引配置和原始摘要均记录在 `artifacts/manifests/phase_a_runtime.json`；真实 API Key 没有写入证据或版本库。
+阶段 A 的代码变更限于文本 Embedding/Chroma 可运行性：`backend/rag/chroma_store.py`、`backend/rag/build_chroma.py`、`.env.example` 与对应契约测试 `backend/rag/tests/test_chroma_store.py`。结构化结果记录在 `artifacts/manifests/phase_a_runtime.json`，完整最终命令和转录输出记录在 `artifacts/logs/phase_a_runtime_evidence.md`；未在早期完整捕获的探索命令被明确标为部分记录。真实 API Key 没有写入证据或版本库。
