@@ -1,0 +1,266 @@
+{
+  "schema_version": 1,
+  "phase": "A-runtime-readiness",
+  "captured_at": "2026-09-11T02:49:13.8913870+08:00",
+  "finalized_at": "2026-09-11T08:56:39.5601516+08:00",
+  "status": "STOPPED_NO_GO_RESOURCE_UNAVAILABLE",
+  "source": {
+    "working_branch": "codex/step0",
+    "handoff_commit": "01e3474345ae35d32c9bbd599b83e704c8adee4c",
+    "upstream_commit": "361184104f40ff0add11315b684729ab76c27b95",
+    "step0_baseline_manifest": "artifacts/manifests/step0_baseline.json",
+    "step0_baseline_overwritten": false
+  },
+  "checkpoint": {
+    "rule": "Assess dependency install, product read, Router, and one text vector within the first 90 minutes; cap cumulative environment work at 6 hours.",
+    "assessment": "COMPLETE",
+    "go_no_go": "NO_GO_BOTH_MODEL_INFERENCE_PATHS_UNAVAILABLE",
+    "first_stage_stop_loss_completed": true,
+    "full_phase_a_runtime_baseline_completed": false,
+    "six_hour_stop_loss_triggered": false,
+    "recorded_timed_command_and_process_wait_seconds": 720.0642862,
+    "recorded_timed_environment_work_under_six_hours": true,
+    "timing_scope_note": "Sum of captured command wall times and process waits; excludes time awaiting user confirmation and uncaptured document review time.",
+    "stop_reason": "Both authenticated Chat and text Embedding requests returned provider error 429/code 1113: insufficient balance or no available resource package."
+  },
+  "configuration": {
+    "env_file_present": true,
+    "credential_values_recorded": false,
+    "chat_api_key_configured": true,
+    "embedding_api_key_configured": true,
+    "provider": "Zhipu BigModel",
+    "chat_model": "glm-5.3-flash",
+    "embedding_model": "embedding-3",
+    "chat_base_url": "https://open.bigmodel.cn/api/paas/v4/",
+    "embedding_base_url": "https://open.bigmodel.cn/api/paas/v4/",
+    "USE_HYBRID": "1",
+    "USE_RERANK": "0",
+    "PYTHONUTF8_for_windows_cli": "1"
+  },
+  "runtime": {
+    "python": "3.12.10",
+    "executable": "C:\\Users\\Admin\\Documents\\ChatGPT\\Cartpilot\\.venv\\Scripts\\python.exe",
+    "virtual_environment": "CREATED"
+  },
+  "dependencies": {
+    "status": "PASS",
+    "create_venv": {
+      "command": "python -m venv .venv",
+      "exit_code": 0,
+      "wall_time_seconds": 26.6168408,
+      "stdout": ""
+    },
+    "initial_sandbox_install_attempt": {
+      "command": ".\\.venv\\Scripts\\python.exe -m pip install --report artifacts\\manifests\\phase_a_pip_install.json -r backend\\requirements.txt",
+      "exit_code": 1,
+      "wall_time_seconds": 15.6375602,
+      "failure_class": "sandbox_network_permission",
+      "raw_error_excerpt": "WinError 10013; ERROR: Could not find a version that satisfies the requirement chromadb==1.5.9; ERROR: No matching distribution found for chromadb==1.5.9"
+    },
+    "approved_network_install": {
+      "command": ".\\.venv\\Scripts\\python.exe -m pip install --report artifacts\\manifests\\phase_a_pip_install.json -r backend\\requirements.txt",
+      "exit_code": 0,
+      "observed_wall_time_seconds": 403.9213483,
+      "raw_report": "artifacts/manifests/phase_a_pip_install.json",
+      "raw_report_sha256": "8e542b16e7e883f15f5ba0884d6f3229372a78e31458045522be6c90d5714784",
+      "raw_report_bytes": 1177719
+    },
+    "pip_check": {
+      "command": ".\\.venv\\Scripts\\python.exe -m pip check",
+      "exit_code": 0,
+      "raw_output": "No broken requirements found."
+    },
+    "direct_requirements_resolved": {
+      "chromadb": "1.5.9",
+      "openai": "3.12.0",
+      "python-dotenv": "1.2.3",
+      "fastapi": "0.141.1",
+      "uvicorn": "0.52.4",
+      "httpx": "0.28.1",
+      "pytest": "9.1.1"
+    }
+  },
+  "sqlite_product_store": {
+    "status": "PASS",
+    "build_command": "$env:USE_HYBRID='1'; $env:USE_RERANK='0'; & '..\\.venv\\Scripts\\python.exe' -m store.import_product_data --reset",
+    "build_working_directory": "backend",
+    "build_exit_code": 0,
+    "build_wall_time_seconds": 2.6429296,
+    "build_output_decoded": "已导入 100 个商品、585 个 SKU、439 条 FAQ、453 条评价到 backend/storage/ecommerce_agent.sqlite3",
+    "database": "backend/storage/ecommerce_agent.sqlite3",
+    "database_bytes": 974848,
+    "integrity_check": "ok",
+    "counts": {
+      "products": 100,
+      "skus": 585,
+      "faqs": 439,
+      "reviews": 453
+    }
+  },
+  "product_read_smoke": {
+    "status": "PASS_WITH_ENVIRONMENT_NOTE",
+    "first_attempt": {
+      "command": "$env:USE_HYBRID='1'; $env:USE_RERANK='0'; & '..\\.venv\\Scripts\\python.exe' -m store.product_store detail p_beauty_010",
+      "exit_code": 1,
+      "failure_class": "windows_console_encoding",
+      "raw_error": "UnicodeEncodeError: 'gbk' codec can't encode character '\\xa5' in position 48: illegal multibyte sequence"
+    },
+    "root_cause_evidence": {
+      "stdout_encoding": "gbk",
+      "preferred_encoding": "cp936",
+      "business_code_diff": "none"
+    },
+    "successful_attempt": {
+      "command": "$env:PYTHONUTF8='1'; $env:USE_HYBRID='1'; $env:USE_RERANK='0'; & '..\\.venv\\Scripts\\python.exe' -m store.product_store detail p_beauty_010",
+      "exit_code": 0,
+      "wall_time_seconds": 0.9436141,
+      "raw_output": "p_beauty_010 | 安热沙金灿倍护防晒乳高倍防水防汗清爽户外面部身体防晒60ml | ¥118 起\nSKU: 2 | FAQ: 6 | Reviews: 3\n安热沙金灿倍护防晒乳（经典金瓶）是户外防晒的明星产品，核心采用品牌特有的Aqua Booster EX遇水增强技术，遇汗遇水后防晒膜更紧密，SPF50+ PA++++的高倍防护能有效阻隔UVA/UVB，避免晒伤晒黑。适合户外爱好者、通勤族及易出汗人群，无论是爬山、海滩度假还是日常上班都适用。质地清爽不油腻，涂抹后快速成"
+    }
+  },
+  "model_interface": {
+    "code_contract": {
+      "chat": "OpenAI-compatible chat.completions with forced function tool calling",
+      "embedding": "Project currently posts to /embeddings/multimodal with one text input per request",
+      "public_provider_contract_checked": "Zhipu documents OpenAI-compatible Chat Completions/Function Calling and POST /embeddings with embedding-3."
+    },
+    "model_list_discovery": {
+      "status": "PASS",
+      "command": ".\\.venv\\Scripts\\python.exe -c \"... OpenAI(base_url='https://open.bigmodel.cn/api/paas/v4/').models.list() ...\"",
+      "zhipu_attempt": {
+        "exit_code": 0,
+        "tool_wall_time_seconds": 10.586135,
+        "request_elapsed_seconds": 2.51125,
+        "visible_models": [
+          "glm-4.5",
+          "glm-4.5-air",
+          "glm-4.6",
+          "glm-4.7",
+          "glm-5",
+          "glm-5-turbo",
+          "glm-5.1",
+          "glm-5.2",
+          "glm-5.3",
+          "glm-5.3-flash"
+        ],
+        "credential_value_recorded": false
+      },
+      "initial_sandbox_attempt": {
+        "exit_code": 1,
+        "wall_time_seconds": 14.3484057,
+        "failure_class": "sandbox_network_permission",
+        "raw_error": "openai.APIConnectionError: Connection error; underlying WinError 10013"
+      },
+      "initial_ark_endpoint_attempt": {
+        "exit_code": 1,
+        "wall_time_seconds": 12.6699558,
+        "failure_class": "provider_endpoint_credential_mismatch",
+        "http_status": 401,
+        "raw_error": "AuthenticationError: The API key format is incorrect.",
+        "credential_value_recorded": false
+      },
+      "diagnosis": "The credential belongs to Zhipu BigModel, not Ark. Authentication and model enumeration succeed against the user-approved Zhipu base URL."
+    },
+    "local_embedding_fallback_assessment": {
+      "compatible_cached_text_embedding_model_found": false,
+      "chroma_all_minilm_cache_present": false,
+      "sentence_transformers_cache_present": false,
+      "huggingface_cached_models": [
+        "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
+        "Systran/faster-whisper-large-v3",
+        "Systran/faster-whisper-small"
+      ],
+      "adaptation_attempted": false,
+      "reason": "Only speech-recognition models are cached. Installing a multilingual local embedding stack adds download, memory, dependency, and interface adaptation cost while the Router remains unavailable, so it does not satisfy the bounded stop-loss rule."
+    }
+  },
+  "smokes": {
+    "router": {
+      "status": "BLOCKED_RESOURCE_UNAVAILABLE",
+      "command": ".\\.venv\\Scripts\\python.exe -c \"... chat.completions.create(model='glm-5.3-flash', tools=[_TOOL_SCHEMA], tool_choice={'type':'function','function':{'name':'route_to_tool'}}, temperature=0.1, timeout=15) ...\"",
+      "model": "glm-5.3-flash",
+      "base_url": "https://open.bigmodel.cn/api/paas/v4/",
+      "exit_code": 1,
+      "tool_wall_time_seconds": 7.977139,
+      "http_status": 429,
+      "provider_code": "1113",
+      "raw_error": "余额不足或无可用资源包,请充值。",
+      "failure_class": "provider_account_resource",
+      "credential_value_recorded": false
+    },
+    "text_embedding": {
+      "status": "BLOCKED_RESOURCE_UNAVAILABLE",
+      "command": ".\\.venv\\Scripts\\python.exe -c \"... embeddings.create(model='embedding-3', input=['CartPilot 文本向量冒烟']) ...\"",
+      "model": "embedding-3",
+      "base_url": "https://open.bigmodel.cn/api/paas/v4/",
+      "exit_code": 1,
+      "tool_wall_time_seconds": 6.8024321,
+      "http_status": 429,
+      "provider_code": "1113",
+      "raw_error": "余额不足或无可用资源包,请充值。",
+      "failure_class": "provider_account_resource",
+      "vector_generated": false,
+      "credential_value_recorded": false
+    },
+    "chroma_rebuild": {
+      "status": "NOT RUN",
+      "reason": "No text vector was generated because the provider account has no available balance/resource package. Building an index without a verified embedding would violate the same-space rule."
+    },
+    "backend_health": {
+      "status": "PASS",
+      "server_command": "$env:PYTHONUTF8='1'; $env:USE_HYBRID='1'; $env:USE_RERANK='0'; $env:BACKEND_WARMUP='0'; & '..\\.venv\\Scripts\\python.exe' -m uvicorn api.main:app --host 127.0.0.1 --port 8765",
+      "request_command": "Invoke-RestMethod -Uri 'http://127.0.0.1:8765/health' -Method Get | ConvertTo-Json -Compress",
+      "http_status": 200,
+      "raw_response": "{\"status\":\"ok\"}",
+      "request_wall_time_seconds": 1.0275698,
+      "server_stopped": true
+    },
+    "backend_test_suite": {
+      "status": "PASS_WITH_SKIPS",
+      "command": "$env:PYTHONUTF8='1'; $env:USE_HYBRID='1'; $env:USE_RERANK='0'; & '.\\.venv\\Scripts\\python.exe' -m pytest -q backend",
+      "exit_code": 0,
+      "tool_wall_time_seconds": 26.8831341,
+      "pytest_elapsed_seconds": 20.37,
+      "passed": 250,
+      "skipped": 7,
+      "warnings": 3,
+      "raw_summary": "250 passed, 7 skipped, 3 warnings in 20.37s",
+      "scope_note": "Skipped tests were not counted as passed; no evaluation dataset was run."
+    }
+  },
+  "scope_guard": {
+    "prompt_optimization_started": false,
+    "retrieval_optimization_started": false,
+    "evaluation_conclusions_started": false,
+    "stop_loss_scope_only": true
+  },
+  "final_verification": {
+    "verified_at": "2026-09-11T09:01:27.7472814+08:00",
+    "runtime_manifest_json_valid": true,
+    "pip_report_sha256_matches_manifest": true,
+    "step0_baseline_git_diff_empty": true,
+    "env_file_git_ignored": true,
+    "credential_found_in_evidence_files": false,
+    "pip_check": "No broken requirements found.",
+    "sqlite_integrity": "ok",
+    "sqlite_products": 100,
+    "sqlite_skus": 585,
+    "product_read": "p_beauty_010",
+    "backend_tests": {
+      "passed": 250,
+      "skipped": 7,
+      "warnings": 3,
+      "elapsed_seconds": 12.69
+    },
+    "backend_health": {
+      "http_status": 200,
+      "response": {
+        "status": "ok"
+      }
+    },
+    "USE_HYBRID": "1",
+    "USE_RERANK": "0",
+    "legacy_chroma_metadata_present": false,
+    "independent_phase_a_chroma_present": false,
+    "git_diff_check_passed": true
+  }
+}

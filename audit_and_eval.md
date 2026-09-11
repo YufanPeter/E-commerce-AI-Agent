@@ -95,3 +95,33 @@
 已完成上游版本固定、许可证保留、贡献边界声明、本机环境盘点、依赖声明与安装差异、配置变量/默认策略、商品与上游评测数据版本、索引完整性检查，以及未运行项记账。
 
 下一阶段开始前仍需用户提供或确认兼容的 Chat 与文本 Embedding 能力。随后创建项目 `.venv`、安装依赖、构建 SQLite，并按方案的 90 分钟检查点依次做商品读取、Router、文本向量和后端健康检查。模型或 embedding 未实际运行前，不生成任何效果结论。
+
+## 阶段 A：可运行性止损检查（进行中）
+
+更新时间：2026-09-11（Asia/Shanghai）。本节是 Step 0 基线之后的增量运行记录；机器可读详情和原始 pip 解析报告分别见 `artifacts/manifests/phase_a_runtime.json` 与 `artifacts/manifests/phase_a_pip_install.json`。`artifacts/manifests/step0_baseline.json` 未覆盖。
+
+| 检查项 | 状态 | 真实结果 |
+|---|---|---|
+| 项目 `.venv` | `PASS` | Python 3.12.10；创建命令退出码 0 |
+| 依赖安装 | `PASS` | `backend/requirements.txt` 安装成功；`pip check` 输出 `No broken requirements found.` |
+| 实际依赖版本 | `PASS` | chromadb 1.5.9、openai 3.12.0、python-dotenv 1.2.3、fastapi 0.141.1、uvicorn 0.52.4、httpx 0.28.1、pytest 9.1.1；全部解析版本见 pip report |
+| 显式实验开关 | `PASS` | 运行命令使用 `USE_HYBRID=1`、`USE_RERANK=0` |
+| SQLite 商品库 | `PASS` | `PRAGMA integrity_check=ok`；100 商品、585 SKU、439 FAQ、453 评价 |
+| 商品读取 | `PASS_WITH_ENVIRONMENT_NOTE` | 成功读取 `p_beauty_010`；Windows 默认 GBK 无法打印 `¥`，设置 `PYTHONUTF8=1` 后退出码 0，未修改业务代码 |
+| Chat 模型/接口 | `AUTHENTICATED_BUT_UNAVAILABLE` | 已确认智谱 OpenAI-compatible Chat Completions/Function Calling 接口；账号可见十个 Chat 模型，固定最小验证模型为 `glm-5.3-flash`，实际推理返回 HTTP 429 / provider code 1113（余额不足或无可用资源包） |
+| 文本 Embedding 模型/接口 | `AUTHENTICATED_BUT_UNAVAILABLE` | 已确认智谱标准 `/embeddings` 与 `embedding-3`；实际请求通过鉴权后返回同一 HTTP 429 / code 1113，未生成向量。上游当前 `/embeddings/multimodal` 实现与该标准文本接口不同，但因资源不可用没有开始适配 |
+| Router 单次调用 | `BLOCKED_RESOURCE_UNAVAILABLE` | 使用 `glm-5.3-flash`、实际 Router tool schema 与强制 function choice 发起请求；服务端在推理前返回 HTTP 429 / code 1113，未产生 Router 决策 |
+| 文本向量生成 | `BLOCKED_RESOURCE_UNAVAILABLE` | 使用 `embedding-3` 发起最小文本向量请求；服务端返回 HTTP 429 / code 1113，`vector_generated=false` |
+| 独立 Chroma 完整重建 | `NOT RUN` | 没有验证成功的 embedding，按同一向量空间规则禁止建库或复用旧索引 |
+| FastAPI `/health` | `PASS` | Uvicorn `127.0.0.1:8765` 返回 HTTP 200 与 `{"status":"ok"}`，随后进程已终止 |
+| 后端单元测试 | `PASS_WITH_SKIPS` | `250 passed, 7 skipped, 3 warnings in 20.37s`；跳过项未计作通过，未运行评测数据集 |
+
+### 90 分钟检查点与 Go / No-Go
+
+检查点已完成并得到明确结论：依赖可安装、商品可读取、SQLite 与 `/health` 可用；智谱凭据可鉴权且模型列表可读取，但 Chat 与文本 Embedding 的真实推理均被账号资源错误阻止。失败属于**账号余额/资源包**，不是 Key 格式、网络、依赖、SQLite 或本地代码初始化问题。
+
+Go / No-Go 为 `NO_GO_BOTH_MODEL_INFERENCE_PATHS_UNAVAILABLE`。按照最终方案“二者都不可用”的规则，本轮止于基础设施验证和失败分析，不启动实验。第一阶段的止损流程至此完成，但**完整阶段 A 可运行实验基线没有完成**，Router 决策、文本向量和独立 Chroma 索引均不能宣称成功。累计环境处理未达到 6 小时上限，是因为更早出现了明确 No-Go 条件。
+
+本机额外检查没有发现可直接复用的文本 embedding 缓存：Chroma MiniLM 与 sentence-transformers 缓存均不存在；Hugging Face 中仅有 faster-whisper 语音识别模型。继续下载并适配本地多语言 embedding 会新增下载、内存、依赖和代码成本，同时仍无法恢复 Router，不满足本阶段的受限适配条件，因此未尝试。
+
+没有开始 Prompt 优化、检索优化、评测运行或效果结论。

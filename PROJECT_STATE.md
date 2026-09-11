@@ -2,7 +2,9 @@
 
 更新时间：2026-09-11（Asia/Shanghai）
 项目根目录：`C:\Users\Admin\Documents\ChatGPT\Cartpilot`
-状态口径：以当前 Git 工作树、`audit_and_eval.md` 和 `artifacts/manifests/step0_baseline.json` 为准；未执行项保持 `NOT RUN`。
+状态口径：以当前 Git 工作树、`audit_and_eval.md`、`artifacts/manifests/step0_baseline.json` 和 `artifacts/manifests/phase_a_runtime.json` 为准；未执行项保持 `NOT RUN`。
+
+> 2026-09-11 阶段 A 止损结论：已创建 `.venv` 并安装依赖，已生成并验证 SQLite，商品读取与 FastAPI `/health` 已通过；后端测试为 `250 passed, 7 skipped, 3 warnings`，跳过项未计作通过。已确认本地凭据属于智谱 BigModel，账号模型列表可读；但 `glm-5.3-flash` Router 请求和 `embedding-3` 文本向量请求都返回 HTTP 429 / code 1113（余额不足或无可用资源包）。因此第一阶段**止损流程已完成并判定 No-Go**，完整阶段 A 可运行基线未完成；Router 决策、文本向量和独立 Chroma 完整重建不得标为成功。最新机器证据见 `artifacts/manifests/phase_a_runtime.json`，完整 pip 解析见 `artifacts/manifests/phase_a_pip_install.json`；本文件后文关于 `.venv`、SQLite 和 `/health` 的 `NOT RUN` 描述是交接 commit `01e3474` 时的历史状态，以上述结论及当前工作树为准。
 
 ## 1. 当前目标、阶段及完成情况
 
@@ -12,10 +14,7 @@
 
 ### 当前阶段
 
-用户本轮把范围限定为 **Step 0.1 + Step 0.2**：
-
-1. Step 0.1：获取并固定上游源码版本。
-2. Step 0.2：记录本机环境、依赖、配置、数据和索引的初始基线。
+当前已执行到**阶段 A 的第一阶段止损检查**。90 分钟检查点所需的依赖、商品读取、Router、文本向量与失败分类均已有真实结果；因 Chat 和 Embedding 推理同时被账号余额/资源包阻止，按方案判定 No-Go，停止后续模型、Chroma 和实验工作。
 
 ### 已完成
 
@@ -27,14 +26,19 @@
 - 已生成不含真实凭据的 `.env.example`，其中实验预设为 `USE_HYBRID=1`、`USE_RERANK=0`。
 - 已实数核对 100 个商品、585 个 SKU，以及五份上游评测文件合计 121 条记录；评测文件 SHA-256 已冻结在 manifest。
 - 上述成果已提交为 `7e95ac1af53459a7180d5a1b821b62d68887be65`（`docs: establish CartPilot step 0 baseline`）。
+- 已创建项目 `.venv`，安装 `backend/requirements.txt` 并保存完整 pip 解析报告；`pip check` 通过。
+- 已生成 SQLite 商品库并验证 `PRAGMA integrity_check=ok`；商品读取通过。
+- 已以 `USE_HYBRID=1`、`USE_RERANK=0` 完成 FastAPI `/health` 冒烟，返回 HTTP 200。
+- 后端单元测试结果为 `250 passed, 7 skipped, 3 warnings`；跳过项没有计作通过。
+- 已确认智谱 BigModel OpenAI-compatible Base URL、账号可见 Chat 模型列表、候选 Chat 模型 `glm-5.3-flash` 与文本 Embedding 模型 `embedding-3`。
+- 已真实尝试 Router 和文本向量请求；两者均被 HTTP 429 / provider code 1113 阻止，失败归类为账号余额/资源包，不是网络、Key 格式或本地依赖。
+- 已保存独立运行清单 `artifacts/manifests/phase_a_runtime.json`，没有覆盖 Step 0 baseline。
 
 ### 尚未完成
 
-- 尚未完成方案阶段 A 的可运行性与文本链路冒烟。
-- 尚未创建 `.venv`，尚未安装项目依赖。
-- 尚未配置 Chat、Embedding 或 Rerank 模型；没有 `.env`。
-- 尚未生成 SQLite 商品库或完整 Chroma 元数据数据库。
-- Router、文本向量、FastAPI 健康检查、测试套件和任何评测均未运行。
+- 尚未得到成功的 Router 决策或文本向量；当前账号无余额或可用资源包。
+- 尚未完整重建独立 Chroma 索引；没有成功 embedding 时禁止建库或混用旧向量空间。
+- 尚未完成标准路径的阶段 A 可运行实验基线；当前成果范围仅为基础设施验证、失败分析与 No-Go 决策。
 - 尚未开始覆盖矩阵、自建 DEV/留出/E2E 数据、Intent 基线、错误分析、优化变体、检索四模式对照或最终材料。
 
 ## 2. 代码目录、分支、commit 与未提交改动
@@ -115,50 +119,46 @@
 
 | 配置项 | 当前冻结口径 |
 |---|---|
-| Python 目标版本 | 本机 `3.12.10`；后续在项目 `.venv` 中复核实际依赖兼容性 |
-| Chat 模型 | `NOT CONFIGURED` |
-| Embedding 模型 | `NOT CONFIGURED` |
+| Python 目标版本 | 项目 `.venv` 使用 `3.12.10`；`pip check` 通过 |
+| Chat 模型 | 智谱 `glm-5.3-flash`；已配置但推理因 HTTP 429 / code 1113 不可用 |
+| Embedding 模型 | 智谱 `embedding-3`；已配置但推理因 HTTP 429 / code 1113 不可用 |
 | Rerank 模型 | `NOT CONFIGURED`，默认不使用 |
 | `USE_HYBRID` | `1` |
 | `USE_RERANK` | `0` |
 | 超时 / 重试模板 | `ARK_TIMEOUT=30`、`ARK_MAX_RETRIES=1` |
 | 真实 Key | 不进入文档、manifest 或 Git |
 
-`.env.example` 是模板，不代表 `.env` 已建立或变量已生效。模型、版本、接口与实际依赖解析结果应在首次成功运行时写入新的运行 manifest，不能覆盖 Step 0 初始快照。
+本地 `.env` 已建立并被 Git 忽略，真实 Key 未进入文档、manifest 或 Git。模型、接口、依赖、命令与失败结果已写入新的运行 manifest，没有覆盖 Step 0 初始快照。
 
 ## 6. 未完成事项、阻塞与下一步具体动作
 
 ### 当前阻塞/前置条件
 
-1. 用户需要确认并在本地 `.env` 中配置兼容的 Chat 模型和文本 Embedding 模型/端点/凭据。
-2. 项目核心依赖尚未安装，`.venv` 不存在。
-3. SQLite 商品库与完整 Chroma 索引尚未生成。
-4. Embedding 模型未固定前不能重建索引，也不能开展可归因的 Retrieval 实验。
+1. 智谱账号需要补充余额或获得同时覆盖 Chat 与 `embedding-3` 的可用资源包；当前真实请求均返回 HTTP 429 / code 1113。
+2. 成功生成首个文本向量之前不能重建 Chroma，也不能开展可归因的 Retrieval 实验。
+3. 当前上游 embedding 实现调用 Ark 专用 `/embeddings/multimodal`；如果账号资源恢复并继续使用智谱标准 `/embeddings`，需要先完成并验证一次明确标注的文本接口适配。
 
-这些是下一阶段的前置条件，不影响 Step 0.1+0.2 已有证据；但它们阻止“可运行实验基线”完成。
+这些阻塞不影响 Step 0 和本轮基础设施证据，但已触发阶段 A 的双侧不可用 No-Go，阻止“可运行实验基线”完成。
 
 ### 下一任务的具体顺序
 
-1. 先读本文件、`CartPilot_AI_PM_最终方案.md`、`audit_and_eval.md` 和 `artifacts/manifests/step0_baseline.json`。
-2. 运行只读状态确认：`git status --short --branch`、`git log -1 --oneline`、`git rev-parse HEAD^`；不要先拉取浮动上游。
-3. 与用户确认 Chat/Embedding 的兼容接口和资源预算；真实 Key 只写入被忽略的 `.env`。
-4. 在根目录创建 `.venv`，用 `.venv\Scripts\python.exe -m pip install -r backend\requirements.txt` 安装依赖，并保存实际解析版本；不要污染或以全局 Python 包作为项目基线。
-5. 显式设置 `USE_RERANK=0`，核对运行时实际构造参数；不要依赖 Docker/Compose 的上游默认值。
-6. 从 `backend` 运行商品数据导入，生成 `backend/storage/ecommerce_agent.sqlite3`，先验证可以读取一个商品。
-7. 先做一次限时文本 embedding 诊断。只有模型与接口确认可用后，使用该 embedding 完整重建独立 Chroma 索引；不要复用缺失元数据的旧片段。
-8. 分别执行一次 Router 调用、一次文本向量生成和 FastAPI `/health` 检查，记录输入、配置、耗时、失败类型和原始输出位置。
-9. 更新审计文档并新建运行 manifest；不要改写 `step0_baseline.json`。达到方案的 90 分钟检查点时做 Go/No-Go 判断，环境处理累计最多 6 小时。
-10. 可运行性确认后再进入覆盖矩阵和评测数据设计，不提前开始 Prompt 或检索优化。
+1. 先由用户在智谱侧补充余额/资源包；不需要重新提供 Key，继续复用被忽略的本地 `.env`。
+2. 资源恢复后只重跑一次最小 `glm-5.3-flash` Function Calling 与一次 `embedding-3` 文本向量；不要重跑已通过的依赖、SQLite、商品读取和 `/health`。
+3. 若两次最小调用成功，先将 Ark 专用 embedding 调用适配为智谱标准 `/embeddings`，保存为“文本适配基线”并完成契约测试。
+4. 使用 `embedding-3` 在独立目录完整重建 Chroma，确保文档与查询侧同一模型、同一维度；不复用旧 HNSW 片段。
+5. 更新 `phase_a_runtime.json` 与本文件后再作新的 Go / No-Go；在此之前不进入 Prompt 优化、检索优化或评测结论。
 
 ## 7. 运行中的命令、日志与输出位置
 
 - 当前 Codex 任务没有已知的运行中命令或待轮询句柄。
 - 名称级进程检查未发现 `python`、`pythonw`、`uvicorn` 或 `git` 进程；当前 PowerShell 会话也没有后台 Job。
 - `.git/index.lock` 不存在。
-- 工作树内没有 `*.log`、`*.out` 或 `*.err` 文件。
-- 本轮 Step 0 检查输出没有单独写日志；持久证据位于：
+- 工作树内没有需要轮询的模型、Uvicorn 或索引构建进程。
+- 当前持久证据位于：
   - `audit_and_eval.md`
   - `artifacts/manifests/step0_baseline.json`
+  - `artifacts/manifests/phase_a_runtime.json`
+  - `artifacts/manifests/phase_a_pip_install.json`
   - `.env.example`
   - Git commit `7e95ac1af53459a7180d5a1b821b62d68887be65`
 - 尝试通过 `Win32_Process.CommandLine` 枚举所有系统进程时被 Windows 拒绝访问。因此可以确认本任务没有已知活动句柄，并且未发现上述名称的相关进程；不能据此证明系统中绝对不存在由其他会话启动、且名称不同的外部进程。
