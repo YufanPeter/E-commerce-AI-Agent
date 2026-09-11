@@ -20,7 +20,7 @@
 
 ### 贡献边界
 
-上游已有 Router → Tool → Composer、混合检索、SQLite 商品事实、评测脚本、100 个商品和 585 个 SKU。本项目当前新增的是中文最终方案、版本/环境审计记录与安全配置模板；尚未产生个人评测数据、实验结果或业务优化代码。
+上游已有 Router → Tool → Composer、混合检索、SQLite 商品事实、评测脚本、100 个商品和 585 个 SKU。截至 Step 0 提交，本项目新增的是中文最终方案、版本/环境审计记录与安全配置模板；当时尚未产生个人评测数据、实验结果或业务优化代码。
 
 ## Step 0.2：环境与配置基线
 
@@ -96,7 +96,7 @@
 
 下一阶段开始前仍需用户提供或确认兼容的 Chat 与文本 Embedding 能力。随后创建项目 `.venv`、安装依赖、构建 SQLite，并按方案的 90 分钟检查点依次做商品读取、Router、文本向量和后端健康检查。模型或 embedding 未实际运行前，不生成任何效果结论。
 
-## 阶段 A：可运行性止损检查（进行中）
+## 阶段 A：可运行性止损检查（已完成）
 
 更新时间：2026-09-11（Asia/Shanghai）。本节是 Step 0 基线之后的增量运行记录；机器可读详情和原始 pip 解析报告分别见 `artifacts/manifests/phase_a_runtime.json` 与 `artifacts/manifests/phase_a_pip_install.json`。`artifacts/manifests/step0_baseline.json` 未覆盖。
 
@@ -108,20 +108,24 @@
 | 显式实验开关 | `PASS` | 运行命令使用 `USE_HYBRID=1`、`USE_RERANK=0` |
 | SQLite 商品库 | `PASS` | `PRAGMA integrity_check=ok`；100 商品、585 SKU、439 FAQ、453 评价 |
 | 商品读取 | `PASS_WITH_ENVIRONMENT_NOTE` | 成功读取 `p_beauty_010`；Windows 默认 GBK 无法打印 `¥`，设置 `PYTHONUTF8=1` 后退出码 0，未修改业务代码 |
-| Chat 模型/接口 | `AUTHENTICATED_BUT_UNAVAILABLE` | 已确认智谱 OpenAI-compatible Chat Completions/Function Calling 接口；账号可见十个 Chat 模型，固定最小验证模型为 `glm-5.3-flash`，实际推理返回 HTTP 429 / provider code 1113（余额不足或无可用资源包） |
-| 文本 Embedding 模型/接口 | `AUTHENTICATED_BUT_UNAVAILABLE` | 已确认智谱标准 `/embeddings` 与 `embedding-3`；实际请求通过鉴权后返回同一 HTTP 429 / code 1113，未生成向量。上游当前 `/embeddings/multimodal` 实现与该标准文本接口不同，但因资源不可用没有开始适配 |
-| Router 单次调用 | `BLOCKED_RESOURCE_UNAVAILABLE` | 使用 `glm-5.3-flash`、实际 Router tool schema 与强制 function choice 发起请求；服务端在推理前返回 HTTP 429 / code 1113，未产生 Router 决策 |
-| 文本向量生成 | `BLOCKED_RESOURCE_UNAVAILABLE` | 使用 `embedding-3` 发起最小文本向量请求；服务端返回 HTTP 429 / code 1113，`vector_generated=false` |
-| 独立 Chroma 完整重建 | `NOT RUN` | 没有验证成功的 embedding，按同一向量空间规则禁止建库或复用旧索引 |
-| FastAPI `/health` | `PASS` | Uvicorn `127.0.0.1:8765` 返回 HTTP 200 与 `{"status":"ok"}`，随后进程已终止 |
-| 后端单元测试 | `PASS_WITH_SKIPS` | `250 passed, 7 skipped, 3 warnings in 20.37s`；跳过项未计作通过，未运行评测数据集 |
+| Chat 模型/接口 | `PASS` | 已确认智谱 OpenAI-compatible Chat Completions/Function Calling 接口；`glm-5.3-flash` 返回 HTTP 429 / code 1113 后，用户确认有 `glm-5.2` 资源；`glm-5.2` 强制 Function Calling 与项目 `route()` 入口均成功 |
+| 文本 Embedding 模型/接口 | `PASS` | 用户补充账号资源后，智谱标准 `/embeddings` 与 `embedding-3` 直接请求成功；返回模型 `embedding-3`、2048 维、最小探针 9 tokens、请求耗时 2.781 秒 |
+| Embedding 接口适配 | `PASS` | 以测试驱动将 Ark 专用 `/embeddings/multimodal` 改为 OpenAI-compatible `embeddings.create` 文本批调用；RED 为 `4 failed`，GREEN 为 `4 passed`，批次硬上限 64 |
+| Router 单次调用 | `PASS` | 使用项目 `route()`、`glm-5.2`、实际 tool schema 与强制 function choice；输入“推荐一双500元以内的跑鞋”，输出 `recommend` / `high`，最终复测耗时 8.023 秒 |
+| 文本向量生成 | `PASS` | 项目 `DoubaoEmbeddingFunction` 真实调用成功，1 个向量、2048 维、耗时 5.170 秒；文档与查询共享同一实现 |
+| 独立 Chroma 完整重建 | `PASS` | 在 `backend/storage/chroma_phase_a_embedding3/` 新建 `product_knowledge_embedding3_phase_a`；`embedding-3`、2048 维、1092/1092 chunks、32.915 秒，未复用旧 HNSW 片段 |
+| Chroma 查询侧验证 | `PASS` | 同一模型查询“适合油皮的洗面奶”，类目过滤为“美妆护肤”，返回 5/5 条匹配结果；查询耗时 1.557 秒 |
+| FastAPI `/health` | `PASS` | 实际 Uvicorn `127.0.0.1:18765` 返回 HTTP 200 与 `{"status":"ok"}`，随后进程已终止 |
+| 后端单元测试 | `PASS_WITH_SKIPS` | `254 passed, 7 skipped, 3 warnings in 11.22s`；跳过项未计作通过，未运行评测数据集 |
 
 ### 90 分钟检查点与 Go / No-Go
 
-检查点已完成并得到明确结论：依赖可安装、商品可读取、SQLite 与 `/health` 可用；智谱凭据可鉴权且模型列表可读取，但 Chat 与文本 Embedding 的真实推理均被账号资源错误阻止。失败属于**账号余额/资源包**，不是 Key 格式、网络、依赖、SQLite 或本地代码初始化问题。
+检查点已完成并得到明确结论：依赖可安装、商品可读取、SQLite 与 `/health` 可用；智谱凭据可鉴权且模型列表可读取。`glm-5.3-flash` 无资源不能代表全部 Chat 模型不可用，`glm-5.2` 的实际 Router Function Calling 已成功。`embedding-3` 曾因余额/资源包返回 HTTP 429 / code 1113；用户补充资源并明确授权商品文本向该接口发送后，直接向量、项目适配、独立完整建库和同空间查询均成功。
 
-Go / No-Go 为 `NO_GO_BOTH_MODEL_INFERENCE_PATHS_UNAVAILABLE`。按照最终方案“二者都不可用”的规则，本轮止于基础设施验证和失败分析，不启动实验。第一阶段的止损流程至此完成，但**完整阶段 A 可运行实验基线没有完成**，Router 决策、文本向量和独立 Chroma 索引均不能宣称成功。累计环境处理未达到 6 小时上限，是因为更早出现了明确 No-Go 条件。
+Go / No-Go 最终判定为 `GO_FULL`。按照最终方案“Router、向量均可用”的规则，可以执行完整后续方案。第一阶段止损规则与阶段 A 可运行实验基线均已完成；累计有记录的命令和进程等待约 865 秒，远低于 6 小时环境止损上限。此处只证明链路可运行，不构成任何检索效果或产品结论。
 
-本机额外检查没有发现可直接复用的文本 embedding 缓存：Chroma MiniLM 与 sentence-transformers 缓存均不存在；Hugging Face 中仅有 faster-whisper 语音识别模型。继续下载并适配本地多语言 embedding 会新增下载、内存、依赖和代码成本，同时仍无法恢复 Router，不满足本阶段的受限适配条件，因此未尝试。
+本机额外检查没有发现可直接复用的文本 embedding 缓存：Chroma MiniLM 与 sentence-transformers 缓存均不存在；Hugging Face 中仅有 faster-whisper 语音识别模型。智谱 `embedding-3` 恢复后无需安装本地替代模型；这避免了引入另一向量空间。
 
 没有开始 Prompt 优化、检索优化、评测运行或效果结论。
+
+阶段 A 的代码变更仅限文本 Embedding 接口兼容：`backend/rag/chroma_store.py` 与对应契约测试 `backend/rag/tests/test_chroma_store.py`。完整命令、失败历史、耗时、模型、维度、索引配置和原始摘要均记录在 `artifacts/manifests/phase_a_runtime.json`；真实 API Key 没有写入证据或版本库。

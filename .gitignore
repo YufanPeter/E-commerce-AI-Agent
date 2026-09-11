@@ -33,6 +33,7 @@ instance/
 *.sqlite3-wal
 *.db
 # backend/storage/
+backend/storage/chroma_phase_a_embedding3/
 
 # Node / frontend if added later
 node_modules/

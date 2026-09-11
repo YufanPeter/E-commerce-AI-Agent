@@ -4,7 +4,7 @@
 项目根目录：`C:\Users\Admin\Documents\ChatGPT\Cartpilot`
 状态口径：以当前 Git 工作树、`audit_and_eval.md`、`artifacts/manifests/step0_baseline.json` 和 `artifacts/manifests/phase_a_runtime.json` 为准；未执行项保持 `NOT RUN`。
 
-> 2026-09-11 阶段 A 止损结论：已创建 `.venv` 并安装依赖，已生成并验证 SQLite，商品读取与 FastAPI `/health` 已通过；后端测试为 `250 passed, 7 skipped, 3 warnings`，跳过项未计作通过。已确认本地凭据属于智谱 BigModel，账号模型列表可读；但 `glm-5.3-flash` Router 请求和 `embedding-3` 文本向量请求都返回 HTTP 429 / code 1113（余额不足或无可用资源包）。因此第一阶段**止损流程已完成并判定 No-Go**，完整阶段 A 可运行基线未完成；Router 决策、文本向量和独立 Chroma 完整重建不得标为成功。最新机器证据见 `artifacts/manifests/phase_a_runtime.json`，完整 pip 解析见 `artifacts/manifests/phase_a_pip_install.json`；本文件后文关于 `.venv`、SQLite 和 `/health` 的 `NOT RUN` 描述是交接 commit `01e3474` 时的历史状态，以上述结论及当前工作树为准。
+> 2026-09-11 阶段 A 结论：第一阶段止损规则已完整执行并判定 `GO_FULL`。项目 `.venv`、依赖、SQLite、商品读取、`glm-5.2` Router、`embedding-3` 文本向量、独立 Chroma 完整重建及 FastAPI `/health` 均有真实成功结果。新索引固定 `embedding-3`、2048 维，共 1092 个 chunk；文档侧与查询侧使用同一接口和模型，未复用仓库内旧 HNSW 片段。后端测试为 `254 passed, 7 skipped, 3 warnings`，跳过项未计作通过。最新机器证据见 `artifacts/manifests/phase_a_runtime.json`，完整 pip 解析见 `artifacts/manifests/phase_a_pip_install.json`；本文件后文 Step 0 的 `NOT RUN` 描述是交接 commit `01e3474` 时的历史状态，不得改写成当时已运行。
 
 ## 1. 当前目标、阶段及完成情况
 
@@ -14,7 +14,7 @@
 
 ### 当前阶段
 
-当前已执行到**阶段 A 的第一阶段止损检查**。90 分钟检查点所需的依赖、商品读取、Router、文本向量与失败分类均已有真实结果；因 Chat 和 Embedding 推理同时被账号余额/资源包阻止，按方案判定 No-Go，停止后续模型、Chroma 和实验工作。
+当前已完成**阶段 A 的可运行性与第一阶段止损检查**。依赖、商品读取、Router、文本向量、独立索引、真实查询与 `/health` 均已验证；根据“Router、向量均可用”的规则判定 `GO_FULL`。本轮到此收口，不提前进入 Prompt 优化、检索优化或评测结论。
 
 ### 已完成
 
@@ -29,17 +29,18 @@
 - 已创建项目 `.venv`，安装 `backend/requirements.txt` 并保存完整 pip 解析报告；`pip check` 通过。
 - 已生成 SQLite 商品库并验证 `PRAGMA integrity_check=ok`；商品读取通过。
 - 已以 `USE_HYBRID=1`、`USE_RERANK=0` 完成 FastAPI `/health` 冒烟，返回 HTTP 200。
-- 后端单元测试结果为 `250 passed, 7 skipped, 3 warnings`；跳过项没有计作通过。
-- 已确认智谱 BigModel OpenAI-compatible Base URL、账号可见 Chat 模型列表、候选 Chat 模型 `glm-5.3-flash` 与文本 Embedding 模型 `embedding-3`。
-- 已真实尝试 Router 和文本向量请求；两者均被 HTTP 429 / provider code 1113 阻止，失败归类为账号余额/资源包，不是网络、Key 格式或本地依赖。
+- 后端单元测试结果为 `254 passed, 7 skipped, 3 warnings`；跳过项没有计作通过。
+- 已确认智谱 BigModel OpenAI-compatible Base URL、账号可见 Chat 模型列表、可用 Chat 模型 `glm-5.2` 与文本 Embedding 模型接口 `embedding-3`。
+- 已真实完成 `glm-5.2` Router 冒烟：输入“推荐一双500元以内的跑鞋”，输出 `recommend` / `high`。
+- 用户补充账号资源后，`embedding-3` 直接请求与项目 EmbeddingFunction 均成功，返回 2048 维文本向量。
+- 已用测试驱动把上游 Ark 专用 `/embeddings/multimodal` 调用适配为标准 OpenAI-compatible 文本 `embeddings.create`；契约测试为 `4 passed`。
+- 已在被 Git 忽略的 `backend/storage/chroma_phase_a_embedding3/` 完整重建独立 collection `product_knowledge_embedding3_phase_a`，写入 1092 个 chunk；存储向量维度 2048，真实查询成功。
 - 已保存独立运行清单 `artifacts/manifests/phase_a_runtime.json`，没有覆盖 Step 0 baseline。
 
 ### 尚未完成
 
-- 尚未得到成功的 Router 决策或文本向量；当前账号无余额或可用资源包。
-- 尚未完整重建独立 Chroma 索引；没有成功 embedding 时禁止建库或混用旧向量空间。
-- 尚未完成标准路径的阶段 A 可运行实验基线；当前成果范围仅为基础设施验证、失败分析与 No-Go 决策。
 - 尚未开始覆盖矩阵、自建 DEV/留出/E2E 数据、Intent 基线、错误分析、优化变体、检索四模式对照或最终材料。
+- 尚未产生任何 Prompt 优化、检索优化或效果结论；这些属于后续阶段，不能由阶段 A 冒烟结果推断。
 
 ## 2. 代码目录、分支、commit 与未提交改动
 
@@ -54,7 +55,7 @@
 | 主要后端代码 | `backend/agent`、`backend/search`、`backend/rag`、`backend/store`、`backend/eval`、`backend/api` |
 | 商品源数据 | `data/` |
 
-写入本文件前，`git status --short --branch` 的结果只有 `## codex/step0`，即工作树干净。本文件应作为交接检查点提交；交接后的准确 HEAD 和未提交状态必须由新任务首先运行 `git status --short --branch` 与 `git log -1 --oneline` 重新确认，不依赖这段文字推测。
+阶段 A 工作发生在 `codex/step0`，其开始时 HEAD 为 `01e3474`；中间错误的双侧 No-Go 记录曾提交为 `81753e8`，后续证据已在当前工作树中纠正。准确 HEAD 和未提交状态必须始终由 `git status --short --branch` 与 `git log -1 --oneline` 重新确认，不依赖本文推测。
 
 ## 3. 已运行检查、真实结果与证据位置
 
@@ -120,8 +121,9 @@
 | 配置项 | 当前冻结口径 |
 |---|---|
 | Python 目标版本 | 项目 `.venv` 使用 `3.12.10`；`pip check` 通过 |
-| Chat 模型 | 智谱 `glm-5.3-flash`；已配置但推理因 HTTP 429 / code 1113 不可用 |
-| Embedding 模型 | 智谱 `embedding-3`；已配置但推理因 HTTP 429 / code 1113 不可用 |
+| Chat 模型 | 智谱 `glm-5.2`；强制 Function Calling 与项目 Router 入口均已成功 |
+| Embedding 模型 | 智谱 `embedding-3`；标准文本接口可用，文档与查询均为 2048 维 |
+| 阶段 A Chroma | `backend/storage/chroma_phase_a_embedding3/` / `product_knowledge_embedding3_phase_a`；1092 chunks；独立、被 Git 忽略 |
 | Rerank 模型 | `NOT CONFIGURED`，默认不使用 |
 | `USE_HYBRID` | `1` |
 | `USE_RERANK` | `0` |
@@ -134,19 +136,13 @@
 
 ### 当前阻塞/前置条件
 
-1. 智谱账号需要补充余额或获得同时覆盖 Chat 与 `embedding-3` 的可用资源包；当前真实请求均返回 HTTP 429 / code 1113。
-2. 成功生成首个文本向量之前不能重建 Chroma，也不能开展可归因的 Retrieval 实验。
-3. 当前上游 embedding 实现调用 Ark 专用 `/embeddings/multimodal`；如果账号资源恢复并继续使用智谱标准 `/embeddings`，需要先完成并验证一次明确标注的文本接口适配。
-
-这些阻塞不影响 Step 0 和本轮基础设施证据，但已触发阶段 A 的双侧不可用 No-Go，阻止“可运行实验基线”完成。
+阶段 A 没有未解决阻塞。Chat 与文本向量两条路径均可用，环境累计计时低于 6 小时止损上限。后续实验仍须固定当前模型、索引和开关，并在任何数据或模型变化后重新建立可归因基线。
 
 ### 下一任务的具体顺序
 
-1. 先由用户在智谱侧补充余额/资源包；不需要重新提供 Key，继续复用被忽略的本地 `.env`。
-2. 资源恢复后只重跑一次最小 `glm-5.3-flash` Function Calling 与一次 `embedding-3` 文本向量；不要重跑已通过的依赖、SQLite、商品读取和 `/health`。
-3. 若两次最小调用成功，先将 Ark 专用 embedding 调用适配为智谱标准 `/embeddings`，保存为“文本适配基线”并完成契约测试。
-4. 使用 `embedding-3` 在独立目录完整重建 Chroma，确保文档与查询侧同一模型、同一维度；不复用旧 HNSW 片段。
-5. 更新 `phase_a_runtime.json` 与本文件后再作新的 Go / No-Go；在此之前不进入 Prompt 优化、检索优化或评测结论。
+1. 阶段 A 到此完成；下一阶段应先建立覆盖矩阵并复核数据，不直接修改 Prompt 或检索策略。
+2. 后续基线固定 `glm-5.2`、`embedding-3`、独立 1092-chunk Chroma、`USE_HYBRID=1`、`USE_RERANK=0`。
+3. 若源码、商品数据树、embedding 模型或维度变化，必须创建新索引并完整重建，不能增量混用当前向量空间。
 
 ## 7. 运行中的命令、日志与输出位置
 

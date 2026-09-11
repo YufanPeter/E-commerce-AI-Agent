@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 from dotenv import load_dotenv
 
@@ -21,56 +21,52 @@ DEFAULT_EMBEDDING_MODEL = os.getenv("ARK_EMBEDDING_MODEL", "doubao-embedding-tex
 
 # Maximum concurrent text embeddings used to respect provider limits.
 _EMBEDDING_BATCH_SIZE = int(os.getenv("ARK_EMBEDDING_BATCH_SIZE", "64"))
+_MAX_PROVIDER_BATCH_SIZE = 64
 
 
 class DoubaoEmbeddingFunction:
-    """Chroma embedding function backed by the Ark multimodal embedding API.
+    """Chroma embedding function backed by an OpenAI-compatible text API.
 
     Remote inference removes local PyTorch/sentence-transformers dependencies. Offline
     indexing and online retrieval share the same model to keep vector spaces consistent.
 
-    The multimodal endpoint accepts one input per request. Rebuild the vector collection
-    whenever the embedding model or output dimension changes.
+    The standard ``/embeddings`` endpoint accepts text batches. Rebuild the vector
+    collection whenever the embedding model or output dimension changes.
     """
 
     def __init__(
         self,
         model: str = DEFAULT_EMBEDDING_MODEL,
         batch_size: int = _EMBEDDING_BATCH_SIZE,
+        client: Any | None = None,
     ) -> None:
         self._model = model
-        self._batch_size = max(1, batch_size)
-        # Use the dedicated embedding client because credentials and base URL may differ.
-        from llm.client import get_embedding_client
+        self._batch_size = min(max(1, batch_size), _MAX_PROVIDER_BATCH_SIZE)
+        if client is None:
+            # Use the dedicated embedding client because credentials and base URL may differ.
+            from llm.client import get_embedding_client
 
-        self._client = get_embedding_client()
+            client = get_embedding_client()
+        self._client = client
 
-    def _embed_one(self, text: str) -> list[float]:
-        """Embed one text value through the multimodal endpoint."""
-        response = self._client.post(
-            "/embeddings/multimodal",
-            body={
-                "model": self._model,
-                "input": [{"type": "text", "text": text}],
-            },
-            cast_to=object,
+    def _embed_batch(self, texts: list[str]) -> list[list[float]]:
+        """Embed one ordered text batch through the standard endpoint."""
+        response = self._client.embeddings.create(
+            model=self._model,
+            input=texts,
         )
-        embedding = response["data"]["embedding"]
-        return list(embedding)
+        ordered = sorted(response.data, key=lambda item: item.index)
+        return [list(item.embedding) for item in ordered]
 
     # Chroma validates that this parameter is named ``input``.
     def __call__(self, input: Sequence[str]) -> list[list[float]]:
         texts = [text if isinstance(text, str) else str(text) for text in input]
         if not texts:
             return []
-        if len(texts) == 1:
-            return [self._embed_one(texts[0])]
-        # Parallelize single-input API calls while preserving input order.
-        from concurrent.futures import ThreadPoolExecutor
-
-        max_workers = min(self._batch_size, len(texts))
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            return list(executor.map(self._embed_one, texts))
+        vectors: list[list[float]] = []
+        for start in range(0, len(texts), self._batch_size):
+            vectors.extend(self._embed_batch(texts[start : start + self._batch_size]))
+        return vectors
 
     # Delegate query and document methods to the same implementation across Chroma versions.
     def embed_query(self, input: Sequence[str]) -> list[list[float]]:
