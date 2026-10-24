@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>CartPilot · Multimodal E-commerce Agent</title>
+<meta name="description" content="A multimodal shopping agent for iOS: text, voice and photo input, hybrid RAG retrieval and a router, tool, composer agent. ByteDance Outstanding Project Award.">
+<meta name="author" content="Yufan (Peter) Shi">
+<meta property="og:type" content="website">
+<meta property="og:title" content="CartPilot: Multimodal E-commerce Agent">
+<meta property="og:description" content="A multimodal shopping agent for iOS: text, voice and photo input, hybrid RAG retrieval and a router, tool, composer agent. ByteDance Outstanding Project Award.">
+<meta property="og:image" content="https://yufanpeter.github.io/E-commerce-AI-Agent/cover.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="627">
+<meta property="og:url" content="https://yufanpeter.github.io/E-commerce-AI-Agent/">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://yufanpeter.github.io/E-commerce-AI-Agent/cover.png">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23C2673F'/%3E%3Cpath d='M8 10h2.5l2.2 10h9.3l2-7H12' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='14' cy='24' r='1.6' fill='white'/%3E%3Ccircle cx='21' cy='24' r='1.6' fill='white'/%3E%3C/svg%3E">
+<style>:root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0}img{max-width:100%}[hidden]{display:none!important}</style>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Young+Serif&family=Schibsted+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one 1080px column; split hero (copy | phone + live trace), then alternating full-width bands. */
+:root{
+  --bg:#FAF9F7; --surface:#FFFFFF; --sunk:#F1EEEA; --line:#E4DFD8;
+  --ink:#1D1B19; --muted:#6B645C; --accent:#C2673F; --accent-soft:#F6E6DD; --good:#3F7A5A;
+  --display:"Young Serif", Georgia, "Times New Roman", serif;
+  --sans:"Schibsted Grotesk", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono:"JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --radius:14px;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#161412; --surface:#1F1C19; --sunk:#252220; --line:#36312C;
+  --ink:#EFEAE4; --muted:#A79E94; --accent:#E08A62; --accent-soft:#3A2A21; --good:#7DBB97; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#161412; --surface:#1F1C19; --sunk:#252220; --line:#36312C;
+  --ink:#EFEAE4; --muted:#A79E94; --accent:#E08A62; --accent-soft:#3A2A21; --good:#7DBB97; color-scheme:dark}
+
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:16px;line-height:1.6;-webkit-font-smoothing:antialiased}
+a{color:inherit}
+a:focus-visible{outline:2px solid var(--accent);outline-offset:3px;border-radius:4px}
+.wrap{max-width:1080px;margin:0 auto;padding-left:max(16px, env(safe-area-inset-left, 0px));padding-right:max(16px, env(safe-area-inset-right, 0px))}
+section{padding-block:72px}
+section + section{border-top:1px solid var(--line)}
+h1,h2,h3{text-wrap:balance;margin:0}
+h2{font-family:var(--display);font-weight:400;font-size:clamp(1.7rem,3.2vw,2.3rem);line-height:1.15;letter-spacing:-.01em}
+h3{font-size:1.05rem;font-weight:600;line-height:1.35}
+p{margin:0}
+.eyebrow{font-family:var(--mono);font-size:.74rem;letter-spacing:.08em;text-transform:uppercase;color:var(--accent)}
+.lede{color:var(--muted);max-width:62ch;font-size:1.05rem}
+.head{display:grid;gap:12px;margin-bottom:40px}
+code,.mono{font-family:var(--mono);font-size:.86em}
+.zh{font-family:"PingFang SC","Hiragino Sans GB","Noto Sans SC","Microsoft YaHei",var(--sans)}
+
+/* ---------- Hero ---------- */
+.hero{padding-block:56px 64px}
+.hero-grid{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,.85fr);gap:56px;align-items:center}
+.award{display:inline-flex;align-items:center;gap:10px;padding:6px 14px 6px 8px;border:1px solid var(--line);border-radius:999px;background:var(--surface);font-size:.86rem;font-weight:500}
+.award .medal{width:22px;height:22px;border-radius:50%;background:var(--accent);display:grid;place-items:center}
+.award .medal svg{width:12px;height:12px;fill:none;stroke:var(--bg);stroke-width:2.4}
+.wordmark{font-family:var(--display);font-weight:400;font-size:clamp(3.2rem,8vw,5.4rem);line-height:1;letter-spacing:-.02em;margin-top:28px}
+.tagline{font-size:clamp(1.2rem,2.2vw,1.45rem);line-height:1.4;font-weight:500;margin-top:18px;max-width:30ch;text-wrap:balance}
+.hero .lede{margin-top:16px}
+.meta{display:flex;flex-wrap:wrap;gap:8px 24px;margin-top:28px;font-size:.9rem;color:var(--muted)}
+.meta b{color:var(--ink);font-weight:600}
+.ctas{display:flex;flex-wrap:wrap;gap:12px;margin-top:32px}
+.btn{display:inline-flex;align-items:center;gap:8px;padding:11px 18px;border-radius:10px;font-weight:600;font-size:.95rem;text-decoration:none;transition:transform .15s ease, background .15s ease}
+.btn svg{width:18px;height:18px}
+.btn-primary{background:var(--ink);color:var(--bg)}
+.btn-ghost{border:1px solid var(--line);background:var(--surface)}
+.btn:hover{transform:translateY(-1px)}
+
+.stage{justify-self:stretch;width:100%;max-width:420px;margin-left:auto}
+.trace{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:22px 24px;font-family:var(--mono);font-size:.8rem;line-height:1.7;box-shadow:0 24px 50px -30px rgba(40,25,15,.35);display:grid;gap:2px}
+.trace .q{font-family:"PingFang SC","Hiragino Sans GB","Noto Sans SC",var(--sans);font-size:1.02rem;font-weight:600;line-height:1.5}
+.trace .q-en{font-family:var(--sans);font-size:.86rem;color:var(--muted)}
+.trace .row{overflow-wrap:anywhere}
+.trace .k{color:var(--muted)}
+.trace .v{color:var(--accent)}
+.trace .lbl{display:block;font-size:.66rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:14px 0 4px;padding-top:12px;border-top:1px dashed var(--line)}
+.trace .lbl:first-child{margin-top:0;padding-top:0;border-top:0}
+
+/* ---------- Facts ---------- */
+.facts{padding-block:28px;border-top:1px solid var(--line)}
+.facts dl{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:16px;margin:0}
+.facts div{display:grid;gap:2px}
+.facts dt{order:2;font-size:.84rem;color:var(--muted)}
+.facts dd{order:1;margin:0;font-family:var(--display);font-size:1.9rem;line-height:1.1;font-variant-numeric:tabular-nums}
+
+/* ---------- Capabilities ---------- */
+.caps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+.cap{background:var(--surface);padding:24px;display:grid;gap:8px;align-content:start}
+.cap p{color:var(--muted);font-size:.94rem}
+.cap .say{font-size:.86rem;color:var(--ink);background:var(--sunk);border-radius:8px;padding:6px 10px;justify-self:start;margin-top:4px}
+
+/* ---------- Agent pipeline ---------- */
+.flow{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1.4fr) auto minmax(0,1fr);align-items:stretch;gap:0}
+.stagebox{border:1px solid var(--line);background:var(--surface);border-radius:var(--radius);padding:20px;display:grid;gap:8px;align-content:start}
+.stagebox .tag{font-family:var(--mono);font-size:.72rem;color:var(--accent);letter-spacing:.06em;text-transform:uppercase}
+.stagebox p{color:var(--muted);font-size:.92rem}
+.stagebox.mid{background:var(--accent-soft);border-color:transparent}
+.arrow{display:grid;place-items:center;width:40px;color:var(--muted)}
+.arrow svg{width:22px;height:22px}
+.tools{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
+.tools span{font-family:var(--mono);font-size:.76rem;padding:3px 8px;border-radius:6px;background:var(--surface);border:1px solid var(--line)}
+.note{margin-top:20px;color:var(--muted);font-size:.94rem;max-width:70ch}
+
+/* ---------- Retrieval ---------- */
+.retr{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:48px;align-items:start}
+.steps{list-style:none;margin:0;padding:0;display:grid;gap:0;counter-reset:s}
+.steps li{display:grid;grid-template-columns:36px minmax(0,1fr);gap:14px;padding:14px 0;border-bottom:1px solid var(--line);counter-increment:s}
+.steps li:first-child{padding-top:0}
+.steps li::before{content:counter(s);font-family:var(--mono);font-size:.8rem;width:28px;height:28px;border-radius:50%;border:1px solid var(--line);display:grid;place-items:center;color:var(--accent);background:var(--surface)}
+.steps b{display:block;font-weight:600}
+.steps span{color:var(--muted);font-size:.92rem}
+.example{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+.example header{padding:16px 20px;border-bottom:1px solid var(--line);display:grid;gap:4px}
+.example header small{font-family:var(--mono);font-size:.7rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.example .query{font-size:1.05rem;font-weight:600}
+.example .trans{color:var(--muted);font-size:.88rem}
+.example pre{margin:0;padding:18px 20px;font-family:var(--mono);font-size:.8rem;line-height:1.75;overflow-x:auto;background:var(--sunk)}
+.example pre .k{color:var(--muted)} .example pre .v{color:var(--accent)}
+.example footer{padding:14px 20px;font-size:.88rem;color:var(--muted);display:grid;gap:6px}
+.pill{display:inline-flex;align-items:center;gap:6px;font-size:.8rem;font-weight:600;padding:2px 9px;border-radius:999px}
+.pill.keep{color:var(--good);background:color-mix(in srgb, var(--good) 14%, transparent)}
+.pill.drop{color:var(--accent);background:var(--accent-soft)}
+
+/* ---------- SSE ---------- */
+.sse-wrap{overflow-x:auto;padding-bottom:6px}
+.sse{display:flex;gap:0;min-width:760px;list-style:none;margin:0;padding:0}
+.sse li{flex:1;position:relative;padding:16px 12px 0 0;display:grid;gap:4px;align-content:start}
+.sse li::before{content:"";position:absolute;top:0;left:0;right:0;height:3px;background:var(--line)}
+.sse li.opt::before{background:repeating-linear-gradient(90deg,var(--line) 0 6px,transparent 6px 10px)}
+.sse li::after{content:"";position:absolute;top:-4px;left:0;width:11px;height:11px;border-radius:50%;background:var(--bg);border:2px solid var(--accent)}
+.sse code{font-weight:500;font-size:.84rem}
+.sse span{font-size:.82rem;color:var(--muted);line-height:1.45}
+
+/* ---------- Decisions ---------- */
+.dec{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:40px 56px}
+.dec article{display:grid;gap:8px;align-content:start}
+.dec p{color:var(--muted);font-size:.95rem}
+.fail{margin-top:48px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:24px 28px}
+.fail h3{margin-bottom:14px}
+.fail ul{margin:0;padding:0;list-style:none;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 32px}
+.fail li{display:grid;grid-template-columns:minmax(0,auto) 16px minmax(0,1fr);gap:8px;font-size:.92rem;align-items:baseline}
+.fail li .when{font-weight:600}
+.fail li .to{color:var(--muted)}
+.fail li i{font-style:normal;color:var(--accent)}
+
+/* ---------- Stack / role ---------- */
+.closing{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:48px}
+.stack{display:grid;grid-template-columns:auto minmax(0,1fr);gap:12px 20px;margin:20px 0 0;font-size:.94rem}
+.stack dt{font-family:var(--mono);font-size:.74rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding-top:3px}
+.stack dd{margin:0}
+.role{background:var(--ink);color:var(--bg);border-radius:var(--radius);padding:28px;display:grid;gap:14px;align-content:start}
+.role .eyebrow{color:var(--accent)}
+.role h3{font-family:var(--display);font-weight:400;font-size:1.6rem}
+.role p{opacity:.8;font-size:.95rem}
+.role a{color:var(--bg);font-weight:600}
+footer.site{padding-block:32px;border-top:1px solid var(--line);color:var(--muted);font-size:.86rem;display:flex;flex-wrap:wrap;gap:8px 24px;justify-content:space-between}
+
+/* ---------- Motion ---------- */
+@media (prefers-reduced-motion: no-preference){
+  .trace{animation:rise .8s .15s cubic-bezier(.2,.7,.2,1) both}
+  @keyframes rise{from{transform:translateY(14px)}to{transform:none}}
+}
+
+/* ---------- Responsive ---------- */
+@media (max-width:900px){
+  .hero-grid,.retr,.closing{grid-template-columns:minmax(0,1fr)}
+  .stage{max-width:520px;margin-left:0}
+  .facts dl{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .caps{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .flow{grid-template-columns:minmax(0,1fr)}
+  .arrow{width:auto;height:36px;transform:rotate(90deg)}
+}
+@media (max-width:620px){
+  section{padding-block:52px}
+  .facts dl{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .caps,.dec,.fail ul{grid-template-columns:minmax(0,1fr)}
+  .fail{padding:20px}
+}
+</style>
+</head>
+<body>
+
+
+<header class="hero">
+  <div class="wrap hero-grid">
+    <div>
+      <span class="award"><span class="medal"><svg viewBox="0 0 24 24"><path d="M5 12l5 5 9-10"/></svg></span>ByteDance Outstanding Project Award</span>
+      <h1 class="wordmark">CartPilot</h1>
+      <p class="tagline">A multimodal shopping agent that takes you from a vague need to a filled cart in one conversation.</p>
+      <p class="lede">Describe what you want by text, voice or photo. CartPilot recommends, refines, compares, answers product questions and manages your cart, while every price, SKU and stock number comes straight from the database.</p>
+      <div class="meta">
+        <span><b>Project Leader</b></span>
+        <span>May 2026 – Jun 2026</span>
+        <span>iOS · FastAPI · Hybrid RAG</span>
+      </div>
+      <div class="ctas">
+        <a class="btn btn-primary" href="https://github.com/YufanPeter/E-commerce-AI-Agent" target="_blank" rel="noopener">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.68 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.04 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.58.23 2.75.11 3.04.74.81 1.19 1.83 1.19 3.09 0 4.41-2.69 5.39-5.26 5.67.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5z"/></svg>
+          View on GitHub
+        </a>
+        <a class="btn btn-ghost" href="https://github.com/YufanPeter/E-commerce-AI-Agent/blob/main/docs/system-design.md" target="_blank" rel="noopener">Read the system design</a>
+      </div>
+    </div>
+    <div class="stage">
+      <div class="trace" aria-label="Example: how CartPilot parses one shopping request">
+        <span class="lbl">User says</span>
+        <div class="q zh">推荐一款 500 元以内、不要含酒精的防晒</div>
+        <div class="q-en">“Recommend a sunscreen under ¥500 without alcohol”</div>
+        <span class="lbl">Router</span>
+        <div class="row"><span class="k">tool:</span> <span class="v">recommend</span></div>
+        <span class="lbl">Query understanding</span>
+        <div class="row"><span class="k">category:</span> <span class="v zh">"美妆护肤"</span></div>
+        <div class="row"><span class="k">sub_category:</span> <span class="v zh">"防晒"</span></div>
+        <div class="row"><span class="k">max_price:</span> <span class="v">500</span></div>
+        <div class="row"><span class="k">negative_ingredients:</span> <span class="v zh">["酒精"]</span></div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<div class="facts">
+  <div class="wrap">
+    <dl>
+      <div><dt>products in the catalog</dt><dd>100</dd></div>
+      <div><dt>SKUs with live price and stock</dt><dd>585</dd></div>
+      <div><dt>evidence chunks indexed</dt><dd>1,092</dd></div>
+      <div><dt>agent tools behind one router</dt><dd>7</dd></div>
+      <div><dt>automated tests</dt><dd>257</dd></div>
+    </dl>
+  </div>
+</div>
+
+<section>
+  <div class="wrap">
+    <div class="head">
+      <span class="eyebrow">What it does</span>
+      <h2>One conversation, from need to cart</h2>
+      <p class="lede">The catalog spans beauty, electronics, apparel and food. Users never leave the chat: structured product cards appear inline and stay tappable.</p>
+    </div>
+    <div class="caps">
+      <div class="cap"><h3>Multimodal input</h3><p>Type, speak in Mandarin, or upload a product photo. Images become a search description and visual similarity re-orders the results.</p></div>
+      <div class="cap"><h3>Refine without restarting</h3><p>Change only the budget, a brand or an ingredient and the previous search is reused with the new constraint.</p><span class="say zh">换成 300 元以内的</span></div>
+      <div class="cap"><h3>References that resolve</h3><p>Ordinals, names and pronouns map back to the products just shown, with clarification when a reference is genuinely ambiguous.</p><span class="say zh">第二个有没有大瓶装？</span></div>
+      <div class="cap"><h3>Side-by-side comparison</h3><p>Compare two or three products on the attributes that matter for their category.</p></div>
+      <div class="cap"><h3>Grounded product Q&amp;A</h3><p>Answers come from the product's own descriptions, official FAQs and reviews, including negative ones.</p></div>
+      <div class="cap"><h3>Cart and preferences</h3><p>Add, remove, change quantity or variant by chat. Long-term preferences are saved with one-tap undo.</p></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="head">
+      <span class="eyebrow">Agent design</span>
+      <h2>Router, tool, composer</h2>
+      <p class="lede">Instead of letting the model call tools freely, every turn runs a fixed three-stage pipeline. The model decides what to do and how to say it. Deterministic code does the work in between.</p>
+    </div>
+    <div class="flow">
+      <div class="stagebox">
+        <span class="tag">1 · Router</span>
+        <h3>Pick one tool</h3>
+        <p>An LLM classifies intent and rewrites the query using session context such as the last results and the product in focus.</p>
+      </div>
+      <div class="arrow" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 12h15M13 6l6 6-6 6"/></svg></div>
+      <div class="stagebox mid">
+        <span class="tag">2 · Tool</span>
+        <h3>Execute deterministically</h3>
+        <p>Search, comparison and cart mutations run as code and return a structured result. No generated text touches the cart.</p>
+        <div class="tools"><span>recommend</span><span>refine</span><span>compare</span><span>product_detail</span><span>cart</span><span>clarify</span><span>fallback</span></div>
+      </div>
+      <div class="arrow" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 12h15M13 6l6 6-6 6"/></svg></div>
+      <div class="stagebox">
+        <span class="tag">3 · Composer</span>
+        <h3>Write the answer</h3>
+        <p>The LLM writes the reply around the tool result. Product IDs must come from the payload and prices are never written by the model.</p>
+      </div>
+    </div>
+    <p class="note">Recommendation is the dominant shopping intent, so it needs a strict search, rerank and compose path with streaming progress. Free-form tool calling would add an extra model call and make that path harder to control.</p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="head">
+      <span class="eyebrow">Retrieval</span>
+      <h2>Hybrid RAG that respects “without”</h2>
+      <p class="lede">Shoppers often say what they don't want. CartPilot treats exclusions as hard constraints at the product level, not as words that happen to match.</p>
+    </div>
+    <div class="retr">
+      <ol class="steps">
+        <li><div><b>Structured understanding</b><span>Category, price range, included and excluded brands, excluded ingredients and soft terms are parsed from the query.</span></div></li>
+        <li><div><b>Filter first</b><span>Hard constraints narrow candidates in SQLite and Chroma before any semantic ranking.</span></div></li>
+        <li><div><b>Vector and lexical recall</b><span>Chroma searches evidence chunks from descriptions, FAQs and reviews while BM25 adds a keyword signal.</span></div></li>
+        <li><div><b>Reciprocal rank fusion</b><span>RRF merges both rankings, then an optional reranker reorders the evidence.</span></div></li>
+        <li><div><b>Negative-constraint guard</b><span>Products whose evidence shows an excluded brand, category or ingredient are removed.</span></div></li>
+        <li><div><b>Product aggregation</b><span>Chunks roll up to products, each keeping the evidence that explains why it was recommended.</span></div></li>
+      </ol>
+      <div class="example">
+        <header>
+          <small>Labeled eval case</small>
+          <span class="query zh">不要含酒精的防晒</span>
+          <span class="trans">“Sunscreen without alcohol”</span>
+        </header>
+<pre><span class="k">sub_category</span>         <span class="v zh">防晒</span>
+<span class="k">negative_ingredients</span> <span class="v zh">[酒精]</span>
+<span class="k">candidates</span>           3 sunscreens</pre>
+        <footer>
+          <div><span class="pill drop">excluded</span> one product whose FAQ and reviews confirm alcohol</div>
+          <div><span class="pill keep">kept</span> one product stated to be alcohol-free</div>
+        </footer>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="head">
+      <span class="eyebrow">Streaming</span>
+      <h2>Cards first, words second</h2>
+      <p class="lede">The iOS client parses a typed Server-Sent Events stream. Product cards render as soon as the tool finishes, before the model has written a word.</p>
+    </div>
+    <div class="sse-wrap">
+      <ol class="sse">
+        <li><code>session</code><span>Persist the session ID</span></li>
+        <li><code>status</code><span>Routing, searching, writing</span></li>
+        <li><code>meta</code><span>Route and trace data</span></li>
+        <li><code>tool_result</code><span>Render cards immediately</span></li>
+        <li><code>token</code><span>Stream the reply text</span></li>
+        <li class="opt"><code>memory_update</code><span>Saved preference, undoable</span></li>
+        <li><code>done</code><span>Final narrative and timings</span></li>
+      </ol>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="head">
+      <span class="eyebrow">Engineering decisions</span>
+      <h2>Trust the database, not the model</h2>
+    </div>
+    <div class="dec">
+      <article><h3>SQLite is the source of truth</h3><p>Prices, SKUs, stock and cart totals are always read from SQLite. Chroma only stores semantic evidence, aligned to facts by product ID and source index.</p></article>
+      <article><h3>Images become text queries</h3><p>An uploaded photo is turned into a search description and sent through the proven text pipeline. Image embeddings then adjust the order.</p></article>
+      <article><h3>Cautious long-term memory</h3><p>Preference extraction is deterministic. Temporary wishes, questions and health statements are ignored so nothing wrong becomes a lasting preference.</p></article>
+      <article><h3>A warm retriever, always</h3><p>Index and model load once at startup. Cold start is about 64 s; a warm query takes about 0.01 s. Nothing is rebuilt during a request.</p></article>
+    </div>
+    <div class="fail">
+      <h3>Every layer degrades instead of breaking</h3>
+      <ul>
+        <li><span class="when">Router fails</span><i>→</i><span class="to">fall back to recommend</span></li>
+        <li><span class="when">Tool fails</span><i>→</i><span class="to">safe reply plus a diagnostic trace</span></li>
+        <li><span class="when">Composer fails</span><i>→</i><span class="to">local narrative, cards still shown</span></li>
+        <li><span class="when">No reranker</span><i>→</i><span class="to">vector or hybrid order</span></li>
+        <li><span class="when">Image not understood</span><i>→</i><span class="to">clear message, never a guessed match</span></li>
+        <li><span class="when">Any cart action</span><i>→</i><span class="to">price and stock re-read from SQLite</span></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap closing">
+    <div>
+      <div class="head" style="margin-bottom:0">
+        <span class="eyebrow">Stack</span>
+        <h2>Built end to end</h2>
+      </div>
+      <dl class="stack">
+        <dt>Client</dt><dd>SwiftUI (iOS 17+), incremental SSE parsing, speech and camera input, local transcripts</dd>
+        <dt>Backend</dt><dd>Python, FastAPI, REST and SSE</dd>
+        <dt>Agent</dt><dd>Custom router → tool → composer pipeline with session working memory</dd>
+        <dt>Retrieval</dt><dd>ChromaDB, BM25 with RRF, API reranker, multimodal embeddings</dd>
+        <dt>Data</dt><dd>SQLite in WAL mode for products, SKUs, carts, sessions and preferences</dd>
+        <dt>Quality</dt><dd>pytest suite and labeled evals for routing, retrieval, negatives, reranking and consistency</dd>
+        <dt>Delivery</dt><dd>Docker, Docker Compose and a Jenkins pipeline to a cloud server</dd>
+      </dl>
+    </div>
+    <aside class="role">
+      <span class="eyebrow">My role</span>
+      <h3>Project Leader</h3>
+      <p>Led CartPilot from idea to a working iOS app and agent backend. The project received the ByteDance Outstanding Project Award.</p>
+      <p>Yufan (Peter) Shi · MS ECE, UC San Diego</p>
+      <a href="https://github.com/YufanPeter/E-commerce-AI-Agent" target="_blank" rel="noopener">github.com/YufanPeter/E-commerce-AI-Agent →</a>
+    </aside>
+  </div>
+</section>
+
+<footer class="site wrap">
+  <span>CartPilot · MIT License</span>
+  <span>May – Jun 2026</span>
+</footer>
+
+</body>
+</html>
