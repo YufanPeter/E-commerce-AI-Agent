@@ -232,6 +232,9 @@ def resolve_image_url(detail: ProductDetail, image_base: str | None = None) -> s
     return image_manifest.get(detail.product_id) or detail.image_url
 
 
+MAX_DETAIL_FAQS = 5
+
+
 def product_payload(detail: ProductDetail, image_base: str | None = None) -> dict[str, Any]:
     image_url = resolve_image_url(detail, image_base)
     specs = specifications_payload(detail.skus)
@@ -256,6 +259,7 @@ def product_payload(detail: ProductDetail, image_base: str | None = None) -> dic
         "skus": [sku_payload(sku) for sku in detail.skus],
         "reviews": [review_payload(review) for review in detail.reviews],
         "evidence": evidence_payload(detail),
+        "faqs": [{"question": faq.question, "answer": faq.answer} for faq in detail.faqs[:MAX_DETAIL_FAQS]],
         "updatedAt": None,
     }
 

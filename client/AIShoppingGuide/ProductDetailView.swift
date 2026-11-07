@@ -1,3 +1,4 @@
+import AVFoundation
 import SwiftUI
 
 struct ProductDetailView: View {
@@ -40,6 +41,7 @@ struct ProductDetailView: View {
                 VStack(alignment: .leading, spacing: 18) {
                     productHeroImage
                     productSummaryPanel
+                    ProductAskSection(product: product)
 
                     if !product.reviews.isEmpty {
                         ProductReviewsSection(reviews: product.reviews)
@@ -213,6 +215,149 @@ struct ProductDetailView: View {
                 showSuccessToast = false
             }
         }
+    }
+}
+
+/// 详情页的导购入口：听亮点，以及来自商品问答的常见问题。
+private struct ProductAskSection: View {
+    let product: Product
+
+    @StateObject private var speaker = HighlightsSpeaker()
+    @State private var openFAQ: String?
+
+    private let productService = RESTProductService()
+
+    private var faqs: [ProductFAQ] { product.faqs ?? [] }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Button {
+                Task { await toggleHighlights() }
+            } label: {
+                HStack(spacing: 8) {
+                    Group {
+                        if speaker.state == .loading {
+                            ProgressView().controlSize(.small).tint(AppTheme.primary)
+                        } else {
+                            Image(systemName: speaker.state == .speaking ? "stop.fill" : "speaker.wave.2.fill")
+                                .font(.system(size: 12, weight: .semibold))
+                        }
+                    }
+                    .frame(width: 16, height: 16)
+                    Text(speaker.state == .speaking ? "停止播放" : "听亮点")
+                        .font(.subheadline.weight(.medium))
+                }
+                .foregroundStyle(AppTheme.primary)
+                .padding(.horizontal, 14)
+                .frame(minHeight: 38)
+                .background(AppTheme.secondary, in: Capsule())
+            }
+            .buttonStyle(.tactile)
+            .disabled(speaker.state == .loading)
+
+            if !faqs.isEmpty {
+                Text("常见问题")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(AppTheme.textSecondary)
+                    .padding(.top, 2)
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(faqs.enumerated()), id: \.element.id) { index, faq in
+                        if index > 0 { Divider() }
+                        faqRow(faq)
+                    }
+                }
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .surfacePanel(cornerRadius: 22)
+        .onDisappear { speaker.stop() }
+    }
+
+    private func faqRow(_ faq: ProductFAQ) -> some View {
+        let isOpen = openFAQ == faq.id
+        return VStack(alignment: .leading, spacing: 6) {
+            Button {
+                withAnimation(.easeOut(duration: 0.18)) {
+                    openFAQ = isOpen ? nil : faq.id
+                }
+            } label: {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(faq.question)
+                        .font(.subheadline)
+                        .foregroundStyle(AppTheme.textPrimary)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 4)
+                    Image(systemName: "chevron.down")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(AppTheme.textSecondary)
+                        .rotationEffect(.degrees(isOpen ? 180 : 0))
+                }
+                .padding(.vertical, 10)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            if isOpen {
+                Text(faq.answer)
+                    .font(.footnote)
+                    .foregroundStyle(AppTheme.textSecondary)
+                    .lineSpacing(3)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.bottom, 10)
+                    .transition(.opacity)
+            }
+        }
+    }
+
+    /// 优先念模型写的短卖点，取不到就念商品介绍。
+    private func toggleHighlights() async {
+        if speaker.state == .speaking {
+            speaker.stop()
+            return
+        }
+        speaker.state = .loading
+        let pitch = await productService.fetchProductPitch(productID: product.id)
+        let text = [pitch, product.reason].compactMap { $0 }.first { !$0.isEmpty } ?? product.title
+        speaker.speak(text)
+    }
+}
+
+/// 用系统语音念亮点。念完或离开页面就释放音频，不影响其他 App 继续播放。
+@MainActor
+private final class HighlightsSpeaker: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
+    enum State { case idle, loading, speaking }
+
+    @Published var state: State = .idle
+
+    private let synthesizer = AVSpeechSynthesizer()
+
+    override init() {
+        super.init()
+        synthesizer.delegate = self
+    }
+
+    func speak(_ text: String) {
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio, options: .duckOthers)
+        try? AVAudioSession.sharedInstance().setActive(true)
+        let utterance = AVSpeechUtterance(string: text)
+        utterance.voice = AVSpeechSynthesisVoice(language: "zh-CN")
+        state = .speaking
+        synthesizer.speak(utterance)
+    }
+
+    func stop() {
+        synthesizer.stopSpeaking(at: .immediate)
+        finish()
+    }
+
+    private func finish() {
+        state = .idle
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    }
+
+    nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+        Task { @MainActor in self.finish() }
     }
 }
 
@@ -443,7 +588,7 @@ private struct RatingStars: View {
     }
 }
 
-private struct AddToCartSheet: View {
+struct AddToCartSheet: View {
     let product: Product
     @Binding var selectedOptions: [String: String]
     @Binding var quantity: Int

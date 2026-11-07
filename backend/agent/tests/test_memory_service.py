@@ -245,3 +245,25 @@ def test_activity_hides_see_more_recorded_earlier(store):
         store.record_events("u1", "s1", [event])
     texts = [a["text"] for a in memory_service.build_view(store, "u1")["activity"]]
     assert texts == ["搜索 推荐耳机", "搜索 推荐防晒"]
+
+
+def test_recent_interests_are_newest_first_and_unique(store):
+    for sub in ("跑步鞋", "笔记本电脑", "跑步鞋", "防晒"):
+        store.record_events("u1", "s1", [{"type": "search", "sub_category": sub, "payload": {"query": sub}}])
+    result = memory_service.recent_interests(store, "u1")
+    assert result["returning"] is True
+    assert [i["label"] for i in result["interests"]] == ["防晒", "跑步鞋"]
+
+
+def test_new_user_has_no_interests(store):
+    assert memory_service.recent_interests(store, "new") == {"returning": False, "interests": []}
+
+
+def test_interests_are_hidden_when_personalization_is_off(store):
+    store.record_events("u1", "s1", [{"type": "search", "sub_category": "防晒", "payload": {}}])
+    preference = store.get_preference("u1")
+    preference.personalization_enabled = False
+    store.put_preference(preference)
+    result = memory_service.recent_interests(store, "u1")
+    assert result["interests"] == []
+    assert result["returning"] is True

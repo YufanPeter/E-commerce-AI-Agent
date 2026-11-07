@@ -31,6 +31,7 @@ struct GuideView: View {
     @ObservedObject var preferenceStore: PreferenceStore
     /// RootView 切 Tab 只改透明度，视图不会消失，语音浮层要靠它知道该关麦了。
     var isActiveTab: Bool = true
+    var onOpenCart: () -> Void = {}
     @StateObject private var store = ConversationStore()
     @State private var messages: [ChatMessage] = []
     @State private var inputText = ""
@@ -44,6 +45,7 @@ struct GuideView: View {
     @State private var currentTitle = GuideView.newConversationTitle
     @State private var examples: [String] = GuideView.freshExamples()
     @State private var suggestions: HomeSuggestions?
+    @State private var homeFeed: HomeFeed?
     @State private var isRefreshingHot = false
     @State private var keyboardHeight: CGFloat = 0
     @State private var composerHeight: CGFloat = 56
@@ -53,6 +55,10 @@ struct GuideView: View {
     @State private var shouldShowJumpToLatest = false
     /// 内容是否超过视口（真正可滚动）。只有可滚动且不在底部时才显示"跳到最新"。
     @State private var isChatScrollable = false
+    /// 对话区高度和最新问题气泡的高度，用来算最后一条回答的最小高度。
+    @State private var chatViewportHeight: CGFloat = 0
+    @State private var latestQuestionHeight: CGFloat = 0
+    @State private var pinnedQuestionID: UUID?
     @State private var pendingQuestionAnchorID: UUID?
     @State private var shouldHoldLatestQuestionAnchor = false
     @State private var pendingAutoFollowWorkItem: DispatchWorkItem?
@@ -64,7 +70,6 @@ struct GuideView: View {
     @State private var pendingImageData: Data?
     @State private var pendingMemoryUpdate: MemoryUpdatePayload?
     @State private var isVoiceOverlayPresented = false
-    @State private var didConsiderVoiceAutoStart = false
     /// 回答刚结束时麦克风暂不响应，见 handleMicTap。
     @State private var micTapsIgnoredUntil = Date.distantPast
     /// 当前流式回合的任务句柄，停止键靠它取消请求。
@@ -75,6 +80,8 @@ struct GuideView: View {
     private let productService = RESTProductService()
     private let nearBottomThreshold: CGFloat = 96
     private let questionAnchorCharacterLimit = 220
+    private let chatListTopPadding: CGFloat = 12
+    private let questionPinRetryDelays: [TimeInterval] = [0.1, 0.25, 0.4, 0.6, 0.85]
     private let autoFollowTimer = Timer.publish(every: 0.12, on: .main, in: .common).autoconnect()
     private let streamDefaultDelay: UInt64 = 16_000_000
     private let streamWhitespaceDelay: UInt64 = 6_000_000
@@ -204,7 +211,6 @@ struct GuideView: View {
                 if suggestions == nil {
                     await loadSuggestions()
                 }
-                autoStartVoiceIfAppropriate()
             }
             .onChange(of: isActiveTab) { _, isActive in
                 if !isActive {
@@ -306,6 +312,15 @@ struct GuideView: View {
                     .onChange(of: scrollAnchorToken) { _, _ in
                         driveAutoScroll(proxy)
                     }
+                    .onChange(of: chatViewportHeight) { _, _ in
+                        repinQuestion(proxy)
+                    }
+                    .onChange(of: keyboardHeight) { _, _ in
+                        repinQuestion(proxy)
+                    }
+                    .onChange(of: latestAnswerMinHeight) { _, _ in
+                        repinQuestion(proxy)
+                    }
 
                 if shouldShowJumpToLatest && isChatScrollable {
                     jumpToLatestButton {
@@ -360,8 +375,18 @@ struct GuideView: View {
                         onSpecSubmit: { send($0) },
                         onCompareTap: { comparisonContext = ComparisonContext(candidates: $0) },
                         onFollowUpTap: sendPrompt,
-                        onSeeMore: { sendPrompt("更多\($0)") }
+                        onSeeMore: { sendPrompt("更多\($0)") },
+                        onFeedback: { submitFeedback(for: message.id, rating: $0) },
+                        onAddToCart: { addToCart($0, selectedOptions: $1, quantity: $2) }
                     )
+                    // 先固定成内容高度再撑最小高度，否则多余空间会被行内可伸缩的视图吃掉（比如对比表的表头）
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(minHeight: message.id == messages.last?.id ? latestAnswerMinHeight : nil, alignment: .topLeading)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+                        if message.id == latestQuestionID {
+                            latestQuestionHeight = height
+                        }
+                    }
                     .id(message.id)
                     .transition(
                         .asymmetric(
@@ -380,9 +405,12 @@ struct GuideView: View {
                     .frame(height: chatListBottomPadding)
             }
             .padding(.horizontal, 18)
-            .padding(.top, 12)
+            .padding(.top, chatListTopPadding)
         }
         .scrollDismissesKeyboard(.interactively)
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+            chatViewportHeight = height
+        }
         .simultaneousGesture(
             TapGesture().onEnded {
                 isInputFocused = false
@@ -439,40 +467,117 @@ struct GuideView: View {
     /// 空态：一句安静的问候 + 朴素的分类入口。仅在当前会话还没有任何消息时显示，
     /// 数据来自后端 /suggestions（真实库存），点哪条都一定有结果；用户发起检索后随消息出现而隐去。
     private var emptyState: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 22) {
             VStack(alignment: .leading, spacing: 6) {
-                Text("想找点什么")
-                    .font(.system(size: 22, weight: .semibold))
-                    .foregroundStyle(AppTheme.textPrimary)
-                Text("直接说需求，或选个分类")
+                HomeGreeting(text: homeGreeting)
+                Text(homeFeed?.isReturning == true ? "欢迎回来，今天想看点什么？" : "我是你的导购，直接说需求就行")
                     .font(.subheadline)
                     .foregroundStyle(AppTheme.textSecondary)
+                    .modifier(StaggeredAppear(index: 1))
             }
 
-            FlowLayout(spacing: 10) {
-                ForEach(displayedCategories) { category in
-                    Button {
-                        send(category.query)
-                    } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: category.icon)
-                                .font(.system(size: 14, weight: .regular))
-                                .foregroundStyle(AppTheme.textSecondary)
-                            Text(category.name)
-                                .font(.subheadline)
-                                .foregroundStyle(AppTheme.textPrimary)
-                        }
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 9)
-                        .background(AppTheme.surface, in: Capsule())
-                        .overlay(Capsule().stroke(AppTheme.border, lineWidth: 1))
+            if !cartItems.isEmpty || homeFeed?.entries.isEmpty == false {
+                VStack(spacing: 8) {
+                    if !cartItems.isEmpty {
+                        homeEntry(title: "购物车里有 \(cartItems.count) 款商品", imageURL: nil, action: onOpenCart)
+                            .modifier(StaggeredAppear(index: 2))
                     }
-                    .buttonStyle(.tactile)
+                    ForEach(Array((homeFeed?.entries ?? []).enumerated()), id: \.element.id) { index, entry in
+                        homeEntry(title: entry.title, imageURL: entry.imageURL) {
+                            send(entry.query)
+                        }
+                        .modifier(StaggeredAppear(index: index + 3))
+                    }
                 }
             }
+
+            VStack(alignment: .leading, spacing: 10) {
+                homeSectionTitle("逛逛分类")
+                FlowLayout(spacing: 10) {
+                    ForEach(displayedCategories) { category in
+                        Button {
+                            send(category.query)
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: category.icon)
+                                    .font(.system(size: 14, weight: .regular))
+                                    .foregroundStyle(AppTheme.textSecondary)
+                                Text(category.name)
+                                    .font(.subheadline)
+                                    .foregroundStyle(AppTheme.textPrimary)
+                            }
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 9)
+                            .background(AppTheme.surface, in: Capsule())
+                            .overlay(Capsule().stroke(AppTheme.border, lineWidth: 1))
+                        }
+                        .buttonStyle(.tactile)
+                    }
+                }
+            }
+            .modifier(StaggeredAppear(index: 5))
+
+            VStack(alignment: .leading, spacing: 10) {
+                homeSectionTitle("大家在搜")
+                FlowLayout(spacing: 8) {
+                    ForEach(Array(displayedHotSearches.prefix(6)), id: \.self) { query in
+                        Button(query) { send(query) }
+                            .font(.subheadline)
+                            .foregroundStyle(AppTheme.primary)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(AppTheme.secondary.opacity(0.7), in: Capsule())
+                            .buttonStyle(.tactile)
+                    }
+                }
+            }
+            .modifier(StaggeredAppear(index: 6))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.top, 6)
+    }
+
+    private var homeGreeting: String {
+        switch Calendar.current.component(.hour, from: Date()) {
+        case 5..<11: return "早上好"
+        case 11..<13: return "中午好"
+        case 13..<18: return "下午好"
+        default: return "晚上好"
+        }
+    }
+
+    private func homeSectionTitle(_ text: String) -> some View {
+        Text(text)
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(AppTheme.textSecondary)
+    }
+
+    private func homeEntry(title: String, imageURL: URL?, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                if let imageURL {
+                    ProductRemoteImage(url: imageURL, cornerRadius: 10, placeholderIcon: "shippingbox")
+                        .frame(width: 40, height: 40)
+                } else {
+                    Image(systemName: "cart")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(AppTheme.primary)
+                        .frame(width: 40, height: 40)
+                        .background(AppTheme.secondary, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+                Text(title)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(AppTheme.textPrimary)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(AppTheme.textSecondary)
+            }
+            .padding(10)
+            .surfacePanel(cornerRadius: 16)
+        }
+        .buttonStyle(.tactile)
     }
 
     /// 展示用分类：优先用后端返回，未就绪时退回默认四类，保证空态永不空白。
@@ -580,12 +685,13 @@ struct GuideView: View {
         }
     }
 
-    /// 输入栏右侧按钮：有内容就能发送，生成中且没内容时是停止键，空闲时是麦克风。
+    /// 输入栏右侧按钮：有内容就能发送，没内容时可以说话；生成中多一个停止键。
+    /// 生成中说话或打字都是在改需求，发出去才会打断当前回答。
     /// 只挂了图片时麦克风和发送都在，用户可以直接发图，也可以先说一句补充要求。
     @ViewBuilder
     private var composerTrailingButtons: some View {
         let hasText = !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        if !hasText && !isAssistantStreaming {
+        if !hasText {
             Button(action: handleMicTap) {
                 Image(systemName: "mic.fill")
                     .font(.system(size: 17, weight: .medium))
@@ -605,9 +711,9 @@ struct GuideView: View {
                     .background(AppTheme.primary, in: Circle())
             }
             .buttonStyle(.tactile)
-            .accessibilityLabel(isAssistantStreaming ? "停止并发送" : "发送")
+            .accessibilityLabel(isAssistantStreaming ? "改需求并继续" : "发送")
         } else if isAssistantStreaming {
-            Button(action: stopGeneration) {
+            Button(action: { stopGeneration() }) {
                 Image(systemName: "stop.fill")
                     .font(.system(size: 13, weight: .bold))
                     .foregroundStyle(AppTheme.background)
@@ -625,7 +731,10 @@ struct GuideView: View {
 
     /// 输入框占位文案：挂了图片时引导用户配一句话（如"找个相似但平价的"）。
     private var composerPlaceholder: String {
-        pendingImageData != nil ? "补充需求，例如「更平价」「同品牌」" : "搜索商品、品牌或需求"
+        if pendingImageData != nil {
+            return "补充需求，例如「更平价」「同品牌」"
+        }
+        return isAssistantStreaming ? "想改要求？直接说" : "搜索商品、品牌或需求"
     }
 
     private var isKeyboardPresented: Bool {
@@ -634,6 +743,22 @@ struct GuideView: View {
 
     private var composerBottomPadding: CGFloat {
         isKeyboardPresented ? 10 : AppTheme.guideComposerBottomPadding
+    }
+
+    private var latestQuestionID: UUID? {
+        messages.last(where: { $0.sender == .user })?.id
+    }
+
+    /// 让最新的问题总能滚到顶部：内容不够一屏时，由最后一条回答撑足剩余高度。
+    /// 否则问题要等回答长到足够高才滚得上去，回答一开始页面就会猛跳一下。
+    private var latestAnswerMinHeight: CGFloat? {
+        guard messages.count >= 2,
+              messages.last?.sender == .ai,
+              chatViewportHeight > 0 else { return nil }
+        // 问题到回答之间、回答到底部留白之间各有列表间距和 1pt 尾部锚点
+        let rowGaps: CGFloat = 16 * 4 + 2
+        let remaining = chatViewportHeight - latestQuestionHeight - rowGaps - chatListBottomPadding
+        return max(0, remaining)
     }
 
     private var chatListBottomPadding: CGFloat {
@@ -686,18 +811,20 @@ struct GuideView: View {
     private func sendCurrentInput() {
         let trimmed = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         let attachment = pendingImageData
-        // 至少要有文字或图片其一才发送；生成中发新消息等于先停掉当前回答
+        // 至少要有文字或图片其一才发送；生成中发新消息是在改需求，后端会接上被打断的问题
         guard !trimmed.isEmpty || attachment != nil else { return }
-        stopGeneration()
+        let isAmending = isAssistantStreaming
+        stopGeneration(isAmending: isAmending)
         guard canStartSend(query: trimmed, imageData: attachment) else { return }
         inputText = ""
         pendingImageData = nil
-        send(trimmed, imageData: attachment)
+        send(trimmed, imageData: attachment, isAmending: isAmending)
     }
 
-    private func send(_ query: String, imageData: Data? = nil) {
+    private func send(_ query: String, imageData: Data? = nil, isAmending: Bool = false) {
         guard canStartSend(query: query, imageData: imageData) else { return }
         isComposerExpanded = false
+        isInputFocused = false
         lastQuery = query
         if currentTitle == GuideView.newConversationTitle {
             currentTitle = imageData != nil && query.isEmpty
@@ -724,7 +851,7 @@ struct GuideView: View {
                 sender: .ai,
                 text: placeholder,
                 state: .understanding,
-                thinkingSteps: [imageData != nil ? "正在识别图片" : "思考中"]
+                thinkingSteps: [imageData != nil ? "正在识别图片" : (isAmending ? Self.amendThinkingStep : "思考中")]
             ))
         }
         runAgent(for: query, imageBase64: imageData?.base64EncodedString())
@@ -774,22 +901,13 @@ struct GuideView: View {
         }
     }
 
-    /// 启动时停在空对话页就直接开麦。只在用户已授权时才开，不会一启动就弹系统权限框。
-    private func autoStartVoiceIfAppropriate() {
-        guard !didConsiderVoiceAutoStart else { return }
-        didConsiderVoiceAutoStart = true
-        guard isActiveTab,
-              messages.isEmpty,
-              inputText.isEmpty,
-              !isInputFocused,
-              SpeechInputController.isAuthorizedWithoutPrompt else { return }
-        presentVoiceOverlay()
-    }
-
     // MARK: - 停止生成
 
+    private static let amendThinkingStep = "收到，正在调整"
+
     /// 取消当前回合并保留用户已经看到的内容。断开连接后，后端会关闭 LLM 流并记录半截回合。
-    private func stopGeneration() {
+    /// isAmending：用户是在改需求。还没内容的回答直接去掉，有内容的标明新结果在下面。
+    private func stopGeneration(isAmending: Bool = false) {
         guard isAssistantStreaming else { return }
         activeAgentTask?.cancel()
         activeAgentTask = nil
@@ -807,8 +925,16 @@ struct GuideView: View {
             && !message.text.isEmpty
             && (message.thinkingSteps ?? []).isEmpty
 
+        if isAmending, !hasCards, !hasRealOpening, !hasRealText {
+            withAnimation(.easeOut(duration: 0.18)) {
+                _ = messages.remove(at: index)
+            }
+            return
+        }
+
         if hasCards || hasRealOpening || hasRealText {
             message.wasStopped = true
+            message.wasAmended = isAmending ? true : nil
             if !hasRealOpening, let content = message.structuredContent {
                 let opening = completedRecommendationOpening(for: lastQuery, products: message.products)
                 message.text = opening
@@ -816,8 +942,14 @@ struct GuideView: View {
                     opening: opening,
                     items: content.items,
                     followup: content.followup,
-                    summary: content.summary
+                    summary: content.summary,
+                    points: content.points,
+                    picks: content.picks
                 )
+            }
+            // 表已经出来但回答还没开始，这时的 text 只是阶段提示
+            if !hasRealOpening, !hasRealText, message.structuredContent == nil {
+                message.text = ""
             }
         } else {
             message.text = "已停止生成"
@@ -843,6 +975,35 @@ struct GuideView: View {
             if let snapshot = try? await productService.fetchAgentCart() {
                 syncCartItems(from: snapshot)
             }
+        }
+    }
+
+    // MARK: - 回答反馈
+
+    private func submitFeedback(for messageID: UUID, rating: String) {
+        guard let index = messages.firstIndex(where: { $0.id == messageID }) else { return }
+        let previous = messages[index].feedback
+        guard previous != rating else { return }
+        withAnimation(.easeOut(duration: 0.18)) {
+            messages[index].feedback = rating
+        }
+        persistCurrent()
+        let query = messages[..<index].last(where: { $0.sender == .user })?.text ?? ""
+        let answer = messages[index].shareText
+        let sessionID = currentSessionID
+        Task { @MainActor in
+            let succeeded = await productService.submitFeedback(
+                messageID: messageID.uuidString,
+                rating: rating,
+                sessionID: sessionID,
+                query: query,
+                answer: answer
+            )
+            guard !succeeded, let current = messages.firstIndex(where: { $0.id == messageID }) else { return }
+            withAnimation(.easeOut(duration: 0.18)) {
+                messages[current].feedback = previous
+            }
+            persistCurrent()
         }
     }
 
@@ -975,6 +1136,8 @@ struct GuideView: View {
             var streamedItems: [StructuredItem] = []
             var streamedFollowups: [String] = []
             var streamedSummary: String?
+            var streamedPoints: [String] = []
+            var streamedPicks: [String] = []
             // 商品已补全但还没收到任何结构化片段：先只摆开场占位，等解说到了再逐张弹卡片。
             // 若后端是旧协议（只发 token），在首个 token / done 时退回旧的整批预览。
             var pendingProductPreview = false
@@ -1021,6 +1184,8 @@ struct GuideView: View {
                             items: streamedItems,
                             followups: streamedFollowups,
                             summary: streamedSummary,
+                            points: streamedPoints,
+                            picks: streamedPicks,
                             hydrated: hydrated
                         )
                     } else {
@@ -1044,6 +1209,8 @@ struct GuideView: View {
                                     items: streamedItems,
                                     followups: streamedFollowups,
                                     summary: streamedSummary,
+                                    points: streamedPoints,
+                                    picks: streamedPicks,
                                     hydrated: hydrated
                                 )
                                 try? await Task.sleep(nanoseconds: streamDelay(for: character))
@@ -1056,6 +1223,8 @@ struct GuideView: View {
                                 items: streamedItems,
                                 followups: streamedFollowups,
                                 summary: streamedSummary,
+                                points: streamedPoints,
+                                picks: streamedPicks,
                                 hydrated: hydrated
                             )
                         }
@@ -1081,6 +1250,8 @@ struct GuideView: View {
                                 items: streamedItems,
                                 followups: streamedFollowups,
                                 summary: streamedSummary,
+                                points: streamedPoints,
+                                picks: streamedPicks,
                                 hydrated: hydrated
                             )
                         }
@@ -1098,6 +1269,34 @@ struct GuideView: View {
                                 items: streamedItems,
                                 followups: streamedFollowups,
                                 summary: streamedSummary,
+                                points: streamedPoints,
+                                picks: streamedPicks,
+                                hydrated: hydrated
+                            )
+                        }
+                    }
+
+                case .comparePoint, .comparePick:
+                    if let text = event.textDelta {
+                        hasStructuredStream = true
+                        pendingProductPreview = false
+                        await paceReveal(since: lastFollowupRevealAt, minGap: streamFollowupMinGap)
+                        try Task.checkCancellation()
+                        lastFollowupRevealAt = Date()
+                        if event.type == .comparePoint {
+                            streamedPoints.append(text)
+                        } else {
+                            streamedPicks.append(text)
+                        }
+                        withAnimation(.easeOut(duration: 0.18)) {
+                            renderStructuredStream(
+                                query: query,
+                                opening: streamedOpening,
+                                items: streamedItems,
+                                followups: streamedFollowups,
+                                summary: streamedSummary,
+                                points: streamedPoints,
+                                picks: streamedPicks,
                                 hydrated: hydrated
                             )
                         }
@@ -1119,6 +1318,8 @@ struct GuideView: View {
                                 items: streamedItems,
                                 followups: streamedFollowups,
                                 summary: streamedSummary,
+                                points: streamedPoints,
+                                picks: streamedPicks,
                                 hydrated: hydrated
                             )
                         }
@@ -1186,6 +1387,8 @@ struct GuideView: View {
                             items: streamedItems,
                             followups: streamedFollowups,
                             summary: streamedSummary,
+                            points: streamedPoints,
+                            picks: streamedPicks,
                             hydrated: hydrated
                         )
                     } else {
@@ -1220,6 +1423,8 @@ struct GuideView: View {
                         items: streamedItems,
                         followups: streamedFollowups,
                         summary: streamedSummary,
+                        points: streamedPoints,
+                        picks: streamedPicks,
                         hydrated: hydrated
                     )
                 } else {
@@ -1263,6 +1468,8 @@ struct GuideView: View {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: "…."))
         guard !step.isEmpty, messages[index].thinkingSteps?.last != step else { return }
+        // 改需求时第一步已经是"收到，正在调整"，后端的"思考中"不用再显示一遍
+        if step == "思考中", messages[index].thinkingSteps?.last == Self.amendThinkingStep { return }
         withAnimation(.easeOut(duration: 0.2)) {
             messages[index].thinkingSteps = (messages[index].thinkingSteps ?? []) + [step]
         }
@@ -1281,6 +1488,8 @@ struct GuideView: View {
         items: [StructuredItem],
         followups: [String],
         summary: String?,
+        points: [String] = [],
+        picks: [String] = [],
         hydrated: [Product]
     ) {
         let byID = Dictionary(hydrated.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -1290,7 +1499,14 @@ struct GuideView: View {
             text: openingText,
             state: .generating,
             products: visibleProducts,
-            structuredContent: StructuredContent(opening: openingText, items: items, followup: followups, summary: summary),
+            structuredContent: StructuredContent(
+                opening: openingText,
+                items: items,
+                followup: followups,
+                summary: summary,
+                points: points.isEmpty ? nil : points,
+                picks: picks.isEmpty ? nil : picks
+            ),
             isGeneratingFollowups: followups.isEmpty
         )
     }
@@ -1303,6 +1519,8 @@ struct GuideView: View {
         items: [StructuredItem],
         followups: [String],
         summary: String?,
+        points: [String] = [],
+        picks: [String] = [],
         hydrated: [Product]
     ) {
         let byID = Dictionary(hydrated.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -1318,7 +1536,14 @@ struct GuideView: View {
         let finalFollowups = followups.isEmpty && !orderedProducts.isEmpty
             ? fallbackFollowups(for: query, products: orderedProducts)
             : followups
-        let content = StructuredContent(opening: openingText, items: finalItems, followup: finalFollowups, summary: summary)
+        let content = StructuredContent(
+            opening: openingText,
+            items: finalItems,
+            followup: finalFollowups,
+            summary: summary,
+            points: points.isEmpty ? nil : points,
+            picks: picks.isEmpty ? nil : picks
+        )
         setStreamingStatus(nil)
         withAnimation(.easeOut(duration: 0.18)) {
             updateLastAI(
@@ -1553,7 +1778,9 @@ struct GuideView: View {
             opening: opening,
             items: items,
             followup: followups,
-            summary: message.structuredContent?.summary
+            summary: message.structuredContent?.summary,
+            points: message.structuredContent?.points,
+            picks: message.structuredContent?.picks
         )
         messages[index].completionSummary = completion
         messages[index].isGeneratingFollowups = false
@@ -1662,6 +1889,11 @@ struct GuideView: View {
     /// 拉取空态首页推荐（分类入口 + 动态热门搜索，均源自真实库存）。
     @MainActor
     private func loadSuggestions() async {
+        if let feed = await productService.fetchHomeFeed() {
+            withAnimation(.easeOut(duration: 0.25)) {
+                homeFeed = feed
+            }
+        }
         if let fresh = await productService.fetchSuggestions() {
             withAnimation(.easeInOut(duration: 0.25)) {
                 suggestions = fresh
@@ -1831,13 +2063,36 @@ struct GuideView: View {
         handleContentChange(proxy)
     }
 
+    /// 把问题钉到顶部。不能带动画：懒加载列表在动画事务里重建上一条回答时，
+    /// 它的卡片会从估算位置飞过，叠在新内容上闪一下。
     private func scrollToQuestion(_ id: UUID, proxy: ScrollViewProxy) {
         pendingAutoFollowWorkItem?.cancel()
         DispatchQueue.main.async {
-            withAnimation(.easeOut(duration: 0.24)) {
-                proxy.scrollTo(id, anchor: .top)
+            proxy.scrollTo(id, anchor: questionPinAnchor)
+        }
+        // 键盘收起是动画，期间底部留白和最小高度都在变，定位会被覆盖，动画结束后也不会有新的触发。
+        // 所以发送后的短时间内多钉几次；已经到位时不会有任何视觉变化，用户一拖就停。
+        guard pinnedQuestionID != id else { return }
+        pinnedQuestionID = id
+        for delay in questionPinRetryDelays {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                repinQuestion(proxy)
             }
         }
+    }
+
+    /// 键盘收起时列表高度一路在变，刚才的定位会失效。高度一变就重新钉住，
+    /// 否则偏差要留到下一个思考步骤才纠正，看起来就是页面跳了一下。
+    /// 问题停在列表顶部留白之下，和第一轮不滚动时的位置一致，每轮都停在同一处。
+    private var questionPinAnchor: UnitPoint {
+        let freeHeight = chatViewportHeight - latestQuestionHeight
+        guard freeHeight > 0 else { return .top }
+        return UnitPoint(x: 0.5, y: chatListTopPadding / freeHeight)
+    }
+
+    private func repinQuestion(_ proxy: ScrollViewProxy) {
+        guard shouldHoldLatestQuestionAnchor, let id = pendingQuestionAnchorID else { return }
+        proxy.scrollTo(id, anchor: questionPinAnchor)
     }
 
     private func jumpToLatest(_ proxy: ScrollViewProxy) {
@@ -1999,6 +2254,8 @@ struct MessageRow: View {
     let onCompareTap: ([Product]) -> Void
     let onFollowUpTap: (String) -> Void
     var onSeeMore: (String) -> Void = { _ in }
+    var onFeedback: (String) -> Void = { _ in }
+    var onAddToCart: (Product, [String: String], Int) -> Void = { _, _, _ in }
     
     private struct ProductSection: Identifiable, Equatable {
         let id: String
@@ -2176,6 +2433,25 @@ struct MessageRow: View {
                         }
                     }
                     
+                    if let comparison = message.comparison {
+                        ComparisonCard(
+                            comparison: comparison,
+                            revealsRows: isRevealingStructuredContent,
+                            showsRecommendation: (parsedStructuredContent?.picks ?? []).isEmpty
+                        )
+                        .transition(.opacity)
+                    }
+
+                    if let points = parsedStructuredContent?.points, !points.isEmpty {
+                        ComparisonInsightList(title: "这些差异意味着什么", items: points)
+                            .transition(.opacity)
+                    }
+
+                    if let picks = parsedStructuredContent?.picks, !picks.isEmpty {
+                        ComparisonInsightList(title: "怎么选", items: picks)
+                            .transition(.opacity)
+                    }
+
                     // 2. 商品卡片 + 解说交替展示
                     ForEach(productSections) { section in
                         if let header = section.groupHeader {
@@ -2185,21 +2461,31 @@ struct MessageRow: View {
                             .modifier(GhostReveal(isActive: isRevealingStructuredContent))
                         }
 
-                        ProductCard(product: section.product) {
-                            onProductTap(section.product)
-                        }
+                        ProductCard(
+                            product: section.product,
+                            onDetail: { onProductTap(section.product) },
+                            onAddToCart: onAddToCart
+                        )
                         .modifier(GhostReveal(isActive: isRevealingStructuredContent))
                         .transition(.offset(y: 16))
 
                         if let description = section.description {
-                            Text(description)
-                                .font(.subheadline)
-                                .foregroundStyle(AppTheme.textPrimary)
-                                .lineSpacing(4)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 8)
-                                .modifier(GhostReveal(isActive: isRevealingStructuredContent))
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(description)
+                                    .font(.subheadline)
+                                    .foregroundStyle(AppTheme.textPrimary)
+                                    .lineSpacing(4)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                Button("查看详情") {
+                                    onProductTap(section.product)
+                                }
+                                .font(.footnote.weight(.medium))
+                                .foregroundStyle(AppTheme.primary)
+                                .buttonStyle(.tactile)
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.bottom, 6)
+                            .modifier(GhostReveal(isActive: isRevealingStructuredContent))
                         }
                     }
 
@@ -2277,7 +2563,10 @@ struct MessageRow: View {
                 }
 
                 if message.wasStopped == true {
-                    Label("已停止", systemImage: "stop.circle")
+                    Label(
+                        message.wasAmended == true ? "已改需求，新结果在下面" : "已停止",
+                        systemImage: message.wasAmended == true ? "arrow.down.circle" : "stop.circle"
+                    )
                         .font(.caption.weight(.medium))
                         .foregroundStyle(AppTheme.textSecondary)
                         .padding(.horizontal, 4)
@@ -2327,10 +2616,6 @@ struct MessageRow: View {
                     SpecSelectionCard(selection: spec, onSubmit: onSpecSubmit)
                 }
 
-                if let comparison = message.comparison {
-                    ComparisonCard(comparison: comparison)
-                }
-
                 // 对话结束、推荐了 ≥2 件商品时，给个小按钮进对比页（页内下拉选商品）。
                 if message.sender == .ai, message.state == .ready, message.products.count >= 2 {
                     Button {
@@ -2344,6 +2629,15 @@ struct MessageRow: View {
                             .background(AppTheme.softPurple, in: Capsule())
                     }
                     .buttonStyle(.tactile)
+                }
+
+                if showsFeedbackBar {
+                    AnswerFeedbackBar(
+                        rating: message.feedback,
+                        shareText: message.shareText,
+                        onRate: onFeedback
+                    )
+                    .padding(.top, 2)
                 }
             }
 
@@ -2417,6 +2711,16 @@ struct MessageRow: View {
         }
     }
 
+    /// 真正给出了内容的回答才能评价和分享，出错和"已停止生成"不算。
+    private var showsFeedbackBar: Bool {
+        message.sender == .ai
+            && message.state == .ready
+            && !message.canRetry
+            && message.followupError == nil
+            && !message.text.isEmpty
+            && message.text != "已停止生成"
+    }
+
     /// 回答开始前显示思考步骤；一旦有开场白或正文就不再显示。
     private var activeThinkingSteps: [String]? {
         guard message.sender == .ai,
@@ -2483,6 +2787,137 @@ private struct StreamingPulseIndicator: View {
                 phase = (phase + 1) % 3
             }
         }
+    }
+}
+
+/// 首页问候：逐字出现。
+private struct HomeGreeting: View {
+    let text: String
+
+    @State private var revealed = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        // 隐藏的完整文字先占好高度，逐字出现时下面的内容不会跳
+        Text(text)
+            .font(.system(size: 26, weight: .semibold))
+            .hidden()
+            .overlay(alignment: .leading) {
+                Text(String(text.prefix(reduceMotion ? text.count : revealed)))
+                    .font(.system(size: 26, weight: .semibold))
+                    .foregroundStyle(AppTheme.textPrimary)
+            }
+            .accessibilityLabel(text)
+            .task(id: text) {
+                guard !reduceMotion else { return }
+                revealed = 0
+                for count in 1...max(text.count, 1) {
+                    guard !Task.isCancelled else { return }
+                    revealed = count
+                    try? await Task.sleep(nanoseconds: 70_000_000)
+                }
+            }
+    }
+}
+
+/// 首页内容依次淡入。
+private struct StaggeredAppear: ViewModifier {
+    let index: Int
+
+    @State private var isVisible = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(isVisible || reduceMotion ? 1 : 0)
+            .offset(y: isVisible || reduceMotion ? 0 : 8)
+            .onAppear {
+                guard !isVisible else { return }
+                withAnimation(.easeOut(duration: 0.3).delay(0.12 + Double(index) * 0.07)) {
+                    isVisible = true
+                }
+            }
+    }
+}
+
+/// 对比表下面的解读：差异意味着什么、怎么选。"维度：说明"里的维度加粗。
+private struct ComparisonInsightList: View {
+    let title: String
+    let items: [String]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(AppTheme.textPrimary)
+            ForEach(items, id: \.self) { item in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Circle()
+                        .fill(AppTheme.primary)
+                        .frame(width: 5, height: 5)
+                        .alignmentGuide(.firstTextBaseline) { $0[.bottom] }
+                    styledText(item)
+                        .font(.subheadline)
+                        .foregroundStyle(AppTheme.textPrimary)
+                        .lineSpacing(4)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .transition(.opacity)
+            }
+        }
+        .padding(.horizontal, 4)
+    }
+
+    private func styledText(_ item: String) -> Text {
+        guard let colon = item.firstIndex(of: "："), item.distance(from: item.startIndex, to: colon) <= 8 else {
+            return Text(item)
+        }
+        return Text(item[...colon]).fontWeight(.semibold) + Text(item[item.index(after: colon)...])
+    }
+}
+
+/// 回答下方的点赞、点踩和分享。
+private struct AnswerFeedbackBar: View {
+    let rating: String?
+    let shareText: String
+    let onRate: (String) -> Void
+
+    var body: some View {
+        HStack(spacing: 2) {
+            rateButton(value: "up", symbol: "hand.thumbsup", label: "有帮助")
+            rateButton(value: "down", symbol: "hand.thumbsdown", label: "没帮助")
+            ShareLink(item: shareText) {
+                Image(systemName: "square.and.arrow.up")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(AppTheme.textSecondary)
+                    .frame(width: 40, height: 40)
+                    .contentShape(Rectangle())
+            }
+            .accessibilityLabel("分享")
+            if rating != nil {
+                Text("反馈已提交")
+                    .font(.caption)
+                    .foregroundStyle(AppTheme.textSecondary)
+                    .padding(.leading, 6)
+                    .transition(.opacity)
+            }
+        }
+    }
+
+    private func rateButton(value: String, symbol: String, label: String) -> some View {
+        let isSelected = rating == value
+        return Button {
+            onRate(value)
+        } label: {
+            Image(systemName: isSelected ? "\(symbol).fill" : symbol)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(isSelected ? AppTheme.primary : AppTheme.textSecondary)
+                .frame(width: 40, height: 40)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.tactile)
+        .accessibilityLabel(label)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
 
@@ -2738,12 +3173,6 @@ final class SpeechInputController: NSObject, ObservableObject, SFSpeechRecognize
     @Published private(set) var errorMessage: String?
     /// 一次语音输入结束后写入，只写一次。
     @Published private(set) var outcome: VoiceCaptureOutcome?
-
-    /// 权限都已授予，开麦不会弹系统权限框。
-    static var isAuthorizedWithoutPrompt: Bool {
-        SFSpeechRecognizer.authorizationStatus() == .authorized
-            && AVAudioApplication.shared.recordPermission == .granted
-    }
 
     private let speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "zh_CN"))
     private let audioEngine = AVAudioEngine()
@@ -3122,59 +3551,132 @@ struct ComposerAction: View {
     }
 }
 
+/// 回答流里的紧凑商品卡：左图右文，一屏能看到多款。点卡片进详情，点按钮直接加购。
 struct ProductCard: View {
     let product: Product
     let onDetail: () -> Void
+    let onAddToCart: (Product, [String: String], Int) -> Void
+
+    @State private var selectedOptions: [String: String]
+    @State private var quantity = 1
+    @State private var showSpecSheet = false
+    @State private var justAdded = false
+
+    init(
+        product: Product,
+        onDetail: @escaping () -> Void,
+        onAddToCart: @escaping (Product, [String: String], Int) -> Void
+    ) {
+        self.product = product
+        self.onDetail = onDetail
+        self.onAddToCart = onAddToCart
+        _selectedOptions = State(initialValue: product.defaultSpecificationSelection)
+    }
+
+    private var needsSpecChoice: Bool {
+        product.specifications.contains { $0.options.count > 1 }
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            ProductRemoteImage(url: product.imageURL, cornerRadius: 16, placeholderIcon: "shippingbox", contentMode: .fit)
-                .frame(maxWidth: .infinity)
-                .frame(height: 248)
-                .background(Color.white, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(AppTheme.border, lineWidth: 1)
-                )
+        HStack(alignment: .center, spacing: 12) {
+            ProductRemoteImage(url: product.imageURL, cornerRadius: 12, placeholderIcon: "shippingbox", contentMode: .fit)
+                .frame(width: 108, height: 108)
+                .background(Color.white, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
 
-            if !product.tags.isEmpty {
-                ProductTagRow(tags: Array(product.tags.prefix(3)))
-            }
+            VStack(alignment: .leading, spacing: 5) {
+                Text(product.title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(AppTheme.textPrimary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
 
-            Text(product.title)
-                .font(.headline)
-                .foregroundStyle(AppTheme.textPrimary)
-                .lineLimit(2)
-                .fixedSize(horizontal: false, vertical: true)
-            // 多规格显示完整区间，避免「¥480 起」让用户以为看中的规格也是这个价
-            Text(product.priceRangeDisplay)
-                .font(.title3.bold())
-                .foregroundStyle(AppTheme.error)
-            if let caption = product.budgetHint?.caption {
-                Text(caption)
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(AppTheme.textSecondary)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(AppTheme.secondary.opacity(0.6), in: Capsule())
-            }
+                tagLine
 
-            Button(action: onDetail) {
-                HStack(spacing: 6) {
-                    Text("查看详情")
-                    Image(systemName: "chevron.right")
-                        .font(.caption.weight(.bold))
+                // 多规格显示完整区间，避免「¥480 起」让用户以为看中的规格也是这个价
+                Text(product.priceRangeDisplay)
+                    .font(.headline.bold())
+                    .foregroundStyle(AppTheme.error)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+
+                if let caption = product.budgetHint?.caption {
+                    Text(caption)
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(AppTheme.textSecondary)
+                        .lineLimit(1)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2)
+                        .background(AppTheme.secondary.opacity(0.6), in: Capsule())
                 }
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.white)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 11)
-                .background(AppTheme.primary, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+                addButton
+                    .padding(.top, 2)
             }
-            .buttonStyle(.tactile)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(14)
-        .surfacePanel(cornerRadius: 22)
+        .padding(10)
+        .surfacePanel(cornerRadius: 16)
+        .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .onTapGesture(perform: onDetail)
+        .accessibilityAction(named: "查看详情", onDetail)
+        .sheet(isPresented: $showSpecSheet) {
+            AddToCartSheet(
+                product: product,
+                selectedOptions: $selectedOptions,
+                quantity: $quantity,
+                onConfirm: {
+                    showSpecSheet = false
+                    commitAdd()
+                }
+            )
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+            .presentationCornerRadius(28)
+        }
+    }
+
+    @ViewBuilder
+    private var tagLine: some View {
+        if !product.tags.isEmpty {
+            Text(product.tags.prefix(2).joined(separator: " · "))
+                .font(.caption)
+                .foregroundStyle(AppTheme.textSecondary)
+                .lineLimit(1)
+        }
+    }
+
+    private var addButton: some View {
+        Button {
+            if needsSpecChoice {
+                showSpecSheet = true
+            } else {
+                commitAdd()
+            }
+        } label: {
+            HStack(spacing: 4) {
+                if justAdded {
+                    Image(systemName: "checkmark")
+                        .font(.caption2.weight(.bold))
+                }
+                Text(justAdded ? "已加入" : (needsSpecChoice ? "选规格" : "加入购物车"))
+            }
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(justAdded ? AppTheme.success : .white)
+            .padding(.horizontal, 14)
+            .frame(height: 30)
+            .background(justAdded ? AppTheme.success.opacity(0.14) : AppTheme.primary, in: Capsule())
+        }
+        .buttonStyle(.tactile)
+        .disabled(justAdded)
+    }
+
+    private func commitAdd() {
+        onAddToCart(product, selectedOptions, quantity)
+        quantity = 1
+        withAnimation(.easeOut(duration: 0.2)) { justAdded = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
+            withAnimation(.easeOut(duration: 0.2)) { justAdded = false }
+        }
     }
 }
 

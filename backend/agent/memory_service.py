@@ -152,6 +152,35 @@ def _activity(store: UserMemoryStore, user_id: str, limit: int = 8) -> list[dict
     return out
 
 
+_INTEREST_EVENT_TYPES = {"search", "view_detail", "compare", "add_cart"}
+
+
+def recent_interests(store: UserMemoryStore, user_id: str, limit: int = 2) -> dict[str, Any]:
+    """首页"接着看"用：用户最近在看的品类，新的在前，不重复。
+
+    用户关掉个性化时不返回品类，首页就只显示通用入口。"""
+    events = store.recent_events(user_id, days=30, limit=60)
+    interests: list[dict[str, Any]] = []
+    if store.get_preference(user_id).personalization_enabled:
+        seen: set[str] = set()
+        for event in events:
+            if event["type"] not in _INTEREST_EVENT_TYPES:
+                continue
+            label = event.get("sub_category") or event.get("category")
+            if not label or label in seen:
+                continue
+            seen.add(label)
+            interests.append({
+                "label": label,
+                "sub_category": event.get("sub_category"),
+                "category": event.get("category"),
+                "product_id": event.get("product_id"),
+            })
+            if len(interests) == limit:
+                break
+    return {"returning": bool(events), "interests": interests}
+
+
 def build_view(store: UserMemoryStore, user_id: str) -> dict[str, Any]:
     refresh_inferred(store, user_id)
     preference = store.get_preference(user_id)

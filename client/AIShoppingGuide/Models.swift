@@ -45,6 +45,8 @@ struct Product: Identifiable, Hashable, Codable {
     let reviews: [ProductReview]
     /// 本轮推荐的预算匹配信息；非预算类检索为 nil。
     var budgetHint: ProductBudgetHint? = nil
+    /// 商品问答，详情页"问问导购"用。旧对话里存的商品没有这个字段。
+    var faqs: [ProductFAQ]? = nil
 
     init(
         id: String = UUID().uuidString,
@@ -182,6 +184,12 @@ struct Product: Identifiable, Hashable, Codable {
     ]
 }
 
+struct ProductFAQ: Identifiable, Hashable, Codable {
+    var id: String { question }
+    let question: String
+    let answer: String
+}
+
 struct ProductSpecification: Identifiable, Hashable, Codable {
     var id = UUID()
     let name: String
@@ -282,8 +290,12 @@ struct ChatMessage: Identifiable, Codable {
     var streamingStatusText: String? = nil
     /// 用户中途点了停止，保留的是半截回答。必须是可选类型，否则旧对话记录解码会失败。
     var wasStopped: Bool? = nil
+    /// 是因为用户改了需求才停的，新结果在后面的消息里。
+    var wasAmended: Bool? = nil
     /// 回答开始前展示的思考步骤，最后一条是正在进行的。回答一开始就不再显示。
     var thinkingSteps: [String]? = nil
+    /// 用户对这条回答的评价：up / down；没评价时为 nil。
+    var feedback: String? = nil
 }
 
 struct StructuredContent: Codable {
@@ -293,16 +305,29 @@ struct StructuredContent: Codable {
     let followup: [String]
     /// 所有商品之后的结尾总结：谁该选哪款，再问用户一句。旧数据和单款推荐没有。
     let summary: String?
+    /// 对比时：这些差异在使用中意味着什么。
+    let points: [String]?
+    /// 对比时：什么情况选哪款。
+    let picks: [String]?
 
     enum CodingKeys: String, CodingKey {
-        case opening, items, followup, questions, summary
+        case opening, items, followup, questions, summary, points, picks
     }
 
-    init(opening: String, items: [StructuredItem], followup: [String] = [], summary: String? = nil) {
+    init(
+        opening: String,
+        items: [StructuredItem],
+        followup: [String] = [],
+        summary: String? = nil,
+        points: [String]? = nil,
+        picks: [String]? = nil
+    ) {
         self.opening = opening
         self.items = items
         self.followup = followup
         self.summary = summary
+        self.points = points
+        self.picks = picks
     }
 
     init(from decoder: Decoder) throws {
@@ -315,6 +340,8 @@ struct StructuredContent: Codable {
             self.followup = try container.decodeIfPresent([String].self, forKey: .questions) ?? []
         }
         summary = try container.decodeIfPresent(String.self, forKey: .summary)
+        points = try container.decodeIfPresent([String].self, forKey: .points)
+        picks = try container.decodeIfPresent([String].self, forKey: .picks)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -323,6 +350,8 @@ struct StructuredContent: Codable {
         try container.encode(items, forKey: .items)
         try container.encode(followup, forKey: .followup)
         try container.encodeIfPresent(summary, forKey: .summary)
+        try container.encodeIfPresent(points, forKey: .points)
+        try container.encodeIfPresent(picks, forKey: .picks)
     }
 }
 
@@ -415,6 +444,17 @@ enum RecommendationCopy {
 }
 
 extension ChatMessage {
+    /// 分享和反馈用的纯文本：开场白、商品、解读和总结，不含内部 JSON。
+    var shareText: String {
+        guard let content = structuredContent ?? StructuredContent.parse(from: text) else { return text }
+        var lines = [content.opening]
+        lines += products.map { "· \($0.title)（\($0.priceRangeDisplay)）" }
+        lines += content.points ?? []
+        lines += content.picks ?? []
+        if let summary = content.summary { lines.append(summary) }
+        return lines.filter { !$0.isEmpty }.joined(separator: "\n")
+    }
+
     /// 从本条 AI 消息的结构化 JSON 里取某商品的专属解说（与列表页逻辑一致）。
     func recommendationDescription(for productID: String) -> String? {
         guard sender == .ai, state == .ready else { return nil }

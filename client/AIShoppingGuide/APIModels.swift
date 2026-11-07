@@ -6,6 +6,19 @@ struct HomeSuggestions: Equatable {
     let hotSearches: [String]
 }
 
+/// 首页的个性化内容：是否老用户，以及接着看的品类入口。
+struct HomeFeed: Equatable {
+    struct Entry: Identifiable, Equatable {
+        var id: String { query }
+        let title: String
+        let query: String
+        let imageURL: URL?
+    }
+
+    let isReturning: Bool
+    let entries: [Entry]
+}
+
 struct APIErrorPayload: Codable, Hashable {
     let code: String
     let message: String
@@ -123,6 +136,7 @@ struct ProductPayload: Identifiable, Codable, Hashable {
     let reviews: [ReviewPayload]?
     let evidence: [EvidencePayload]?
     let updatedAt: Date?
+    var faqs: [ProductFAQ]? = nil
 }
 
 struct ProductSearchRequest: Codable, Hashable {
@@ -315,6 +329,10 @@ enum AgentStreamEventType: String, Codable, Hashable {
     case itemDescription
     /// 结构化流式：结尾总结。
     case summary
+    /// 对比：一条差异解读。
+    case comparePoint
+    /// 对比：一条选购建议。
+    case comparePick
     /// 结构化流式：一条追问 Prompt。
     case followup
     case products

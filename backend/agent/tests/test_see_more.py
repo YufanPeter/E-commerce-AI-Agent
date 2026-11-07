@@ -174,6 +174,10 @@ class TestStepText:
     def test_search_step_says_what_is_being_looked_for(self, rewritten, expected):
         assert _tool_step_text(self._decision("recommend", rewritten), rewritten) == expected
 
+    def test_step_text_keeps_who_it_is_for(self):
+        rewritten = "给我妈挑个蓝牙耳机"
+        assert _tool_step_text(self._decision("recommend", rewritten), rewritten) == "正在搜索给我妈挑个蓝牙耳机…"
+
     def test_long_query_is_cut(self):
         text = _tool_step_text(self._decision("recommend", "键" * 60), "x")
         assert text == "正在搜索" + "键" * 24 + "…"

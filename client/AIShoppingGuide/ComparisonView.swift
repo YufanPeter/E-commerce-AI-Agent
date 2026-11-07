@@ -192,19 +192,27 @@ struct ComparisonTable: View {
     let comparison: ProductComparisonPayload
     /// 点表头规格切换；对话流里的静态卡片传 nil（只展示选中的规格）。
     var onSelectSKU: ((String, String) -> Void)? = nil
+    /// 只显示前几行，逐行展开时用；nil 显示全部。
+    var visibleRowCount: Int? = nil
 
     private let labelWidth: CGFloat = 60
 
-    init(comparison: ProductComparisonPayload, onSelectSKU: ((String, String) -> Void)? = nil) {
+    init(
+        comparison: ProductComparisonPayload,
+        visibleRowCount: Int? = nil,
+        onSelectSKU: ((String, String) -> Void)? = nil
+    ) {
         self.comparison = comparison
+        self.visibleRowCount = visibleRowCount
         self.onSelectSKU = onSelectSKU
     }
 
     var body: some View {
         VStack(spacing: 0) {
             header
-            ForEach(Array(comparison.rows.enumerated()), id: \.element.id) { index, row in
+            ForEach(Array(comparison.rows.prefix(visibleRowCount ?? comparison.rows.count).enumerated()), id: \.element.id) { index, row in
                 rowView(row, zebra: index % 2 == 1)
+                    .transition(.opacity)
             }
         }
         .surfacePanel(cornerRadius: 18)
@@ -309,11 +317,31 @@ struct ComparisonTable: View {
 /// 对话流里的紧凑对比卡片：直接复用对比表 + 一句建议。
 struct ComparisonCard: View {
     let comparison: ProductComparisonPayload
+    /// 回答生成中逐行展开；历史消息和已完成的回答直接显示完整表格。
+    var revealsRows: Bool = false
+    /// 模型写了选购建议时就不再显示这句兜底建议。
+    var showsRecommendation: Bool = true
+
+    @State private var revealedRows = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var visibleRowCount: Int? {
+        revealsRows && !reduceMotion ? revealedRows : nil
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            ComparisonTable(comparison: comparison)
-            if !comparison.recommendation.isEmpty {
+            ComparisonTable(comparison: comparison, visibleRowCount: visibleRowCount)
+                .task {
+                    guard revealsRows else { return }
+                    while revealedRows < comparison.rows.count, !Task.isCancelled {
+                        try? await Task.sleep(nanoseconds: 160_000_000)
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            revealedRows += 1
+                        }
+                    }
+                }
+            if showsRecommendation, !comparison.recommendation.isEmpty {
                 Text(comparison.recommendation)
                     .font(.footnote)
                     .foregroundStyle(AppTheme.textSecondary)

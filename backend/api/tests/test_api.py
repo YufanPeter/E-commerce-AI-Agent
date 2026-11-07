@@ -605,3 +605,41 @@ class TestTitleEndpoint:
         assert r.status_code == 200
         assert r.json()["title"] == "油皮洗面奶"
 
+
+
+def test_feedback_validates_rating(client):
+    test_client, api_main = client
+    saved = {}
+    with patch.object(api_main, "_feedback") as store:
+        store.save.side_effect = lambda **kw: saved.update(kw)
+        ok = test_client.post("/feedback", json={"message_id": "m1", "rating": "down", "query": "问", "answer": "答"})
+        bad = test_client.post("/feedback", json={"message_id": "m1", "rating": "meh"})
+    assert ok.status_code == 200
+    assert saved["rating"] == "down" and saved["query"] == "问"
+    assert bad.status_code == 400
+
+
+def test_home_skips_interests_without_products(client):
+    test_client, api_main = client
+    recent = {"returning": True, "interests": [
+        {"label": "防晒", "sub_category": "防晒", "category": "美妆护肤", "product_id": None},
+        {"label": "已下架", "sub_category": "已下架", "category": None, "product_id": None},
+    ]}
+    with patch.object(api_main.memory_service, "recent_interests", return_value=recent):
+        response = test_client.get("/home/u1")
+    body = response.json()
+    assert body["returning"] is True
+    assert [e["title"] for e in body["entries"]] == ["接着看防晒"]
+    assert body["entries"][0]["query"] == "推荐防晒"
+    assert "/images/" in body["entries"][0]["image_url"]
+
+
+@pytest.mark.parametrize("brand,expected", [
+    ("Apple 苹果", "Apple精华"),
+    ("The Ordinary", "The Ordinary 精华"),
+    ("Nike", "Nike 精华"),
+    ("华为", "华为精华"),
+])
+def test_hot_search_term_keeps_brand_readable(brand, expected):
+    from api.main import _hot_search_term
+    assert _hot_search_term(brand, "精华") == expected

@@ -6,7 +6,7 @@ import json
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from agent.orchestrator import Agent
+from agent.orchestrator import Agent, record_abandoned_turn
 from agent.session import AgentSession
 from agent.tools.base import ToolResult
 from llm.client import _ChainChatCompletions
@@ -197,3 +197,39 @@ def test_products_without_description_stay_last_like_the_screen():
         list(_agent().handle_turn_stream("耳机", session))
 
     assert [h["product_id"] for h in session.recall_hits()] == ["p2", "p1"]
+
+
+def _interrupted_session(query="推荐跑鞋"):
+    session = AgentSession()
+    record_abandoned_turn(session, query)
+    return session
+
+
+def test_cancel_after_interrupt_gets_an_acknowledgement_without_routing():
+    session = _interrupted_session()
+    with patch("agent.intent_router.get_client") as rc:
+        events = list(_agent().handle_turn_stream("算了，不要了", session))
+    rc.return_value.chat.completions.create.assert_not_called()
+    assert [e["type"] for e in events] == ["meta", "tool_result", "token", "done"]
+    assert "先不看了" in events[-1]["data"]["narrative"]
+    assert [m.role for m in session.history] == ["user", "assistant", "user", "assistant"]
+
+
+def test_cancel_with_a_new_request_still_goes_to_the_router():
+    session = _interrupted_session()
+    with patch("agent.intent_router.get_client") as rc, patch("agent.composer.get_client") as cc:
+        rc.return_value.chat.completions.create.return_value = _router_resp()
+        cc.return_value.chat.completions.create.return_value = _TrackedStream(["开场｜好\n"])
+        list(_agent().handle_turn_stream("算了，看看手机吧", session))
+    rc.return_value.chat.completions.create.assert_called()
+
+
+def test_same_words_without_an_interrupt_go_to_the_router():
+    session = AgentSession()
+    session.add_user("推荐跑鞋")
+    session.add_assistant("为你挑了几款")
+    with patch("agent.intent_router.get_client") as rc, patch("agent.composer.get_client") as cc:
+        rc.return_value.chat.completions.create.return_value = _router_resp()
+        cc.return_value.chat.completions.create.return_value = _TrackedStream(["开场｜好\n"])
+        list(_agent().handle_turn_stream("算了", session))
+    rc.return_value.chat.completions.create.assert_called()

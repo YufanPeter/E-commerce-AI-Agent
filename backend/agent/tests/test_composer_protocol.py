@@ -188,3 +188,59 @@ class TestSectionsAndSummary:
         data = [e["data"] for e in events if e["type"] == "narrative"]
         assert {"part": "group", "label": "组"} in data
         assert {"part": "summary", "text": "选它"} in data
+
+
+class TestComparisonInsights:
+    def _compare(self):
+        return ToolResult(tool_name="compare", payload={"query": "对比", "comparison": {
+            "title": "A vs B",
+            "products": [{"title": "A", "image_url": "http://x", "skus": [{}], "sku": {"label": "黑", "price_display": "¥1"}}],
+            "rows": [{"label": "续航", "values": ["12 小时", "8 小时"], "highlight": None}],
+        }}, composer_hint="h")
+
+    TEXT = "开场｜对比了 A 和 B\n要点｜续航：A 更久\n要点｜续航：A 更久\n建议｜常出门选 A\n追问｜看看 C\n"
+
+    def test_points_and_picks_stream_between_opening_and_followups(self):
+        parser = _ProtocolStreamParser()
+        events = parser.feed(self.TEXT) + parser.finish()
+        assert [e["part"] for e in events] == ["opening", "opening_end", "point", "pick", "followup"]
+        data = json.loads(parser.to_json())
+        assert data["points"] == ["续航：A 更久"]
+        assert data["picks"] == ["常出门选 A"]
+
+    def test_compare_uses_its_own_prompt_and_only_table_text(self):
+        with patch("agent.composer.get_client") as client:
+            client.return_value.chat.completions.create.return_value = _chunks([self.TEXT])
+            list(AnswerComposer().compose_events(self._compare(), AgentSession()))
+        messages = client.return_value.chat.completions.create.call_args.kwargs["messages"]
+        assert "对比表" in messages[0]["content"]
+        assert len(messages) == 2
+        assert "12 小时" in messages[1]["content"]
+        assert "http://x" not in messages[1]["content"]
+
+    def test_cache_hit_replays_points_and_picks(self):
+        with patch("agent.composer.get_client") as client:
+            client.return_value.chat.completions.create.side_effect = lambda **kw: _chunks([self.TEXT])
+            composer = AnswerComposer()
+            list(composer.compose_events(self._compare(), AgentSession()))
+            events = list(composer.compose_events(self._compare(), AgentSession()))
+        parts = [e["data"]["part"] for e in events if e["type"] == "narrative"]
+        assert parts == ["opening", "opening_end", "point", "pick", "followup"]
+
+    def test_different_tables_do_not_share_a_cached_answer(self):
+        other = self._compare()
+        other.payload["comparison"]["rows"][0]["values"] = ["1 小时", "2 小时"]
+        with patch("agent.composer.get_client") as client:
+            client.return_value.chat.completions.create.side_effect = lambda **kw: _chunks([self.TEXT])
+            composer = AnswerComposer()
+            list(composer.compose_events(self._compare(), AgentSession()))
+            list(composer.compose_events(other, AgentSession()))
+        assert client.return_value.chat.completions.create.call_count == 2
+
+    def test_model_failure_still_leaves_table_usable_without_inventing_a_verdict(self):
+        with patch("agent.composer.get_client") as client:
+            client.return_value.chat.completions.create.side_effect = RuntimeError("down")
+            events = list(AnswerComposer().compose_events(self._compare(), AgentSession()))
+        data = json.loads(events[-1]["data"])
+        assert "对比表" in data["opening"]
+        assert "points" not in data and "picks" not in data

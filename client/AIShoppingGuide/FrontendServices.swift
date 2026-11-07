@@ -504,6 +504,56 @@ final class RESTProductService: ProductServicing {
         return HomeSuggestions(categories: categories, hotSearches: hot)
     }
 
+    func fetchHomeFeed(userID: String = UserIdentity.defaultUserID) async -> HomeFeed? {
+        let url = baseURL.appendingPathComponent("home").appendingPathComponent(userID)
+        guard
+            let (data, response) = try? await session.data(from: url),
+            let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            return nil
+        }
+        let entries = (obj["entries"] as? [[String: Any]] ?? []).compactMap { raw -> HomeFeed.Entry? in
+            guard let title = raw["title"] as? String, let query = raw["query"] as? String else { return nil }
+            return HomeFeed.Entry(
+                title: title,
+                query: query,
+                imageURL: (raw["image_url"] as? String).flatMap(URL.init(string:))
+            )
+        }
+        return HomeFeed(isReturning: obj["returning"] as? Bool ?? false, entries: entries)
+    }
+
+    /// 提交对回答的评价。返回是否成功，失败时界面撤回选中状态。
+    func submitFeedback(
+        messageID: String,
+        rating: String,
+        sessionID: String,
+        query: String,
+        answer: String,
+        userID: String = UserIdentity.defaultUserID
+    ) async -> Bool {
+        var request = URLRequest(url: baseURL.appendingPathComponent("feedback"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body: [String: String] = [
+            "message_id": messageID,
+            "rating": rating,
+            "session_id": sessionID,
+            "user_id": userID,
+            "query": query,
+            "answer": answer,
+        ]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        guard
+            let (_, response) = try? await session.data(for: request),
+            let http = response as? HTTPURLResponse
+        else {
+            return false
+        }
+        return (200..<300).contains(http.statusCode)
+    }
+
     private func request<T: Decodable>(_ type: T.Type, url: URL) async throws -> T {
         let data: Data
         let response: URLResponse
@@ -862,6 +912,14 @@ final class RESTAgentService: AgentServicing {
             case "summary":
                 if let text = obj["text"] as? String, !text.isEmpty {
                     continuation.yield(AgentStreamEventPayload(type: .summary, textDelta: text))
+                }
+            case "point":
+                if let text = obj["text"] as? String, !text.isEmpty {
+                    continuation.yield(AgentStreamEventPayload(type: .comparePoint, textDelta: text))
+                }
+            case "pick":
+                if let text = obj["text"] as? String, !text.isEmpty {
+                    continuation.yield(AgentStreamEventPayload(type: .comparePick, textDelta: text))
                 }
             case "followup":
                 if let text = obj["text"] as? String, !text.isEmpty {
@@ -1250,6 +1308,7 @@ extension Product {
             skus: skus,
             reviews: reviews
         )
+        self.faqs = payload.faqs
     }
 }
 

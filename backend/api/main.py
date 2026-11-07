@@ -36,6 +36,7 @@ from agent import memory_service
 from api import products as products_router
 from store.cart_store import CartNotFoundError, CartStore
 from store.order_store import OrderStore
+from store.feedback_store import FeedbackStore
 from store.session_store import SqliteSessionStore
 from store.user_memory_store import UserMemoryStore, UserPreference
 
@@ -119,6 +120,15 @@ class PreferenceRequest(BaseModel):
     avoid_terms: list[str] | None = None  # 不传表示保持不变：只有确认过的忌讳才会进来
 
 
+class AnswerFeedbackRequest(BaseModel):
+    message_id: str = Field(..., description="这条回答在客户端的 ID，同一条重复提交时覆盖")
+    rating: str = Field(..., description="up / down")
+    session_id: str | None = None
+    user_id: str | None = None
+    query: str = Field("", description="这条回答对应的用户问题")
+    answer: str = Field("", description="这条回答的文字内容")
+
+
 class PreferenceUndoRequest(BaseModel):
     undo_token: str = Field(..., description="memory_update 事件返回的撤销 token")
 
@@ -184,35 +194,68 @@ def _get_agent() -> Any:
     return _agent
 
 
+class _StreamTurn:
+    """一个正在跑的流式回合。"""
+
+    def __init__(self, query: str, replay: list[str]) -> None:
+        self.query = query
+        # 卡住被放弃的旧回合的问题。它们没来得及保存，新回合要补进历史才能接上需求。
+        self.replay = replay
+        self.finished = threading.Event()
+        self.abandoned = False
+        self.saving = False
+
+
 class _SessionTurnGate:
     """同一会话同时只跑一个流式回合。
 
-    用户点停止后马上发新消息时，旧回合可能还在等工具返回。会话是整段读写的，
-    不等旧回合保存完就加载，两边会互相覆盖。等待有上限，异常遗留的回合不会卡死新请求。
+    用户边跑边改时，旧回合可能还卡在模型或工具调用里。会话是整段读写的，
+    不等旧回合保存完就加载，两边会互相覆盖。但也不能让用户一直等：
+    超过等待时间就放弃旧回合，它不再保存，它的问题交给新回合补进历史。
     只在进程内生效，多 Worker 部署需要换成 Redis 锁。
     """
 
-    def __init__(self, wait_seconds: float = 6.0) -> None:
+    def __init__(self, wait_seconds: float = 3.0, save_grace_seconds: float = 2.0) -> None:
         self._wait_seconds = wait_seconds
+        self._save_grace_seconds = save_grace_seconds
         self._lock = threading.Lock()
-        self._active: dict[str, threading.Event] = {}
+        self._active: dict[str, _StreamTurn] = {}
 
-    def begin(self, session_id: str | None) -> threading.Event | None:
+    def begin(self, session_id: str | None, query: str = "") -> _StreamTurn | None:
         if not session_id:
             return None
         with self._lock:
             prior = self._active.get(session_id)
-        if prior is not None and not prior.wait(self._wait_seconds):
-            logger.warning("session %s: previous turn still running, starting anyway", session_id)
-        turn = threading.Event()
+        replay: list[str] = []
+        if prior is not None and not prior.finished.wait(self._wait_seconds):
+            with self._lock:
+                is_saving = prior.saving
+                if not is_saving:
+                    prior.abandoned = True
+                    replay = [*prior.replay, prior.query]
+            if is_saving:
+                prior.finished.wait(self._save_grace_seconds)
+            else:
+                logger.warning("session %s: abandoned a stuck turn for the new one", session_id)
+        turn = _StreamTurn(query, replay)
         with self._lock:
             self._active[session_id] = turn
         return turn
 
-    def finish(self, session_id: str | None, turn: threading.Event | None) -> None:
+    def claim_save(self, turn: _StreamTurn | None) -> bool:
+        """旧回合保存前调用。已被放弃的回合不能再写会话，否则会盖掉新回合。"""
+        if turn is None:
+            return True
+        with self._lock:
+            if turn.abandoned:
+                return False
+            turn.saving = True
+            return True
+
+    def finish(self, session_id: str | None, turn: _StreamTurn | None) -> None:
         if not session_id or turn is None:
             return
-        turn.set()
+        turn.finished.set()
         with self._lock:
             if self._active.get(session_id) is turn:
                 del self._active[session_id]
@@ -498,9 +541,14 @@ def chat_stream(req: ChatRequest, request: Request) -> StreamingResponse:
 
     客户端用 `EventSource` 或 `requests.get(stream=True)` 消费。
     """
-    turn = _turn_gate.begin(req.session_id)
+    turn = _turn_gate.begin(req.session_id, req.query or "（发了一张图片）")
     try:
         session = _sessions.get_or_create(req.session_id)
+        if turn is not None and turn.replay:
+            from agent.orchestrator import record_abandoned_turn
+
+            for abandoned_query in turn.replay:
+                record_abandoned_turn(session, abandoned_query)
         _attach_user_memory(session, req.user_id)
         agent = _get_agent()
         image = _resolve_image(req)
@@ -526,6 +574,8 @@ def chat_stream(req: ChatRequest, request: Request) -> StreamingResponse:
             else:
                 stream = agent.handle_turn_stream(req.query, session)
             for ev in stream:
+                if turn is not None and turn.abandoned:
+                    break
                 # done 之前抽取本轮偏好更新并推送 memory_update（前端横幅依赖）
                 if ev["type"] == "done":
                     for memory_event in _apply_realtime_preference_updates(req.query, session):
@@ -548,7 +598,8 @@ def chat_stream(req: ChatRequest, request: Request) -> StreamingResponse:
             try:
                 if stream is not None:
                     stream.close()
-                _sessions.save(session)
+                if _turn_gate.claim_save(turn):
+                    _sessions.save(session)
             finally:
                 _turn_gate.finish(req.session_id, turn)
 
@@ -770,6 +821,78 @@ def generate_title(req: TitleRequest) -> dict[str, str]:
     return {"title": title}
 
 
+_feedback = FeedbackStore()
+
+
+@app.post("/feedback")
+def submit_feedback(req: AnswerFeedbackRequest) -> dict[str, str]:
+    """回答下方的点赞点踩。存下问题和回答，之后可以回流成评测样本。"""
+    if req.rating not in {"up", "down"}:
+        raise HTTPException(status_code=400, detail="rating 只能是 up 或 down")
+    if not req.message_id.strip():
+        raise HTTPException(status_code=400, detail="message_id 不能为空")
+    _feedback.save(
+        message_id=req.message_id.strip(),
+        rating=req.rating,
+        session_id=req.session_id,
+        user_id=req.user_id,
+        query=req.query,
+        answer=req.answer,
+    )
+    return {"status": "ok"}
+
+
+@app.get("/home/{user_id}")
+def get_home(user_id: str, request: Request) -> dict[str, Any]:
+    """空态首页的个性化入口：用户最近在看的品类，每条配一张真实商品图。"""
+    from store.product_store import ProductStore
+
+    clean_user_id = _memory_user(user_id)
+    recent = memory_service.recent_interests(_user_memory, clean_user_id)
+    store = ProductStore()
+    image_base = products_router.image_base_url(request)
+    entries = []
+    for interest in recent["interests"]:
+        detail = _home_entry_product(store, interest)
+        if detail is None:
+            continue  # 品类已下架：点了也搜不到，不展示
+        entries.append({
+            "title": f"接着看{interest['label']}",
+            "query": f"推荐{interest['label']}",
+            "image_url": products_router.resolve_image_url(detail, image_base),
+        })
+    return {"returning": recent["returning"], "entries": entries}
+
+
+def _home_entry_product(store: Any, interest: dict[str, Any]) -> Any:
+    if interest.get("product_id"):
+        detail = store.get_product_detail(interest["product_id"])
+        if detail is not None:
+            return detail
+    column, value = (
+        ("sub_category", interest["sub_category"])
+        if interest.get("sub_category")
+        else ("category", interest.get("category"))
+    )
+    if not value:
+        return None
+    with store.connect() as conn:
+        row = conn.execute(
+            f"SELECT product_id FROM products WHERE status='active' AND {column} = ? LIMIT 1",
+            (value,),
+        ).fetchone()
+    return store.get_product_detail(row["product_id"]) if row else None
+
+
+def _hot_search_term(brand: str, sub_category: str) -> str:
+    """拼热搜词。中英混排的品牌（"Apple 苹果"）只取一段；纯英文品牌（"The Ordinary"）不能截断。"""
+    parts = brand.split()
+    has_chinese = any("\u4e00" <= char <= "\u9fff" for char in brand)
+    if len(parts) > 1 and has_chinese:
+        return f"{parts[0]}{sub_category}"
+    return f"{brand} {sub_category}" if parts[-1:] and parts[-1].isascii() else f"{brand}{sub_category}"
+
+
 @app.get("/suggestions")
 def get_suggestions() -> dict[str, Any]:
     """空态首页推荐：分类入口 + 动态热门搜索，全部源自真实商品库。
@@ -812,9 +935,7 @@ def get_suggestions() -> dict[str, Any]:
     # 都来自真实库存，点击必有结果。
     hot: list[str] = []
     for brand, sub in pairs[:5]:
-        # 品牌名可能带中英混排（"Apple 苹果"），取首段更自然
-        brand_short = brand.split()[0]
-        hot.append(f"{brand_short}{sub}")
+        hot.append(_hot_search_term(brand, sub))
     hot += subcats[:5]
     random.shuffle(hot)
 

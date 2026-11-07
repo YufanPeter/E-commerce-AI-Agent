@@ -138,15 +138,11 @@ class CompareTool:
             ],
         )
 
-        # 对话里给一句中性引导（不再给选购建议），让用户看下面的对比表自行判断。
-        titles = "」「".join(p["title"][:14] for p in comparison["products"])
-        narrative = f"已为你对比「{titles}」，下面是各维度对照，可按自己看重的方面来选～"
-
+        # 表本身零 LLM、立刻可用；差异解读和选购建议交给 composer 流式补上。
         return ToolResult(
             tool_name=self.name,
-            payload={"action": "compare", "comparison": comparison},
-            narrative_override=narrative,
-            needs_composer=False,
+            payload={"action": "compare", "query": query, "comparison": comparison},
+            composer_hint="用户在对比这几款商品，请解读差异并给出选购建议。",
         )
 
     def _resolve_targets(

@@ -128,7 +128,8 @@ _TOOL_WORKING_HINT = {
 _STEP_QUERY_MAX_CHARS = 24
 # 口语开头对"正在搜索 XX"这句话没有信息量，去掉后只留要找的东西
 _STEP_QUERY_FILLER_RE = re.compile(
-    r"^(你好|您好|请|麻烦)?(帮我|给我|我想要|我想|我要|想要)?(推荐|找|搜索|搜|看看|买)?(一下|几款|一些|一款|几个)?"
+    r"^(你好|您好|请|麻烦)?((?:帮我|给我)(?![妈爸爷奶姥外老女儿孩家])|我想要|我想|我要|想要)?"
+    r"(推荐|找|搜索|搜|看看|买)?(一下|几款|一些|一款|几个)?"
 )
 
 # 各工具对应的"生成最终回复中"提示文案
@@ -236,6 +237,21 @@ class Agent:
             return
 
         session.add_user(query)
+
+        if _cancels_interrupted_turn(query, session):
+            decision = IntentDecision(
+                tool="clarify",
+                rewritten_query=query,
+                confidence="high",
+                reasoning="user cancelled the interrupted turn",
+            )
+            result = ToolResult(tool_name="clarify", payload={}, narrative_override=_CANCEL_ACK, needs_composer=False)
+            session.add_assistant(_CANCEL_ACK)
+            yield {"type": "meta", "data": {"decision": decision.to_dict(), "trace": {"timings": {}}}}
+            yield {"type": "tool_result", "data": result.to_dict()}
+            yield {"type": "token", "data": _CANCEL_ACK}
+            yield {"type": "done", "data": {"timings": trace["timings"], "narrative": _CANCEL_ACK}}
+            return
 
         # ① 路由（同时后台预取 query 解析 / 多需求拆解，和 router 并行）
         yield {"type": "status", "data": {"phase": "routing", "message": _THINKING_STEP}}
@@ -744,6 +760,33 @@ def _compose_step_text(tool_result: ToolResult) -> str:
 
 _INTERRUPTED_EMPTY_NOTE = "（用户中断了这轮回答，尚未给出结果）"
 _INTERRUPTED_TEXT_SUFFIX = "（回答被用户中断）"
+# 打断之后只说了"算了"：整句都是取消的话才算，"算了，看看手机"还要继续处理。
+_CANCEL_ONLY_RE = re.compile(
+    r"^(?:算了|不要了?|不用了?|不看了?|不买了?|不找了?|先不[看要用买找]了?|别[找搜看]了|取消|没事了?|吧|啊|呀|哈)+$"
+)
+_CANCEL_ACK = "好的，先不看了。想找别的随时告诉我。"
+
+
+def record_abandoned_turn(session: AgentSession, query: str) -> None:
+    """旧回合卡住被放弃时没有保存，把它的问题补进历史，下一句"只要便宜的"才接得上。"""
+    session.add_user(query)
+    session.add_assistant(_INTERRUPTED_EMPTY_NOTE)
+
+
+def _cancels_interrupted_turn(query: str, session: AgentSession) -> bool:
+    """用户打断上一轮后说不要了。这时反问想看什么品类是答非所问。调用时本轮问题已入历史。"""
+    if not _CANCEL_ONLY_RE.match(re.sub(r"[\s，,。.！!~～、]", "", query)):
+        return False
+    if len(session.history) < 2 or session.history[-2].role != "assistant":
+        return False
+    previous = session.history[-2].content
+    return (
+        previous == _INTERRUPTED_EMPTY_NOTE
+        or previous.endswith(_INTERRUPTED_TEXT_SUFFIX)
+        or '"interrupted": true' in previous
+    )
+
+
 
 
 class _TurnProgress:

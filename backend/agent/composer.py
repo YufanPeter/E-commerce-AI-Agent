@@ -49,6 +49,8 @@ _ITEM_TAG = "商品"
 _FOLLOWUP_TAG = "追问"
 _GROUP_TAG = "分组"
 _SUMMARY_TAG = "总结"
+_POINT_TAG = "要点"
+_PICK_TAG = "建议"
 
 
 SYSTEM_PROMPT = """你是一位友好、专业的电商导购助手，说话像门店里真正懂行的导购，而不是念商品参数的机器人。
@@ -81,6 +83,30 @@ SYSTEM_PROMPT = """你是一位友好、专业的电商导购助手，说话像�
 - 若 payload.hits 为空：开场白坦诚告知未找到并给出具体放宽建议（提高预算到 X、放宽品牌等），不输出商品行，追问给放宽方向。
 - 若 payload 里有 groups（用户一次提了多个需求，如"衣服和防晒"）：开场白里分别点明各需求，商品行按组的顺序依次输出，先输出一行 `分组｜<需求名>` 再跟该组的商品行。
 - 若 hint 提到图片搜索，开场白要说明这是根据图片找到的相似/同类商品。"""
+
+
+COMPARE_SYSTEM_PROMPT = """你是一位懂行的电商导购。用户正在对比几款商品，页面上已经展示了完整的对比表（payload.comparison），你负责告诉用户这些差异在实际使用中意味着什么、该怎么选。
+
+输出格式（必须严格遵守，这是机器解析的行协议）：
+- 逐行输出，每行一条记录，字段之间用全角竖线「｜」分隔，不要输出任何其他文字、不要 Markdown、不要 JSON。
+- 第 1 行：`开场｜<一句话>`，说明对比的是哪几款、按用户的什么需求比。
+- 接着 2-4 行差异要点：`要点｜<维度>：<这个差异在使用中意味着什么>`，每行 15-40 字。
+- 接着 2-3 行选购建议：`建议｜<什么情况>选<哪款的简称>，<理由>`，每行 15-40 字。
+- 最后 3-4 行追问：`追问｜<用户视角的一句话>`，用祈使口吻（推荐/找/看看/对比…），点击后会直接发送。
+
+内容要求：
+- 只依据 payload.comparison 里的真实数据，表里没有的参数绝不编造。表里显示缺失或"未提及"的维度不要下结论。
+- 不要逐行复述表格，要说清差异带来的实际影响。
+- 不要说"哪款最好"，要说"谁适合哪款"。商品名用简短的品牌或型号称呼。
+
+示例：
+开场｜对比了 T68 和 T63 两款蓝牙青轴键盘，都符合你 200 元以内的预算
+要点｜按键：T68 多 5 个键，方向键不用再按 Fn 组合
+要点｜续航：T68 续航明显更长，背光常开时充电也不频繁
+建议｜想要续航长、按键全，选 T68
+建议｜想要体积最小、带着走，选 T63
+追问｜对比一下热插拔的青轴键盘
+追问｜找 75% 配列的键盘"""
 
 
 PRODUCT_DETAIL_SYSTEM_PROMPT = """你是一位专业的单品导购问答助手。用户已经指向了某一款商品，你的任务是基于 payload.product 和 payload.evidence 回答用户追问。
@@ -197,10 +223,27 @@ def _trim_hit_for_llm(h: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _trim_comparison_for_llm(comparison: dict[str, Any]) -> dict[str, Any]:
+    """对比表只留文字内容，图片、可切换规格列表这些对写总结没有用。"""
+    products = []
+    for product in comparison.get("products") or []:
+        sku = product.get("sku") or {}
+        products.append({
+            "title": product.get("title"),
+            "brand": product.get("brand"),
+            "sku": sku.get("label"),
+            "price": sku.get("price_display") or product.get("price"),
+        })
+    rows = [{"label": row.get("label"), "values": row.get("values")} for row in comparison.get("rows") or []]
+    return {"title": comparison.get("title"), "products": products, "rows": rows}
+
+
 def _trim_payload_for_llm(payload: dict[str, Any]) -> dict[str, Any]:
     trimmed: dict[str, Any] = {
         "query": payload.get("query"),
     }
+    if isinstance(payload.get("comparison"), dict):
+        trimmed["comparison"] = _trim_comparison_for_llm(payload["comparison"])
     if payload.get("product"):
         trimmed["product"] = payload.get("product")
     if payload.get("focus_aspect"):
@@ -260,8 +303,14 @@ def _build_messages(tool_result: ToolResult) -> list[dict[str, str]]:
     if tool_result.composer_hint:
         user_msg_parts.append(f"hint: {tool_result.composer_hint}")
     plain = _is_plain_text_tool(tool_result)
-    system_prompt = PRODUCT_DETAIL_SYSTEM_PROMPT if plain else SYSTEM_PROMPT
-    few_shot = [] if plain else _FEW_SHOT
+    is_compare = isinstance(tool_result.payload.get("comparison"), dict)
+    if plain:
+        system_prompt = PRODUCT_DETAIL_SYSTEM_PROMPT
+    elif is_compare:
+        system_prompt = COMPARE_SYSTEM_PROMPT
+    else:
+        system_prompt = SYSTEM_PROMPT
+    few_shot = [] if plain or is_compare else _FEW_SHOT
     return [
         {"role": "system", "content": system_prompt},
         *few_shot,
@@ -358,6 +407,10 @@ def _parse_protocol_line(line: str) -> dict[str, Any] | None:
         return {"part": "group", "label": SEP.join(parts[1:]).strip()}
     if tag == _SUMMARY_TAG:
         return {"part": "summary", "text": SEP.join(parts[1:]).strip()}
+    if tag == _POINT_TAG:
+        return {"part": "point", "text": SEP.join(parts[1:]).strip()}
+    if tag == _PICK_TAG:
+        return {"part": "pick", "text": SEP.join(parts[1:]).strip()}
     return None
 
 
@@ -377,6 +430,8 @@ class _ProtocolStreamParser:
         self.followup: list[str] = []
         self.groups: list[str] = []
         self.summary = ""
+        self.points: list[str] = []
+        self.picks: list[str] = []
         self._current_group = ""          # 后续商品行归属的分区
         self.protocol_lines = 0           # 成功解析的协议行数（0 → 模型没按协议输出）
         self.raw = ""
@@ -474,12 +529,22 @@ class _ProtocolStreamParser:
                 return []
             self.summary = parsed["text"]
             return [{"part": "summary", "text": self.summary}]
+        if part in ("point", "pick"):
+            bucket = self.points if part == "point" else self.picks
+            if not parsed["text"] or parsed["text"] in bucket:
+                return []
+            bucket.append(parsed["text"])
+            return [{"part": part, "text": parsed["text"]}]
         return []
 
     def to_structured(self) -> dict[str, Any]:
         data: dict[str, Any] = {"opening": self.opening, "items": self.items, "followup": self.followup}
         if self.summary:
             data["summary"] = self.summary
+        if self.points:
+            data["points"] = self.points
+        if self.picks:
+            data["picks"] = self.picks
         return data
 
     def to_json(self) -> str:
@@ -521,6 +586,10 @@ def _structured_from_json(text: str) -> dict[str, Any] | None:
     structured: dict[str, Any] = {"opening": str(data.get("opening") or ""), "items": items, "followup": followup}
     if data.get("summary"):
         structured["summary"] = str(data["summary"])
+    for key in ("points", "picks"):
+        values = [str(x) for x in (data.get(key) or []) if str(x).strip()]
+        if values:
+            structured[key] = values
     return structured
 
 
@@ -538,6 +607,10 @@ def _events_from_structured(data: dict[str, Any]) -> list[dict[str, Any]]:
             current_group = group
             events.append({"part": "group", "label": group})
         events.append({"part": "item", "index": index, **item})
+    for text in data.get("points") or []:
+        events.append({"part": "point", "text": text})
+    for text in data.get("picks") or []:
+        events.append({"part": "pick", "text": text})
     if data.get("summary"):
         events.append({"part": "summary", "text": data["summary"]})
     for index, text in enumerate(data.get("followup") or []):
@@ -555,6 +628,14 @@ def _fallback_description(hit: dict[str, Any], title: str) -> str:
 
 def _fallback_structured(tool_result: ToolResult) -> dict[str, Any]:
     payload = tool_result.payload or {}
+    comparison = payload.get("comparison")
+    if isinstance(comparison, dict):
+        # 模型挂了也有对比表可看，这里不代替模型下结论
+        return {
+            "opening": "已为你列好对比表，可以按自己看重的方面来选",
+            "items": [],
+            "followup": ["推荐更平价的选择", "看看同类的其他商品"],
+        }
     hits = payload.get("products") or payload.get("hits") or []
     items = []
     for hit in hits[:5]:
@@ -661,6 +742,7 @@ class AnswerComposer:
             {"type": "narrative", "data": {"part": "opening_end", "text": "..."}}
             {"type": "narrative", "data": {"part": "group", "label": "..."}}
             {"type": "narrative", "data": {"part": "item", "index": 0, "productId": "...", "description": "...", "group": "..."}}
+            {"type": "narrative", "data": {"part": "point" | "pick", "text": "..."}}  # 对比才有
             {"type": "narrative", "data": {"part": "summary", "text": "..."}}
             {"type": "narrative", "data": {"part": "followup", "index": 0, "text": "..."}}
             {"type": "token", "data": "一段纯文本"}            # product_detail / override

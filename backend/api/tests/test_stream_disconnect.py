@@ -159,6 +159,86 @@ def test_turn_gate_gives_up_waiting_on_a_stuck_turn():
     assert gate._active["s"] is second
 
 
+def test_abandoned_turn_hands_its_question_to_the_next_one_and_cannot_save():
+    from api.main import _SessionTurnGate
+
+    gate = _SessionTurnGate(wait_seconds=0.01)
+    stuck = gate.begin("s", "推荐跑鞋")
+    second = gate.begin("s", "只要便宜的")
+    assert second.replay == ["推荐跑鞋"]
+    assert stuck.abandoned
+    assert gate.claim_save(stuck) is False
+    assert gate.claim_save(second) is True
+
+
+def test_consecutive_abandoned_turns_keep_every_question():
+    from api.main import _SessionTurnGate
+
+    gate = _SessionTurnGate(wait_seconds=0.01)
+    gate.begin("s", "推荐跑鞋")
+    gate.begin("s", "只要便宜的")
+    assert gate.begin("s", "要白色的").replay == ["推荐跑鞋", "只要便宜的"]
+
+
+def test_turn_being_saved_is_not_abandoned():
+    from api.main import _SessionTurnGate
+
+    gate = _SessionTurnGate(wait_seconds=0.01, save_grace_seconds=0.01)
+    saving = gate.begin("s", "推荐跑鞋")
+    assert gate.claim_save(saving) is True
+    assert gate.begin("s", "只要便宜的").replay == []
+    assert not saving.abandoned
+
+
+def test_stuck_turn_does_not_overwrite_the_amendment(live_server):
+    """旧回合卡在工具里时用户改了需求：新回合立刻开始并接上原问题，旧回合晚到也不能写会话。"""
+    base_url, store, api_main = live_server
+    api_main._turn_gate = api_main._SessionTurnGate(wait_seconds=0.1)
+    session_id = "amend-test"
+    release = threading.Event()
+    agent = api_main._get_agent()
+    original_run = agent._tools["recommend"].run
+
+    calls = []
+
+    def run(query, session, slots):
+        calls.append(query)
+        if len(calls) == 1:  # 只卡第一个回合
+            release.wait(timeout=5)
+        return original_run(query, session, slots)
+
+    agent._tools["recommend"].run = run
+    monkey_agent = lambda: agent  # noqa: E731
+    with patch.object(api_main, "_get_agent", monkey_agent), \
+            patch("agent.intent_router.get_client") as rc, patch("agent.composer.get_client") as cc:
+        rc.return_value.chat.completions.create.return_value = _router_resp()
+        cc.return_value.chat.completions.create.return_value = [_chunk("开场｜新结果\n")]
+
+        with httpx.Client(timeout=10) as client:
+            with client.stream(
+                "POST", f"{base_url}/chat/stream", json={"query": "推荐跑鞋", "session_id": session_id}
+            ) as response:
+                for line in response.iter_lines():
+                    if '"phase": "tool"' in line or "正在搜索" in line:
+                        break
+            stuck = api_main._turn_gate._active[session_id]
+            with client.stream(
+                "POST", f"{base_url}/chat/stream", json={"query": "只要便宜的", "session_id": session_id}
+            ) as response:
+                for _ in response.iter_lines():
+                    pass
+
+        # 新回合已经答完，这时旧回合才从工具里出来
+        assert stuck.abandoned
+        release.set()
+        assert stuck.finished.wait(timeout=5), "abandoned turn never finished"
+
+    history = store.get_or_create(session_id).history
+    assert [m.content for m in history if m.role == "user"] == ["推荐跑鞋", "只要便宜的"]
+    assert [m.role for m in history] == ["user", "assistant", "user", "assistant"]
+    assert "中断" in history[1].content
+
+
 def test_turn_gate_ignores_requests_without_session_id():
     from api.main import _SessionTurnGate
 
