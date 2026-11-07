@@ -1,1 +1,1 @@
-"""SQLite 商品库导入与访问工具。"""
+"""SQLite product-catalog import and access utilities."""

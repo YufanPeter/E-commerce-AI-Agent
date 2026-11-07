@@ -1,7 +1,7 @@
-"""多轮上下文细化的回归测试。
+"""Regression tests for refining multi-turn context.
 
-核心场景：上一轮"推荐跑鞋"，本轮只说品牌"Adidas"，不能退化成"泛搜 Adidas"，
-而要理解为"Adidas 跑鞋"——品类被继承、品牌被叠加。
+When a user names only a brand after asking for running shoes, the next query must inherit the
+product category instead of degrading to a generic brand search.
 """
 
 from __future__ import annotations
@@ -27,10 +27,10 @@ def test_merge_inherits_category_when_only_brand_given():
     merged = cur.merge_base(base)
 
     assert merged.brand_include == ["Adidas"]
-    assert merged.category == "服饰运动"          # 继承
-    assert merged.sub_category == "跑鞋"          # 继承
+    assert merged.category == "服饰运动"          # Inherited
+    assert merged.sub_category == "跑鞋"          # Inherited
     assert merged.needs_clarification is False
-    # 向量检索文本同时含品牌 + 上一轮品类
+    # Vector-retrieval text should include both the brand and the previous category.
     assert "Adidas" in merged.retrieval_query
     assert "跑鞋" in merged.retrieval_query
 
@@ -43,7 +43,7 @@ def test_merge_brand_replaces_not_accumulates():
 
     merged = cur.merge_base(base)
 
-    assert merged.brand_include == ["Nike"]       # 替换，而非 [Adidas, Nike]
+    assert merged.brand_include == ["Nike"]       # Replace rather than accumulate brands.
     assert merged.category == "服饰运动"
 
 
@@ -56,7 +56,7 @@ def test_merge_price_refine_keeps_prior_constraints():
     merged = cur.merge_base(base)
 
     assert merged.max_price == 500.0
-    assert merged.brand_include == ["Adidas"]     # 价格细化不该清掉品牌
+    assert merged.brand_include == ["Adidas"]     # A price refinement must not clear the brand.
     assert merged.sub_category == "跑鞋"
 
 
@@ -73,17 +73,17 @@ def test_merge_negative_and_soft_terms_accumulate():
 
 
 def test_from_dict_ignores_derived_hard_filters():
-    """to_dict() 会塞入派生的 hard_filters，from_dict 必须能宽容还原。"""
+    """Allow `from_dict` to restore data containing derived `hard_filters` from `to_dict`."""
     pq = ParsedQuery(original_query="跑鞋", category="服饰运动")
     restored = ParsedQuery.from_dict(pq.to_dict())
     assert restored == pq
 
 
-# --------------------------- RefineTool 注入 base ---------------------------
+# --------------------------- RefineTool base injection ---------------------------
 
 
 class _SpyRecommend:
-    """记录 RefineTool 透传给 recommend 的 slots，验证 base 被正确注入。"""
+    """Record slots passed from RefineTool to recommendations to verify base injection."""
 
     def __init__(self) -> None:
         self.received_slots: dict[str, Any] | None = None
@@ -111,18 +111,18 @@ def test_refine_rebuilds_base_from_structured_memory():
 
 
 def test_refine_without_memory_falls_back_to_plain_recommend():
-    session = AgentSession()  # 无任何上一轮记忆
+    session = AgentSession()  # No previous-turn memory.
 
     spy = _SpyRecommend()
     RefineTool(recommend=spy).run("Adidas", session, slots={})
 
-    # 没有 base 时不注入 base_parsed，退回普通 recommend
+    # Without a base, do not inject `base_parsed`; fall back to a normal recommendation.
     assert "base_parsed" not in (spy.received_slots or {})
 
 
 def test_refine_tolerates_legacy_string_memory():
     session = AgentSession()
-    session.set("last_parsed_query", "跑鞋")  # 旧版本曾存字符串
+    session.set("last_parsed_query", "跑鞋")  # Older versions stored a string.
 
     spy = _SpyRecommend()
     RefineTool(recommend=spy).run("Adidas", session, slots={})

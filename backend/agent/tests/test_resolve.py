@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-"""共享分层 resolver（resolve_one / resolve_many）的单元测试。
+"""Unit tests for the shared layered resolvers `resolve_one` and `resolve_many`.
 
-验证：① 确定性捷径（序号/名称唯一）不调用 LLM；② 歧义时才落 LLM；
-③ LLM 不可用安全降级；④ resolve_many 序号+名称合并并按 k 截断。
-所有 LLM 都被 monkeypatch，测试 100% 离线、确定性。
+Deterministic ordinal and unique-name paths must avoid the LLM, ambiguous cases may use it,
+unavailable LLM calls must degrade safely, and multi-resolution must merge then truncate to K.
+Every LLM call is monkeypatched, so the tests are offline and deterministic.
 """
 
 import sys
@@ -26,7 +26,7 @@ _HITS = [
 
 
 def _no_llm(monkeypatch):
-    """禁用 LLM：任何走到 LLM 的路径都返回空，便于断言"未触发/降级"。"""
+    """Disable the LLM so any path reaching it returns empty for fallback assertions."""
     monkeypatch.setattr(rv, "llm_pick_candidate", lambda *a, **k: None)
     monkeypatch.setattr(rv, "llm_pick_candidates", lambda *a, **k: [])
 
@@ -34,7 +34,7 @@ def _no_llm(monkeypatch):
 # --------------------------- resolve_one ---------------------------
 
 def test_resolve_one_ordinal_no_llm(monkeypatch):
-    # 序号唯一命中 → 直接返回，绝不调用 LLM
+    # A unique ordinal match should return directly without calling the LLM.
     called = {"n": 0}
     monkeypatch.setattr(rv, "llm_pick_candidate", lambda *a, **k: called.__setitem__("n", called["n"] + 1))
     assert resolve_one("第二个", _HITS) == 1
@@ -44,13 +44,13 @@ def test_resolve_one_ordinal_no_llm(monkeypatch):
 def test_resolve_one_unique_name_no_llm(monkeypatch):
     called = {"n": 0}
     monkeypatch.setattr(rv, "llm_pick_candidate", lambda *a, **k: called.__setitem__("n", called["n"] + 1))
-    # 只有 p3 含"小米" → 名称唯一命中
+    # Only p3 contains the named brand, producing a unique name match.
     assert resolve_one("小米那款", _HITS) == 2
     assert called["n"] == 0
 
 
 def test_resolve_one_ambiguous_falls_to_llm(monkeypatch):
-    # "华为耳机"：p1、p2 都含"华为" → 歧义 → 落 LLM；LLM 按子品类选 p1
+    # The shared brand is ambiguous, so the LLM selects p1 by subcategory.
     def fake_pick(query, candidates, timeout=5.0):
         for i, c in enumerate(candidates):
             if "真无线耳机" in str(c.get("sub_category", "")):
@@ -63,7 +63,7 @@ def test_resolve_one_ambiguous_falls_to_llm(monkeypatch):
 
 def test_resolve_one_llm_unavailable_returns_none(monkeypatch):
     _no_llm(monkeypatch)
-    # 歧义且 LLM 不可用 → None（交调用方反问）
+    # Ambiguity with no LLM returns None so the caller can clarify.
     assert resolve_one("华为", _HITS) is None
 
 
@@ -82,12 +82,12 @@ def test_resolve_many_two_ordinals_no_llm(monkeypatch):
 
 def test_resolve_many_merges_and_truncates(monkeypatch):
     _no_llm(monkeypatch)
-    # "小米"名称命中 p3；序号"第一个"命中 p1 → 合并 [0,2]，k=2 截断
+    # Merge the name match for p3 with the ordinal match for p1, then truncate to K.
     assert resolve_many("第一个和小米", _HITS, k=2) == [0, 2]
 
 
 def test_resolve_many_llm_fallback_when_short(monkeypatch):
-    # 规则只凑到 1 个 → LLM 补齐到 2
+    # When rules find only one product, let the LLM complete the pair.
     def fake_many(query, candidates, k=2, timeout=5.0):
         return [0, 1]
 

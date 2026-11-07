@@ -1,7 +1,7 @@
-# 本地开发：在仓库根目录执行
+# Local development: run from the repository root.
 #   docker compose -f deploy/docker-compose.yml up --build
 #
-# 火山云 ECS 生产：仅使用已加载/拉取的镜像，不触发 build
+# Production: use an already loaded or pulled image without triggering a build.
 #   IMAGE_REF=cartpilot-backend:<tag> docker compose -f deploy/docker-compose.prod.yml up -d
 
 services:

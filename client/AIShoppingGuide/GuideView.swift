@@ -13,14 +13,14 @@ private struct ComposerHeightPreferenceKey: PreferenceKey {
     }
 }
 
-/// 聊天滚动几何快照：是否接近底部 + 内容是否真正可滚动（超过一屏）。
+/// Chat scroll snapshot indicating whether the view is near the bottom and whether content exceeds one screen.
 private struct ScrollSnapshot: Equatable {
     let isNearBottom: Bool
     let isScrollable: Bool
 }
 
-/// 进入对比页的上下文：携带候选商品（当前这条 AI 消息推荐的商品），
-/// 对比页内用下拉菜单从中挑选 2-3 件进行对比。
+/// Context for opening the comparison screen with products recommended by the current AI message.
+/// The comparison screen lets users select two or three candidates from dropdown menus.
 struct ComparisonContext: Identifiable, Hashable {
     let id = UUID()
     let candidates: [Product]
@@ -53,7 +53,7 @@ struct GuideView: View {
     @State private var isNearChatBottom = true
     @State private var isUserInteractingWithChat = false
     @State private var shouldShowJumpToLatest = false
-    /// 内容是否超过视口（真正可滚动）。只有可滚动且不在底部时才显示"跳到最新"。
+    /// Whether content exceeds the viewport. The jump-to-latest control appears only when scrolling is possible and not at the bottom.
     @State private var isChatScrollable = false
     /// 对话区高度和最新问题气泡的高度，用来算最后一条回答的最小高度。
     @State private var chatViewportHeight: CGFloat = 0
@@ -66,7 +66,7 @@ struct GuideView: View {
     @State private var showPhotoPicker = false
     @State private var showCamera = false
     @State private var chatListIdentity = UUID()
-    /// 待发送的图片草稿：选/拍图后先挂在输入区，待用户配上文字一起发送；nil 表示无附件。
+    /// Pending image attachment shown in the input area until it is sent with optional text; nil means no attachment.
     @State private var pendingImageData: Data?
     @State private var pendingMemoryUpdate: MemoryUpdatePayload?
     @State private var isVoiceOverlayPresented = false
@@ -97,7 +97,7 @@ struct GuideView: View {
     private let streamRetryBaseDelay: UInt64 = 650_000_000
     private let streamRetryMaxAttempts = 3
 
-    /// 示例 query 池：每次空态出现时随机取 4 条，避免每次都是同样几个。
+    /// Example-query pool from which four unique items are sampled for each empty state.
     private static let examplePool = [
         "适合油皮的洗面奶", "200 元内蓝牙耳机", "轻量跑鞋", "不要含酒精的防晒",
         "通勤双肩包推荐", "敏感肌身体乳", "适合送女友的香水", "300 元内机械键盘",
@@ -105,7 +105,7 @@ struct GuideView: View {
         "降噪头戴式耳机", "夏天透气运动短裤", "适合新手的口红色号", "家用空气炸锅"
     ]
 
-    /// 从池子里随机抽 4 条不重复示例。
+    /// Samples four unique examples from the pool.
     private static func freshExamples() -> [String] {
         Array(examplePool.shuffled().prefix(4))
     }
@@ -165,7 +165,7 @@ struct GuideView: View {
                     onDelete: { store.delete($0) },
                     onRename: { conversation, newTitle in
                         store.rename(conversation, to: newTitle)
-                        // 若改的是当前对话，同步标题，避免下次 persist 覆盖回去。
+                        // Keep the active conversation title in sync so the next persistence pass does not overwrite it.
                         if conversation.id == currentConversationID {
                             currentTitle = newTitle
                         }
@@ -341,7 +341,7 @@ struct GuideView: View {
             chatScrollView
                 .onScrollGeometryChange(for: ScrollSnapshot.self) { geometry in
                     let distanceFromBottom = geometry.contentSize.height - geometry.visibleRect.maxY
-                    // 内容高度比可视区高出一屏阈值以上，才算"真正可滚动"。
+                    // Treat content as scrollable only when it exceeds the viewport by the configured threshold.
                     let scrollable = geometry.contentSize.height > geometry.containerSize.height + nearBottomThreshold
                     return ScrollSnapshot(
                         isNearBottom: distanceFromBottom <= nearBottomThreshold,
@@ -464,8 +464,8 @@ struct GuideView: View {
         .accessibilityAddTraits(.isButton)
     }
 
-    /// 空态：一句安静的问候 + 朴素的分类入口。仅在当前会话还没有任何消息时显示，
-    /// 数据来自后端 /suggestions（真实库存），点哪条都一定有结果；用户发起检索后随消息出现而隐去。
+    /// Empty state with a quiet greeting and simple category shortcuts, shown only before the conversation has messages.
+    /// Data comes from the inventory-backed `/suggestions` endpoint and disappears after the user starts a search.
     private var emptyState: some View {
         VStack(alignment: .leading, spacing: 22) {
             VStack(alignment: .leading, spacing: 6) {
@@ -588,7 +588,7 @@ struct GuideView: View {
         return names.map { CategoryEntry(name: $0) }
     }
 
-    /// 展示用热门搜索：优先用后端动态词，未就绪时退回本地示例池。
+    /// Display trending searches from the backend, falling back to the local example pool while unavailable.
     private var displayedHotSearches: [String] {
         if let hot = suggestions?.hotSearches, !hot.isEmpty { return hot }
         return examples
@@ -729,7 +729,7 @@ struct GuideView: View {
         !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || pendingImageData != nil
     }
 
-    /// 输入框占位文案：挂了图片时引导用户配一句话（如"找个相似但平价的"）。
+    /// Input placeholder that prompts for context when an image is attached, such as finding a similar lower-priced item.
     private var composerPlaceholder: String {
         if pendingImageData != nil {
             return "补充需求，例如「更平价」「同品牌」"
@@ -844,7 +844,7 @@ struct GuideView: View {
         let placeholder = imageData != nil
             ? "正在识别图片并匹配商品"
             : loadingSearchText(for: query)
-        // 用户气泡 + 助手占位一起以弹性动画淡入，避免"啪"地直接出现。
+        // Fade in the user bubble and assistant placeholder together with a spring animation.
         withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
             messages.append(userMessage)
             messages.append(ChatMessage(
@@ -1035,7 +1035,7 @@ struct GuideView: View {
     private func openCamera() {
         isComposerExpanded = false
         guard UIImagePickerController.isSourceTypeAvailable(.camera) else {
-            // 模拟器无相机：退化为相册选择
+            // The simulator has no camera, so fall back to the photo library.
             showPhotoPicker = true
             return
         }
@@ -1047,7 +1047,7 @@ struct GuideView: View {
         showPhotoPicker = true
     }
 
-    /// 选定/拍摄图片后：压缩并挂到输入区作为待发送附件，弹出键盘让用户补充文字描述。
+    /// Compresses a selected or captured image, attaches it to the input area, and opens the keyboard for an optional description.
     private func handlePickedImage(_ data: Data) {
         guard let compressed = Self.compressedJPEG(from: data) else { return }
         isComposerExpanded = false
@@ -1057,7 +1057,7 @@ struct GuideView: View {
         isInputFocused = true
     }
 
-    /// 把图片压到最长边 ≤1024px、JPEG 0.7，控制 base64 体积（~200-400KB）。
+    /// Resizes the image to at most 1024 pixels on its longest edge and JPEG quality 0.7 to limit Base64 size.
     private static func compressedJPEG(from data: Data, maxSide: CGFloat = 1024) -> Data? {
         guard let image = UIImage(data: data) else { return nil }
         let side = max(image.size.width, image.size.height)
@@ -1820,9 +1820,9 @@ struct GuideView: View {
         return streamDefaultDelay
     }
 
-    // MARK: - 会话历史
+    // MARK: - Conversation History
 
-    /// 把当前对话写入本地历史（无用户消息的空白对话会被仓库忽略）。
+    /// Writes the current conversation to local history; the store ignores conversations without user messages.
     private func persistCurrent() {
         let title = currentTitle == GuideView.newConversationTitle
             ? (messages.first { $0.sender == .user }.map { String($0.text.prefix(20)) } ?? GuideView.newConversationTitle)
@@ -1838,10 +1838,10 @@ struct GuideView: View {
         store.upsert(conversation)
     }
 
-    /// 首轮对话后用 LLM 生成精炼标题（如「油皮洗面奶」），异步、不阻塞对话；
-    /// 仅当标题还是默认/未被用户手动命名时才生成，避免覆盖用户重命名。
+    /// Generates a concise title with the LLM after the first exchange without blocking the conversation.
+    /// Runs only while the title is still automatic so it never overwrites a user rename.
     private func generateTitleIfNeeded() async {
-        // 已被 LLM 或用户改过（非默认、且不是首条消息的截句）就不再生成。
+        // Do not regenerate a title that the LLM or user has already changed.
         guard currentTitle == GuideView.newConversationTitle
             || isAutoTruncatedTitle else { return }
         guard let firstUser = messages.first(where: { $0.sender == .user })?.text,
@@ -1850,9 +1850,9 @@ struct GuideView: View {
         let convoID = currentConversationID
         guard let title = await productService.fetchTitle(userText: firstUser, assistantText: firstAI),
               !title.isEmpty else { return }
-        // 异步返回期间用户可能已切换对话，确认还在同一对话才回写。
+        // The user may switch conversations while the request is in flight; update only the same conversation.
         guard convoID == currentConversationID else {
-            // 直接更新历史里那条对话的标题
+            // Update the matching conversation title directly in history.
             if var convo = store.conversation(by: convoID) {
                 convo.title = title
                 store.upsert(convo)
@@ -1863,13 +1863,13 @@ struct GuideView: View {
         persistCurrent()
     }
 
-    /// 当前标题是否是「首条消息截句」自动生成的（可被 LLM 标题替换）。
+    /// Whether the current title is the automatic first-message excerpt that the LLM may replace.
     private var isAutoTruncatedTitle: Bool {
         guard let firstUser = messages.first(where: { $0.sender == .user })?.text else { return false }
         return currentTitle == String(firstUser.prefix(20))
     }
 
-    /// 开启全新对话：存档当前 → 清空 → 换新 session_id（后端会 mint 新会话）。
+    /// Starts a new conversation by archiving the current one, clearing state, and requesting a new backend session ID.
     private func startNewConversation() {
         stopGeneration()
         persistCurrent()
@@ -1882,11 +1882,11 @@ struct GuideView: View {
         lastQuery = ""
         showHistory = false
         chatListIdentity = UUID()
-        // 回到空态时换一批热门搜索，保持「动态」观感。
+        // Resample trending searches when returning to the empty state.
         Task { await loadSuggestions() }
     }
 
-    /// 拉取空态首页推荐（分类入口 + 动态热门搜索，均源自真实库存）。
+    /// Fetches inventory-backed category shortcuts and trending searches for the empty state.
     @MainActor
     private func loadSuggestions() async {
         if let feed = await productService.fetchHomeFeed() {
@@ -1901,7 +1901,7 @@ struct GuideView: View {
         }
     }
 
-    /// 「换一批」：手动刷新热门搜索词。
+    /// Manually refreshes the trending-search suggestions.
     @MainActor
     private func refreshHotSearches() async {
         guard !isRefreshingHot else { return }
@@ -1910,7 +1910,7 @@ struct GuideView: View {
         await loadSuggestions()
     }
 
-    /// 重开历史对话：存档当前 → 载入选中会话（含其 session_id，可继续追问）。
+    /// Reopens a historical conversation after archiving the current one, preserving its session ID for follow-up questions.
     private func openConversation(_ conversation: Conversation) {
         stopGeneration()
         persistCurrent()
@@ -2042,9 +2042,9 @@ struct GuideView: View {
         }
     }
 
-    /// 消息/状态变化时驱动滚动：
-    /// - 刚发送（短回复流式中）：把用户这条问题滚到顶部，让用户从头读，AI 回复在下方展开。
-    /// - 其它情况（长回复、出商品卡、已就绪）：跟随到最新内容底部，确保新内容不被输入框遮住。
+    /// Drives scrolling when messages or status change:
+    /// - Immediately after sending a short streaming reply, place the user's question at the top so the response unfolds below it.
+    /// - For long replies, product cards, and ready states, follow the newest content so the input area does not obscure it.
     private func driveAutoScroll(_ proxy: ScrollViewProxy) {
         if shouldHoldLatestQuestionAnchor, let anchorID = pendingQuestionAnchorID {
             // 问题钉在顶部，回答在下方长出来；超出一屏只提示「跳到最新」，不自动滚
@@ -2198,15 +2198,15 @@ struct GuideView: View {
         }
     }
 
-    /// 把后端「请选择规格」的可交互卡片挂到当前 AI 消息上；后续 token/done
-    /// 只更新文本与状态，不会清掉已挂上的卡片。
+    /// Attaches the backend's interactive variant-selection card to the current AI message.
+    /// Subsequent token and completion events update only text and status, preserving the card.
     private func attachSpecSelection(_ spec: SpecSelection) {
         guard !Task.isCancelled else { return }
         guard let index = messages.lastIndex(where: { $0.sender == .ai }) else { return }
         messages[index].specSelection = spec
     }
 
-    /// 把对比结果挂到当前 AI 消息上，对话流里直接渲染对比卡片。
+    /// Attaches comparison results to the current AI message for inline rendering.
     private func attachComparison(_ comparison: ProductComparisonPayload) {
         guard !Task.isCancelled else { return }
         guard let index = messages.lastIndex(where: { $0.sender == .ai }) else { return }
@@ -2297,11 +2297,11 @@ struct MessageRow: View {
     }
     
     private var openingText: String? {
-        // 优先使用结构化内容
+        // Prefer structured content.
         if let content = parsedStructuredContent {
             return content.opening
         }
-        // 降级：从文本中取第一段
+        // Fall back to the first text paragraph.
         return textParagraphs.first
     }
     
@@ -2312,10 +2312,10 @@ struct MessageRow: View {
                 !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             }
         }
-        // 降级：从文本中提取真正像「追问方向」的段落。
-        // 注意：必须排除已作为开场白渲染的段落，否则像 cart 选规格这类单段确定性
-        // 文案（含「想要」字样）会被同一段既渲染成开场白气泡、又渲染成追问胶囊 →
-        // 屏幕上出现一模一样的两个气泡。开场白已经展示过，不再重复当追问。
+        // Fall back to text paragraphs that genuinely resemble follow-up directions.
+        // Exclude the paragraph already rendered as the opening. Otherwise deterministic single-paragraph
+        // copy from flows such as cart variant selection can appear both as an opening bubble and a
+        // follow-up chip. An opening that is already visible must not be repeated as a follow-up.
         let opening = openingText
         let questions = textParagraphs.filter { paragraph in
             guard paragraph != opening else { return false }
@@ -2327,11 +2327,11 @@ struct MessageRow: View {
     }
     
     private var middleParagraphs: [String] {
-        // 如果有结构化内容，不使用 middleParagraphs
+        // Do not use middle paragraphs when structured content is available.
         if parsedStructuredContent != nil {
             return []
         }
-        // 降级：从文本中提取中间段落
+        // Fall back to extracting middle paragraphs from the text.
         guard let opening = openingText else { return textParagraphs }
         var middle = textParagraphs.filter { $0 != opening }
         if !message.products.isEmpty && middle.count > message.products.count {
@@ -2343,7 +2343,7 @@ struct MessageRow: View {
     private var productSections: [ProductSection] {
         let products = message.products
         
-        // 结构化内容：优先 productId 精确匹配，失败则按顺序对齐（兼容 LLM 返回序号的情况）
+        // For structured content, match exact product IDs first and then align by order for LLM-generated indices.
         if let content = parsedStructuredContent {
             var currentGroup: String?
             return products.enumerated().map { index, product in
@@ -2362,7 +2362,7 @@ struct MessageRow: View {
             }
         }
         
-        // 否则使用索引方式匹配（降级方案）
+        // Otherwise, fall back to index-based matching.
         let descriptions = middleParagraphs
         return products.enumerated().map { index, product in
             ProductSection(
@@ -2402,7 +2402,7 @@ struct MessageRow: View {
                             .padding(.vertical, 11)
                             .background(bubbleColor, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                     } else {
-                    // 1. 开场白
+                    // 1. Opening message
                     if let opening = openingText {
                         Text(opening)
                             .font(.subheadline)
@@ -2674,7 +2674,7 @@ struct MessageRow: View {
                         .stroke(AppTheme.error.opacity(0.3), lineWidth: 2)
                 )
             } else {
-                // 首字符优化：文本很短时继续显示加载动画，避免闪烁
+                // Keep the loading animation for very short text to avoid flicker on the first character.
                 if message.text.count < 10 {
                     ClaudeStyleLoadingStatus(text: message.state.rawValue)
                 } else {
@@ -3701,8 +3701,8 @@ struct ProductTagRow: View {
     }
 }
 
-/// 多规格商品加购时的交互卡片：逐维度点选规格值，选齐后一键加入购物车。
-/// 提交时把选择组合成自然语言（如「我要 黑色 Black 42码」）发回后端完成精确加购。
+/// Interactive card for adding a multi-variant product by selecting one value per dimension.
+/// On submission, the selection is converted to natural language and sent to the backend for an exact cart addition.
 struct SpecSelectionCard: View {
     let selection: SpecSelection
     let onSubmit: (String) -> Void
@@ -3780,17 +3780,17 @@ struct SpecSelectionCard: View {
     }
 }
 
-/// 空态分类入口的展示模型：按分类名映射图标、主题色与点击后发送的 query。
+/// Display model for empty-state category shortcuts, mapping each category to an icon, tint, and query.
 struct CategoryEntry: Identifiable {
     let name: String
     var id: String { name }
 
-    /// 点击后发送给 Agent 的检索语：自然口吻，落到对应分类。
+    /// Natural-language search query sent to the agent when the shortcut is selected.
     var query: String { "推荐\(name)" }
 
     var icon: String {
         switch name {
-        // 统一描边线条风格的简约图标。
+        // Use simple icons with a consistent outlined style.
         case "数码电子": return "laptopcomputer"
         case "服饰运动": return "figure.run"
         case "美妆护肤": return "drop"
@@ -3801,7 +3801,7 @@ struct CategoryEntry: Identifiable {
 
     var tint: Color {
         switch name {
-        // 低饱和大地色，与陶土主色和谐，去掉高饱和 AI 亮色。
+        // Use muted earth tones that complement the terracotta accent without saturated AI-style colors.
         case "数码电子": return Color(hex: "6E89A6")   // 雾蓝
         case "服饰运动": return Color(hex: "7E9B6B")   // 橄榄绿
         case "美妆护肤": return Color(hex: "C77B82")   // 豆沙粉
@@ -3811,7 +3811,7 @@ struct CategoryEntry: Identifiable {
     }
 }
 
-/// 轻量流式布局：子视图按行从左到右排列，超出宽度自动换行（用于规格 chip）。
+/// Lightweight flow layout that wraps child views from left to right, used for variant chips.
 struct FlowLayout: Layout {
     var spacing: CGFloat = 8
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
@@ -3855,7 +3855,7 @@ struct FlowLayout: Layout {
     }
 }
 
-/// 相机拍照选择器：包装 UIImagePickerController（SwiftUI 无原生相机入口）。
+/// Camera picker wrapping `UIImagePickerController`, because SwiftUI has no native camera entry point.
 struct CameraPicker: UIViewControllerRepresentable {
     let onImage: (UIImage) -> Void
     @Environment(\.dismiss) private var dismiss
@@ -3909,7 +3909,7 @@ struct HistorySheet: View {
     @State private var searchText: String = ""
     @State private var showClearAllConfirm = false
 
-    /// 按标题 + 消息内容过滤（不区分大小写）。
+    /// Filters by title and message content without case sensitivity.
     private var filtered: [Conversation] {
         let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !q.isEmpty else { return conversations }
@@ -3959,7 +3959,7 @@ struct HistorySheet: View {
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
                         .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
-                        // 左滑：重命名 + 删除
+                        // Swipe left to rename or delete.
                         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                             Button(role: .destructive) {
                                 onDelete(conversation)
@@ -3973,7 +3973,7 @@ struct HistorySheet: View {
                             }
                             .tint(AppTheme.primary)
                         }
-                        // 长按弹出菜单：重命名 / 删除
+                        // Long press to open rename and delete actions.
                         .contextMenu {
                             Button {
                                 startRename(conversation)

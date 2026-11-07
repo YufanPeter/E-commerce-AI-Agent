@@ -1,57 +1,53 @@
-# Docker 后端启动测试样例
+# Docker Backend Startup Test Cases
 
-## 统一脚本前台启动
+[English](docker_backend_start_cases.md) | [简体中文](docker_backend_start_cases.zh-CN.md)
 
-命令：
+## Foreground startup
 
 ```bash
 ./scripts/start_backend.sh --docker
 ```
 
-期望：
-- 脚本使用 `deploy/docker-compose.yml` 启动后端。
-- 镜像构建成功后监听 `8000`。
-- `/health` 返回 `{"status":"ok"}`。
+Expected:
 
-## 统一脚本后台启动
+- The script starts the backend with `deploy/docker-compose.yml`.
+- The image builds successfully and listens on port `8000`.
+- `/health` returns `{"status":"ok"}`.
 
-命令：
+## Detached startup
 
 ```bash
 ./scripts/start_backend.sh --docker -d
 ```
 
-期望：
-- Docker Compose 以 detached 模式运行。
-- 脚本轮询健康检查后退出。
-- 可通过 `docker compose -f deploy/docker-compose.yml logs -f backend` 查看日志。
+Expected:
 
-## 缺少密钥文件
+- Docker Compose runs in detached mode.
+- The script exits after the health check succeeds.
+- Logs are available with `docker compose -f deploy/docker-compose.yml logs -f backend`.
 
-前置：仓库根目录没有 `.env`。
+## Missing environment file
 
-命令：
+Precondition: the repository root has no `.env` file.
 
 ```bash
 ./scripts/start_backend.sh --docker
 ```
 
-期望：
-- 脚本提示 `.env` 缺失。
-- 容器仍可尝试启动；如果后续对话需要豆包/embedding 密钥，会由后端返回对应错误。
+Expected:
 
-## 镜像不安装本地 rerank 模型
+- The script reports the missing `.env` file.
+- The container may still start, but model-dependent requests return configuration errors until credentials are provided.
 
-前置：使用默认 Docker 配置。
-
-命令：
+## No local reranking model in the image
 
 ```bash
 docker compose -f deploy/docker-compose.yml build backend
 ```
 
-期望：
-- 镜像安装 `backend/requirements.txt` 时不安装 `sentence-transformers`。
-- 镜像构建过程中不拉取 `torch` / CUDA 相关大包。
-- 默认通过 `ARK_RERANKING_API_KEY`、`ARK_RERANKING_MODEL` 和 `USE_RERANK=1` 调用云端 API。
-- 需要减少 API 请求时可设置 `USE_RERANK=0` 退回向量排序。
+Expected:
+
+- Installing `backend/requirements.txt` does not install `sentence-transformers`.
+- The build does not download large Torch or CUDA packages.
+- Reranking uses the configured `ZHIPU_API_KEY`, `RERANK_MODEL`, and `RERANK_BASE_URL` when `USE_RERANK=1`.
+- Setting `USE_RERANK=0` falls back to retrieval ordering without a reranking request.

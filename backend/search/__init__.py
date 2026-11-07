@@ -1,1 +1,1 @@
-"""检索 pipeline：query 理解、混合检索和排序。"""
+"""Search pipeline: query understanding, hybrid retrieval, and ranking."""

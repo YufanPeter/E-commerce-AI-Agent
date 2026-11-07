@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-"""商品对比的核心构建逻辑（对话 tool 与 REST /compare 端点共用）。
+"""Core product-comparison builder shared by the tool and REST endpoint.
 
-产出一个干净、可直接渲染成对比表格的结构：
+The result is a render-ready comparison-table structure:
     {
       "title": "对比：A vs B",
       "products": [{product_id,title,brand,price,image_url,
@@ -60,15 +60,14 @@ def _load_image_manifest() -> dict[str, str]:
 _IMAGE_MANIFEST = _load_image_manifest()
 
 
-# 各类目【固定】的对比维度（有序）。维度名由代码定死，保证同类目商品每次都用
-# 同一套维度对比——稳定、可复现、公平。价格不在此列（由确定性 _price_row 生成）。
+# Fixed, ordered comparison dimensions per category. Products in the same category
+# always use the same dimensions for stable and reproducible output. Price is generated
+# separately by the deterministic ``_price_row`` helper.
 #
-# 这套维度是【对照真实数据】定的：每个维度在该类目的 marketing_description /
-# official_faq / skus.properties 里都有内容可填，不会出现整行空白。
-#   - 数码：芯片性能、续航、屏幕在 desc/FAQ 明确写到；存储来自 properties
-#   - 美妆：功效、成分、适用肤质在 desc 写到；容量来自 properties
-#   - 服饰：面料、版型、场景在 desc 写到；尺码/颜色来自 properties
-#   - 食品：风味、原料、无添加在 desc 写到；口味/数量来自 properties
+# The dimensions follow the fields present in the source catalog, avoiding empty rows:
+# electronics use description/FAQ plus SKU storage; beauty uses description plus SKU
+# volume; apparel uses description plus SKU size/color; food uses description plus SKU
+# flavor/count.
 _CATEGORY_DIMENSIONS: dict[str, list[str]] = {
     "数码电子": ["性能/芯片", "续航", "屏幕", "存储规格"],
     "美妆护肤": ["核心功效", "关键成分", "适用肤质", "容量规格"],
@@ -76,17 +75,19 @@ _CATEGORY_DIMENSIONS: dict[str, list[str]] = {
     "食品生活": ["口味风味", "配料成分", "规格分量", "适用场景"],
 }
 
-# 跨类目（商品类目不一致）时用的通用维度。
+# Generic dimensions for cross-category comparisons.
 _GENERIC_DIMENSIONS = ["品牌定位", "核心卖点", "适用场景"]
 
-# 缺值占位符。
+# Placeholder for a missing value.
 _EMPTY = "—"
 
 
 def _dimensions_for(details: list[ProductDetail]) -> list[str]:
-    """根据参与对比商品的类目，选定一套【固定】维度。
+    """Select a fixed dimension set for the products being compared.
 
-    同类目 → 该类目专属维度；跨类目 → 通用维度。返回的维度名即最终表格行名。"""
+    Same-category products use category dimensions; cross-category products use the
+    generic set. Returned labels become the final table row names.
+    """
     categories = {d.category for d in details}
     if len(categories) == 1:
         return _CATEGORY_DIMENSIONS.get(next(iter(categories)), _GENERIC_DIMENSIONS)
@@ -94,9 +95,11 @@ def _dimensions_for(details: list[ProductDetail]) -> list[str]:
 
 
 def all_dimensions_for_category(category: str) -> list[str]:
-    """离线抽取时用：某商品需要预抽取的全部维度 = 类目专属 + 通用（去重保序）。
+    """Return all dimensions extracted offline for a category.
 
-    通用维度也要抽，是为了支持【跨类目对比】（如手机 vs T恤）时仍有维度可填。"""
+    The result combines category and generic dimensions while preserving order and
+    removing duplicates, so cross-category comparisons still have populated rows.
+    """
     base = _CATEGORY_DIMENSIONS.get(category, [])
     out = list(base)
     for d in _GENERIC_DIMENSIONS:
@@ -106,7 +109,7 @@ def all_dimensions_for_category(category: str) -> list[str]:
 
 
 def product_brief(detail: ProductDetail) -> str:
-    """把一个商品的可对比资料压成一段喂给 LLM 的文本（离线抽取用，控制长度）。"""
+    """Compress comparable product data for the offline extraction prompt."""
     parts = [
         f"标题：{detail.title}",
         f"品牌：{detail.brand}",
@@ -132,11 +135,11 @@ def product_brief(detail: ProductDetail) -> str:
 
 
 # ---------------------------------------------------------------------------
-# 离线索引（compare_index.json）：{product_id: {"dims": {维度: 值}, "tagline": "适合人群"}}
+# Offline index: {product_id: {"dims": {dimension: value}, "tagline": audience}}
 # ---------------------------------------------------------------------------
 
 class CompareIndex:
-    """商品对比维度的离线索引，运行时纯查表。"""
+    """Offline comparison-dimension index used for runtime lookups."""
 
     def __init__(self, data: dict[str, dict[str, Any]]) -> None:
         self._data = data
@@ -148,40 +151,41 @@ class CompareIndex:
         return product_id in self._data
 
     def value(self, product_id: str, dimension: str) -> str:
-        """查某商品某维度的预抽取值；缺失返回占位符。"""
+        """Return a pre-extracted dimension value or the missing-value marker."""
         entry = self._data.get(product_id) or {}
         dims = entry.get("dims") or {}
         val = dims.get(dimension)
         return str(val).strip() if val else _EMPTY
 
     def tagline(self, product_id: str) -> str:
-        """查某商品的『适合人群/定位』短语；缺失返回空串。"""
+        """Return the product's audience/positioning tagline, if available."""
         entry = self._data.get(product_id) or {}
         return str(entry.get("tagline") or "").strip()
 
 
 def load_compare_index(path: Path = COMPARE_INDEX_PATH) -> CompareIndex:
-    """从磁盘加载对比索引；文件不存在时返回空索引（对比退化为只剩价格行）。"""
+    """Load the comparison index, returning an empty index when absent."""
     if not path.exists():
         logger.warning(
-            "对比索引 %s 不存在，对比将只显示价格行（请先运行 build_compare_index）。",
+            "Comparison index %s is missing; comparisons will show only the price row. "
+            "Run build_compare_index first.",
             path,
         )
         return CompareIndex({})
     with path.open("r", encoding="utf-8") as f:
         data = json.load(f)
-    logger.info("对比索引已加载：%d 个商品", len(data))
+    logger.info("Loaded comparison index for %d products", len(data))
     return CompareIndex(data)
 
 
 @lru_cache(maxsize=1)
 def get_compare_index() -> CompareIndex:
-    """进程内单例，供对话 tool 与 REST 端点复用。"""
+    """Return the process-wide index shared by tools and REST endpoints."""
     return load_compare_index()
 
 
 # ---------------------------------------------------------------------------
-# 运行时构建（纯查表，零 LLM）
+# Runtime construction: lookups only, no LLM calls.
 # ---------------------------------------------------------------------------
 
 def _price_row(
@@ -314,7 +318,7 @@ def build_comparison(
     selections: {product_id: sku_id} 显式指定规格；query / budget 用于自动选规格。
     """
     if len(details) < 2:
-        raise ValueError("对比至少需要 2 个商品")
+        raise ValueError("A comparison requires at least two products")
 
     index = get_compare_index()
     dimensions = _dimensions_for(details)
@@ -333,7 +337,7 @@ def build_comparison(
         if sku_rows and dim in _SKU_COVERED_DIMENSIONS:
             continue
         values = [index.value(d.product_id, dim) for d in details]
-        # 文本型维度不强行判优，把判断交给用户；价格行才高亮（确定性）。
+        # Do not force a winner for textual dimensions; only price is deterministic.
         rows.append({"label": dim, "values": values, "highlight": None})
 
     titles = " vs ".join(d.title[:16] for d in details)
@@ -344,7 +348,6 @@ def build_comparison(
             for d, (sku, reason, all_skus) in zip(details, picked)
         ],
         "rows": rows,
-        # 选购建议暂不提供：只给客观维度表，让用户自己判断。保留空字段做向后兼容。
+        # Keep the field for compatibility while presenting objective rows only.
         "recommendation": "",
     }
-

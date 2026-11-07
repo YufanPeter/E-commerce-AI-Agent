@@ -1,29 +1,26 @@
 from __future__ import annotations
 
-"""端到端检索服务：自然语言 query → 排序后的商品命中列表。
+"""End-to-end retrieval from a natural-language query to ranked product hits.
 
-主流程（hybrid retrieval 标准三段式）：
+Hybrid retrieval pipeline:
 
     用户原句
         │
-        ▼  ① 意图理解
+        ▼  1. Intent understanding
     understand_query(q) → ParsedQuery
         │
-        ▼  ② 硬过滤 + 向量召回（Chroma 一次调用内完成）
+        ▼  2. Hard filters and vector retrieval
     ChromaRetriever.search(retrieval_query, where=build_chroma_where(parsed))
-        → List[RetrievedChunk]（按余弦距离排好序）
+        → List[RetrievedChunk] ordered by cosine distance
         │
-        ▼  ③ 后置过滤 + 商品级聚合
-    剔除含 negative_ingredients 的 chunk
-    同 product_id 的多 chunk 合并，保留距离最小的一条作为代表
+        ▼  3. Postfilter and product-level aggregation
+    Remove disallowed products and merge chunks by product ID
         │
         ▼
-    List[ProductHit]（按距离升序，可继续接业务重排）
+    List[ProductHit]
 
-设计原则：
-- 单例化：FastAPI 启动时 build 一次，避免每个请求重建 Chroma client / embedding 模型。
-- 透明：每个 ProductHit 保留命中证据 chunk，方便上层 LLM 做"为什么推荐"的解释。
-- 不做的事：业务重排（销量 / 评分 / 个性化）放在更上层的 Recommender，本模块只负责检索。
+The service is reused across requests, retains evidence chunks for explainability, and
+leaves business ranking such as sales, ratings, and personalization to higher layers.
 """
 
 import logging
@@ -42,10 +39,9 @@ logger = logging.getLogger(__name__)
 
 
 def _env_use_rerank() -> bool:
-    """从环境变量 USE_RERANK 读取是否启用 API 精排，默认启用。
+    """Return whether API reranking is enabled by ``USE_RERANK``.
 
-    设为 0/false/no/off 可禁用 reranker，链路只走向量距离排序。Docker
-    也默认启用云端 rerank；需要减少 API 请求时可显式设为 0。
+    It is enabled by default and disabled by 0, false, no, off, or an empty value.
     """
     raw = os.getenv("USE_RERANK")
     if raw is None:
@@ -53,9 +49,21 @@ def _env_use_rerank() -> bool:
     return raw.strip().lower() not in {"0", "false", "no", "off", ""}
 
 
+def _env_use_hybrid() -> bool:
+    """Return whether BM25/vector hybrid retrieval is enabled by ``USE_HYBRID``.
+
+    It is enabled by default. BM25 runs over the structured-filter subset and fuses with
+    dense retrieval through RRF.
+    """
+    raw = os.getenv("USE_HYBRID")
+    if raw is None:
+        return True
+    return raw.strip().lower() not in {"0", "false", "no", "off", ""}
+
+
 @dataclass(frozen=True)
 class ProductHit:
-    """单个商品级别的检索命中，聚合了该商品下命中的所有 chunk。"""
+    """Product-level hit aggregating all retrieved chunks for that product."""
 
     product_id: str
     title: str
@@ -63,11 +71,10 @@ class ProductHit:
     category: str
     sub_category: str
     base_price: float
-    # 商品排序分数：启用 API rerank 后用 rerank_score（高 = 好），
-    # 未启用 rerank 时退化为 -best_distance（距离越小分越高）。
+    # Higher-is-better product score: reranking score or negative best distance.
     score: float
-    best_distance: float | None         # 保留原始 Chroma 距离供排查
-    rerank_score: float | None          # API rerank 原始分数，未 rerank 时为 None
+    best_distance: float | None         # Original Chroma distance for diagnostics.
+    rerank_score: float | None          # Raw reranking score, if enabled.
     evidence: list[RetrievedChunk] = field(default_factory=list)
     # SKU 价格区间（来自 chunk 元数据；老索引没有时退回 base_price）
     min_price: float | None = None
@@ -95,7 +102,7 @@ class ProductHit:
 
 @dataclass(frozen=True)
 class SearchResult:
-    """一次完整检索的返回对象。"""
+    """Complete result of one retrieval request."""
 
     parsed: ParsedQuery
     hits: list[ProductHit]
@@ -114,25 +121,131 @@ class SearchResult:
 
 
 class SearchService:
-    """检索服务：组合 query 理解、Chroma 召回、API 精排、后置过滤、商品聚合。"""
+    """Combine query understanding, retrieval, reranking, filtering, and aggregation."""
 
     def __init__(
         self,
         retriever: ChromaRetriever | None = None,
         reranker: ApiReranker | None = None,
         use_rerank: bool | None = None,
+        product_store: Any | None = None,
+        use_hybrid: bool | None = None,
     ) -> None:
-        # 允许测试时注入 mock retriever/reranker；生产环境用默认单例。
+        # Tests may inject mock retrievers and rerankers.
         self._retriever = retriever or ChromaRetriever()
-        # use_rerank 未显式传入时由环境变量 USE_RERANK 决定（默认启用）。
+        # Environment controls reranking when no explicit argument is provided.
         self._use_rerank = _env_use_rerank() if use_rerank is None else use_rerank
-        # reranker 延迟加载：__init__ 只记录意图，首次 search 时才创建 HTTP client。
+        # Environment controls hybrid retrieval when no explicit argument is provided.
+        self._use_hybrid = _env_use_hybrid() if use_hybrid is None else use_hybrid
+        # Create the reranking HTTP client lazily on first search.
         self._reranker = reranker
+        # Load product facts lazily for SKU-range price filtering.
+        self._products = product_store
+
+    def _get_products(self) -> Any:
+        if self._products is None:
+            from store.product_store import ProductStore
+            self._products = ProductStore()
+        return self._products
 
     def _get_reranker(self) -> ApiReranker:
         if self._reranker is None:
             self._reranker = get_reranker()
         return self._reranker
+
+    def _price_filter_chunks(
+        self,
+        chunks: list[RetrievedChunk],
+        min_price: float | None,
+        max_price: float | None,
+    ) -> list[RetrievedChunk]:
+        """Filter chunks by SKU price ranges rather than one base price.
+
+        A product remains when at least one SKU satisfies the budget. Fact lookup failures
+        leave retrieval results unchanged.
+        """
+        product_ids = [c.product_id for c in chunks if c.product_id]
+        if not product_ids:
+            return chunks
+        try:
+            candidates = self._get_products().get_products_by_ids(list(dict.fromkeys(product_ids)))
+        except Exception as exc:  # noqa: BLE001 - price filtering is optional
+            logger.warning("Failed to load price ranges; skipping the price post-filter: %r", exc)
+            return chunks
+        ok: set[str] = set()
+        for cand in candidates:
+            pr = cand.price_range
+            if max_price is not None and pr.min_price > max_price:
+                continue  # No SKU is at or below the budget ceiling.
+            if min_price is not None and pr.max_price < min_price:
+                continue  # No SKU reaches the budget floor.
+            ok.add(cand.product_id)
+        return [c for c in chunks if c.product_id in ok]
+
+    def _product_fulltext(self, product_ids: list[str]) -> dict[str, str]:
+        """Load candidate BM25 text from title, marketing description, and FAQ."""
+        if not product_ids:
+            return {}
+        placeholders = ",".join("?" for _ in product_ids)
+        out: dict[str, str] = {}
+        try:
+            with self._get_products().connect() as conn:
+                rows = conn.execute(
+                    f"""
+                    SELECT p.product_id AS pid, p.title AS title,
+                           COALESCE(d.marketing_description, '') AS descr,
+                           COALESCE((
+                               SELECT group_concat(f.question || ' ' || f.answer, ' ')
+                               FROM product_faqs f WHERE f.product_id = p.product_id
+                           ), '') AS faqs
+                    FROM products p
+                    LEFT JOIN product_descriptions d ON d.product_id = p.product_id
+                    WHERE p.product_id IN ({placeholders})
+                    """,
+                    list(product_ids),
+                ).fetchall()
+            for r in rows:
+                out[r["pid"]] = " ".join([r["title"] or "", r["descr"] or "", r["faqs"] or ""])
+        except Exception as exc:  # noqa: BLE001 - hybrid retrieval is optional
+            logger.warning("Failed to load the BM25 corpus; skipping hybrid fusion: %r", exc)
+        return out
+
+    def _hybrid_reorder_chunks(
+        self,
+        query: str,
+        chunks: list[RetrievedChunk],
+    ) -> list[RetrievedChunk]:
+        """Fuse BM25 and vector rankings over the filtered subset with RRF.
+
+        The first chunk occurrence defines vector product order, BM25 ranks full candidate
+        text, and RRF produces a stable product order while preserving within-product
+        chunk order.
+        """
+        from search.lexical import rank_ids_bm25, rrf_fuse
+
+        # Product-level vector order from first chunk occurrence.
+        vec_order: list[str] = []
+        seen: set[str] = set()
+        for c in chunks:
+            pid = c.product_id
+            if pid and pid not in seen:
+                seen.add(pid)
+                vec_order.append(pid)
+        if len(vec_order) <= 1:
+            return chunks
+
+        # Sparse order over candidate product text.
+        texts = self._product_fulltext(vec_order)
+        if not texts:
+            return chunks
+        ids = [pid for pid in vec_order if pid in texts]
+        bm25_order = rank_ids_bm25(query, ids, [texts[pid] for pid in ids])
+
+        fused = rrf_fuse([vec_order, bm25_order])
+        rank_of = {pid: i for i, pid in enumerate(fused)}
+        # Stable reorder by fused product rank, leaving absent products last.
+        fallback = len(rank_of)
+        return sorted(chunks, key=lambda c: rank_of.get(c.product_id, fallback))
 
     def search(
         self,
@@ -143,7 +256,7 @@ class SearchService:
         user_profile: dict[str, Any] | None = None,
         parsed: ParsedQuery | None = None,
     ) -> SearchResult:
-        """端到端入口。
+        """Run the end-to-end search pipeline.
 
         parsed: 调用方已经拿到的结构化意图（如图搜时由 VLM 短语确定性构造），
                 传入则跳过 LLM query 解析，省一次往返。
@@ -160,9 +273,7 @@ class SearchService:
             parsed = understand_query(user_query)
         t_understand = time.perf_counter() - t0
 
-        # ①.5 多轮细化：在上一轮意图之上叠加本轮约束。
-        # 放在 needs_clarification 判断之前——有 base 时即便本轮短到被判为
-        # "需澄清"，也已经有足够上下文，merge_base 会把 needs_clarification 置 False。
+        # 1.5. Merge current constraints with prior intent before clarification checks.
         if base is not None:
             parsed = parsed.merge_base(base)
 
@@ -187,6 +298,14 @@ class SearchService:
         if _is_weak_category_guess(parsed, chunks):
             parsed = replace(parsed, unavailable_terms=[parsed.original_query or user_query])
             return SearchResult(parsed=parsed, hits=[], raw_chunk_count=raw_count, filtered_chunk_count=0)
+
+        # 2.6. Run BM25 over the already compliant vector candidate subset and fuse with
+        # vector order before reranking. This keeps structured constraints authoritative.
+        if self._use_hybrid and chunks:
+            chunks = self._hybrid_reorder_chunks(
+                query=parsed.retrieval_query or user_query,
+                chunks=chunks,
+            )
 
         # ③ 后置过滤：product 级剔除否定项（在 rerank 之前做，节省 rerank 算力）。
         #    注意必须是 **product 级** 而非 chunk 级：一个商品有多个 chunk（描述/规格/
@@ -219,6 +338,10 @@ class SearchService:
             if banned_products:
                 chunks = [c for c in chunks if c.product_id not in banned_products]
         chunks = _limit_chunks_per_product(chunks)[:top_k_chunks]
+
+        # 3.5. Apply budget bounds against true SKU price ranges.
+        if (parsed.max_price is not None or parsed.min_price is not None) and chunks:
+            chunks = self._price_filter_chunks(chunks, parsed.min_price, parsed.max_price)
         filtered_count = len(chunks)
 
         # ④ API 精排。客户端层负责百炼 qwen3-rerank → 智谱的自动 fallback；
@@ -251,11 +374,31 @@ class SearchService:
 
 
 # ---------------------------------------------------------------------------
-# 辅助函数
+# Helpers
 # ---------------------------------------------------------------------------
 
 def _contains_any(text: str, needles: list[str]) -> bool:
     return any(needle and needle in text for needle in needles)
+
+
+# Prefixes that turn a term occurrence into an explicit free-from declaration.
+_FREE_DECL_PREFIXES = ("无", "0", "０", "零", "不含", "无添加", "不添加", "未添加", "不加")
+
+
+def _negative_hit(text: str, needles: list[str]) -> bool:
+    """Return whether text contains a disallowed term without a free-from declaration.
+
+    A matching free-from phrase takes precedence over naive substring matching, preventing
+    compliant products from being removed merely because they mention the ingredient.
+    """
+    for needle in needles:
+        if not needle or needle not in text:
+            continue
+        free_decls = [prefix + needle for prefix in _FREE_DECL_PREFIXES]
+        if any(decl in text for decl in free_decls):
+            continue  # An explicit free-from declaration keeps the product.
+        return True
+    return False
 
 
 def _apply_user_profile(
@@ -434,11 +577,8 @@ def _brand_conflicts_with_include(brand: str, includes: list[str]) -> bool:
     return False
 
 
-# 否定词归一别名表：把用户/LLM 的同义说法收敛到「商品文本里会真实出现的字面词」。
-# 例如用户说"能量饮料"、LLM 抽成"功能性饮料"，库里实际是"功能饮料"——
-# 不归一就会子串匹配失败、反选漏网。这是字面过滤兜底的关键一层。
-# 注意：P0 的结构化 sub_category_exclude 已在召回阶段处理品类反选，这里主要
-# 兜底 LLM 偶尔把品类同义词错塞进 negative_ingredients 的情况。
+# Map negative aliases to literal catalog terms so substring fallback remains effective.
+# Structured category exclusions are already applied during retrieval.
 _NEGATIVE_ALIAS: dict[str, str] = {
     "功能性饮料": "功能饮料",
     "能量饮料": "功能饮料",
@@ -454,7 +594,7 @@ _NEGATIVE_ALIAS: dict[str, str] = {
 
 
 def _normalize_negatives(negatives: list[str] | None) -> list[str]:
-    """把否定词经别名表归一到库里真实字面词，去重。空安全。"""
+    """Normalize negative aliases to catalog terms and deduplicate safely."""
     if not negatives:
         return []
     seen: set[str] = set()
@@ -547,12 +687,9 @@ def _chunk_is_banned(
     excluded_brands: set[str],
     strict_terms: set[str] | None = None,
 ) -> bool:
-    """该 chunk 所属商品是否应被剔除。
+    """Return whether the product represented by this chunk must be excluded.
 
-    三类命中任一即剔：
-      - 子类目精确命中 excluded_subs（结构化品类反选兜底）
-      - 一级类目精确命中 excluded_cats
-      - 否定词（已归一）子串命中 chunk 文本 / title / 品类（成分/口味等）
+    Brand, category, subcategory, or normalized free-text exclusion matches are sufficient.
     """
     meta = chunk.metadata
     sub = str(meta.get("sub_category", ""))
@@ -607,10 +744,10 @@ def _price_fields(meta: dict[str, Any]) -> dict[str, Any]:
 
 
 def _aggregate_by_distance(chunks: list[RetrievedChunk]) -> list[ProductHit]:
-    """未启用 rerank 时的聚合：按 Chroma 距离 max pooling。
+    """Aggregate without reranking by the best Chroma distance per product.
 
-    保持 chunk 进入顺序（Chroma 已按距离升序），用 dict 天然去重。
-    商品分数 = -最小距离，与 rerank 路径保持“越高越好”的语义一致。
+    Chroma input order is retained. Product score is negative minimum distance so higher
+    remains better across both ranking paths.
     """
     grouped: dict[str, list[RetrievedChunk]] = {}
     for chunk in chunks:
@@ -621,7 +758,7 @@ def _aggregate_by_distance(chunks: list[RetrievedChunk]) -> list[ProductHit]:
 
     hits: list[ProductHit] = []
     for pid, items in grouped.items():
-        leader = items[0]                # 距离最小的（Chroma 已排序，第一个即最佳）
+        leader = items[0]                # Chroma order puts the best distance first.
         meta = leader.metadata
         best_distance = float(leader.distance) if leader.distance is not None else float("inf")
         hits.append(
@@ -644,16 +781,12 @@ def _aggregate_by_distance(chunks: list[RetrievedChunk]) -> list[ProductHit]:
 
 
 def _aggregate_reranked_by_product(reranked: list[RerankedChunk]) -> list[ProductHit]:
-    """启用 rerank 时的聚合：max pooling rerank_score。
+    """Aggregate reranked chunks by maximum score per product.
 
-    商品分数 = 该商品下最高的 rerank_score。reranked 进来时已按分数降序，
-    所以第一个出现的 chunk 就是该商品下的最佳证据。
+    Reranked input is descending, so the first chunk is the product's best evidence.
 
-    为什么选 max pooling 而不是 mean：
-    - 商品相关性取决于“最能证明它符合需求的那条证据”，而不是证据数量
-    - sum/count 会让 chunk 多的商品占优势（评论多的不代表更匹配）
-    - max 的潜在风险：营销文案堆关键词骱子 → 如果后续发现「尖峰赢家」质量不稳，
-      可升级为 0.7*max + 0.3*mean(top3) 加权策略
+    Max pooling reflects the strongest matching evidence and avoids favoring products
+    merely because they have more chunks.
     """
     grouped: dict[str, list[RerankedChunk]] = {}
     for r in reranked:
@@ -664,7 +797,7 @@ def _aggregate_reranked_by_product(reranked: list[RerankedChunk]) -> list[Produc
 
     hits: list[ProductHit] = []
     for pid, items in grouped.items():
-        leader = items[0]                # 已按 rerank_score 降序，第一个即最佳
+        leader = items[0]                # Highest reranking score appears first.
         meta = leader.chunk.metadata
         hits.append(
             ProductHit(
@@ -686,12 +819,12 @@ def _aggregate_reranked_by_product(reranked: list[RerankedChunk]) -> list[Produc
 
 
 # ---------------------------------------------------------------------------
-# 单例 + CLI
+# Singleton and CLI
 # ---------------------------------------------------------------------------
 
 @lru_cache(maxsize=1)
 def get_search_service() -> SearchService:
-    """进程级单例。FastAPI startup 应直接调一次预热。"""
+    """Return the process-wide service; call once during FastAPI startup to warm it."""
     return SearchService()
 
 
@@ -703,10 +836,10 @@ def main() -> None:
 
     logging.basicConfig(level=os.getenv("LOG_LEVEL", "WARNING"))
 
-    parser = argparse.ArgumentParser(description="端到端检索 demo")
+    parser = argparse.ArgumentParser(description="End-to-end retrieval demo")
     parser.add_argument("query")
     parser.add_argument("--top-k", type=int, default=10)
-    parser.add_argument("--no-rerank", action="store_true", help="不走 API 精排（快但质量低）。")
+    parser.add_argument("--no-rerank", action="store_true", help="Skip API reranking for faster, lower-quality results")
     args = parser.parse_args()
 
     service = SearchService(use_rerank=not args.no_rerank)

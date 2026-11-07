@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""离线构建商品图视觉索引。
+"""Build the product-image visual index offline.
 
 读取 ``backend/cdn/image_manifest.json``（``{product_id: 图片URL}``），逐张调用
 百炼多模态 embedding 编码成向量，写到
@@ -8,9 +8,8 @@ from __future__ import annotations
 （``{product_id: vector}``）。这是「拍照找货」视觉重排的离线产物，只需在
 数据/模型变更时重跑一次。
 
-运行：
+Usage:
     cd backend && python -m rag.build_image_index
-    # 或指定增量/全量
     python -m rag.build_image_index --force
 """
 
@@ -86,7 +85,7 @@ def build_index(
 
     todo = {pid: url for pid, url in manifest.items() if pid not in existing}
     logger.info(
-        "视觉索引：manifest %d 条，已存在 %d 条，本次需编码 %d 条",
+        "Visual index: %d manifest entries, %d existing, %d to encode",
         len(manifest), len(existing), len(todo),
     )
 
@@ -136,10 +135,10 @@ def main() -> None:
     logging.getLogger("openai").setLevel(logging.WARNING)
     parser = argparse.ArgumentParser(description="构建商品图视觉索引")
     parser.add_argument(
-        "--force", action="store_true", help="忽略已有索引，全量重建"
+        "--force", action="store_true", help="Ignore the existing index and rebuild all"
     )
     parser.add_argument(
-        "--workers", type=int, default=8, help="并发编码线程数"
+        "--workers", type=int, default=8, help="Number of concurrent encoding workers"
     )
     parser.add_argument(
         "--manifest", type=Path, default=MANIFEST_PATH, help="product_id → 图片 URL 的 JSON"

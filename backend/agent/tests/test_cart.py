@@ -1,7 +1,7 @@
-"""对话式购物车 + 下单 + 统一工具调用层的回归测试。
+"""Regression tests for conversational cart, checkout, and unified tool invocation.
 
-不打真实 LLM（dispatch 用 monkeypatch 注入动作决策），不碰真实 SQLite
-（CartStore 用临时库 + 直接建表），保证 CI 可无脑跑。
+Action dispatch is monkeypatched to avoid real LLM calls, and CartStore uses a temporary SQLite
+database so the suite remains deterministic in CI.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from agent.tools.cart import CartTool
 from store.cart_store import CartStore
 
 
-# --------------------------- 临时 SQLite 夹具 ---------------------------
+# --------------------------- Temporary SQLite fixture ---------------------------
 
 _SCHEMA = """
 CREATE TABLE products (
@@ -71,18 +71,18 @@ def _session_with_hits() -> AgentSession:
 
 
 def _stub_dispatch(action: str, **args):
-    """替换 dispatch_action，固定返回某动作，绕开真实 LLM。"""
+    """Replace `dispatch_action` with a fixed action to avoid a real LLM call."""
     def _fn(query, session, actions, *, purpose, timeout=6.0):
         return ActionDecision(action=action, args=args, raw={"action": action, **args})
     return _fn
 
 
-# --------------------------- CartStore 直测 ---------------------------
+# --------------------------- Direct CartStore tests ---------------------------
 
 
 def test_store_add_and_list(store: CartStore):
     store.add_product("p1")
-    store.add_product("p1")  # 累加
+    store.add_product("p1")  # Increment the existing line.
     lines = store.list_items()
     assert len(lines) == 1
     assert lines[0].quantity == 2
@@ -101,7 +101,7 @@ def test_store_build_order_clears(store: CartStore):
     order = store.build_order()
     assert order.total == 129 * 2 + 680
     assert order.to_dict()["item_count"] == 3
-    assert store.list_items() == []  # 下单后清空
+    assert store.list_items() == []  # Checkout clears the cart.
 
 
 def test_store_checkout_empty_raises(store: CartStore):
@@ -114,11 +114,11 @@ def test_store_clear_removes_all(store: CartStore):
     store.add_product("p1", quantity=2)
     store.add_product("p2")
     removed = store.clear()
-    assert removed == 2  # 两个 SKU 行被删
+    assert removed == 2  # Two SKU rows were removed.
     assert store.list_items() == []
 
 
-# --------------------------- CartTool + 统一调用层 ---------------------------
+# --------------------------- CartTool and unified invocation ---------------------------
 
 
 def test_cart_add_resolves_index(monkeypatch, store: CartStore):
@@ -135,14 +135,14 @@ def test_cart_add_resolves_index(monkeypatch, store: CartStore):
 def test_cart_add_uses_focus_when_no_index(monkeypatch, store: CartStore):
     monkeypatch.setattr(cart_module, "dispatch_action", _stub_dispatch("add"))
     sess = _session_with_hits()
-    sess.set("last_focus_product_id", "p2")  # 上一轮 detail 聚焦了第二款
+    sess.set("last_focus_product_id", "p2")  # The previous detail turn focused the second product.
     r = CartTool(cart_store=store).run("把刚才那款加进来", sess, {})
     assert r.payload["added"]["product_id"] == "p2"
     assert r.payload["resolution"]["source"] == "focus"
 
 
 def test_cart_add_prefers_focus_over_hallucinated_index(monkeypatch, store: CartStore):
-    """用户没说序号时，dispatch 幻觉出的 index 不能覆盖上一轮详情聚焦商品。"""
+    """Ignore a hallucinated dispatch index when the user gave no ordinal and a focused product exists."""
     monkeypatch.setattr(cart_module, "dispatch_action", _stub_dispatch("add", index=1))
     sess = _session_with_hits()
     sess.set("last_focus_product_id", "p2")
@@ -154,7 +154,7 @@ def test_cart_add_prefers_focus_over_hallucinated_index(monkeypatch, store: Cart
 
 
 def test_cart_add_pronoun_uses_focus(monkeypatch, store: CartStore):
-    """“把它加入购物车”里的“它”是指代词，不应当成商品关键词去全库搜索。"""
+    """Treat the pronoun in an add-to-cart request as a reference, not a catalog keyword."""
     monkeypatch.setattr(cart_module, "dispatch_action", _stub_dispatch("add"))
     sess = _session_with_hits()
     sess.set("last_focus_product_id", "p2")
@@ -166,7 +166,7 @@ def test_cart_add_pronoun_uses_focus(monkeypatch, store: CartStore):
 
 
 def test_cart_add_spec_prompt_confirms_resolved_product(monkeypatch, store: CartStore):
-    """多规格商品进入规格卡前，应先明确系统把“它”理解成了哪款商品。"""
+    """Confirm the resolved product before showing a variant card for a multi-variant item."""
     with sqlite3.connect(store.db_path) as conn:
         conn.execute(
             "INSERT INTO products(product_id,title,brand,category,sub_category,base_price) VALUES (?,?,?,?,?,?)",
@@ -216,7 +216,7 @@ def test_cart_checkout_default_address(monkeypatch, store: CartStore):
     assert r.payload["action"] == "checkout"
     assert r.payload["order"]["total"] == 258
     assert "默认地址" in r.payload["order"]["address"]
-    assert store.list_items() == []  # 业务闭环：下单后购物车清空
+    assert store.list_items() == []  # Complete the flow by clearing the cart after checkout.
 
 
 def test_cart_view_empty(monkeypatch, store: CartStore):
@@ -232,14 +232,14 @@ def test_cart_dispatch_failure_falls_back_to_view(monkeypatch, store: CartStore)
     monkeypatch.setattr(cart_module, "dispatch_action", _boom)
     store.add_product("p1")
     r = CartTool(cart_store=store).run("随便说点啥", AgentSession(), {})
-    # 降级为展示购物车，而非报错
+    # Fall back to displaying the cart instead of raising.
     assert r.payload["action"] == "view"
 
 
-# --------------------------- 规格消歧（共享前缀防死循环）---------------------------
+# --------------------------- Variant disambiguation with shared prefixes ---------------------------
 
 def _phone_skus() -> list[dict]:
-    """模拟 Pura 90 Pro：存储 12GB+256GB(标准版) / 12GB+512GB(高配版)，共享 12GB 前缀。"""
+    """Build phone variants whose storage options share a `12GB` prefix."""
     skus = []
     for storage, version, colors in (
         ("12GB+256GB", "标准版", ["星芒黑", "雪域白", "幻影紫", "青釉绿"]),
@@ -254,7 +254,7 @@ def _phone_skus() -> list[dict]:
 
 
 def test_filter_skus_disambiguates_shared_numeric_prefix(store: CartStore):
-    """用户说 12GB+512GB 不能被 12GB+256GB 抢匹配（两者共享 '12'）。"""
+    """Ensure the 512 GB request is not captured by the 256 GB option's shared prefix."""
     tool = CartTool(cart_store=store)
     matched = tool._filter_skus("我要 12GB+512GB 幻影紫 高配版", _phone_skus())
     assert len(matched) == 1
@@ -271,12 +271,12 @@ def test_filter_skus_lower_storage_still_works(store: CartStore):
 def test_value_match_score_prefers_more_complete_match(store: CartStore):
     tool = CartTool(cart_store=store)
     q = "我要 12GB+512GB"
-    # 512 版本命中 12+512=2 个 token，256 版本仅命中 12=1 个 token
+    # The 512 GB option matches two numeric tokens while the 256 GB option matches only one.
     assert tool._value_match_score("12GB+512GB", q) > tool._value_match_score("12GB+256GB", q)
 
 
 def _pants_skus() -> list[dict]:
-    """优衣库短裤：尺码 M/L/XL 码 × 颜色，字母尺码无数字、中文'码'仅 1 字。"""
+    """Build shorts with letter sizes and colors, including single-character size suffixes."""
     skus = []
     for size in ("M码", "L码", "XL码"):
         for color in ("黑色", "深灰色", "藏蓝色"):
@@ -285,7 +285,7 @@ def _pants_skus() -> list[dict]:
 
 
 def test_filter_skus_letter_size_resolves_uniquely(store: CartStore):
-    """字母尺码 M码 + 深灰色应唯一命中，不再因尺码识别失败而循环追问。"""
+    """Resolve a letter size and color uniquely without entering a clarification loop."""
     tool = CartTool(cart_store=store)
     matched = tool._filter_skus("我要 M码 深灰色", _pants_skus())
     assert len(matched) == 1
@@ -293,7 +293,7 @@ def test_filter_skus_letter_size_resolves_uniquely(store: CartStore):
 
 
 def test_letter_size_l_does_not_match_xl(store: CartStore):
-    """关键边界：'L码' 不能命中 'XL码'（左边界守卫），否则 XL 句会误判含 L。"""
+    """Guard the left boundary so an L-size token does not match an XL-size request."""
     tool = CartTool(cart_store=store)
     q = "我要 XL码 黑色"
     assert tool._value_match_score("XL码", q) == 1
@@ -303,10 +303,10 @@ def test_letter_size_l_does_not_match_xl(store: CartStore):
     assert matched[0]["options"] == {"尺码": "XL码", "颜色": "黑色"}
 
 
-# --------------------- 全品类精确整值匹配（前端规格卡场景）---------------------
+# --------------------- Exact full-value matching across categories ---------------------
 
 def _beauty_skus() -> list[dict]:
-    """美妆：规格容量 + 适用肤质（共享 'ml' 数字前缀的容量）。"""
+    """Build beauty variants combining capacity and skin type with shared numeric prefixes."""
     skus = []
     for spec in ("30ml", "50ml", "30ml*2"):
         for skin in ("干性肌肤", "油性肌肤", "中性肌肤"):
@@ -315,7 +315,7 @@ def _beauty_skus() -> list[dict]:
 
 
 def _food_skus() -> list[dict]:
-    """食品：口味 + 规格（净含量共享数字）。"""
+    """Build food variants combining flavor and package size with shared numbers."""
     skus = []
     for flavor in ("原味", "藤椒味", "海苔味"):
         for size in ("100g", "100g*3", "500g"):
@@ -324,7 +324,7 @@ def _food_skus() -> list[dict]:
 
 
 def test_filter_skus_exact_match_phone_all_dims(store: CartStore):
-    """手机：前端卡片发 canonical 全值，三维度精确唯一命中。"""
+    """Resolve all three canonical phone dimensions from a client variant card."""
     tool = CartTool(cart_store=store)
     matched = tool._filter_skus("我要 12GB+256GB 青釉绿 标准版", _phone_skus())
     assert len(matched) == 1
@@ -332,19 +332,19 @@ def test_filter_skus_exact_match_phone_all_dims(store: CartStore):
 
 
 def test_filter_skus_exact_match_beauty_multipack(store: CartStore):
-    """美妆：'30ml*2' 不能被 '30ml' 抢（精确取最长值）。"""
+    """Prefer the exact longest beauty-package value so `30ml` cannot capture `30ml*2`."""
     tool = CartTool(cart_store=store)
     matched = tool._filter_skus("我要 30ml*2 干性肌肤", _beauty_skus())
     assert len(matched) == 1
     assert matched[0]["options"] == {"规格": "30ml*2", "肤质": "干性肌肤"}
-    # 单装也能精确命中
+    # A single package should also resolve exactly.
     single = tool._filter_skus("我要 30ml 油性肌肤", _beauty_skus())
     assert len(single) == 1
     assert single[0]["options"] == {"规格": "30ml", "肤质": "油性肌肤"}
 
 
 def test_filter_skus_exact_match_food_multipack(store: CartStore):
-    """食品：'100g*3' 不能被 '100g' 抢，口味+规格精确唯一命中。"""
+    """Resolve food flavor and package exactly so `100g` cannot capture `100g*3`."""
     tool = CartTool(cart_store=store)
     matched = tool._filter_skus("我要 藤椒味 100g*3", _food_skus())
     assert len(matched) == 1
@@ -352,7 +352,7 @@ def test_filter_skus_exact_match_food_multipack(store: CartStore):
 
 
 def test_filter_skus_fuzzy_fallback_partial_color(store: CartStore):
-    """打字近似说法（只说 '深灰' 不带 '色'）走模糊回退仍能命中。"""
+    """Use fuzzy fallback for a partial color value that omits the final suffix."""
     tool = CartTool(cart_store=store)
     matched = tool._filter_skus("M码 深灰", _pants_skus())
     assert len(matched) == 1
@@ -360,20 +360,20 @@ def test_filter_skus_fuzzy_fallback_partial_color(store: CartStore):
 
 
 def test_filter_skus_partial_spec_keeps_asking(store: CartStore):
-    """只说了颜色没说尺码 → 仍有多个 SKU，触发继续追问（不静默乱选）。"""
+    """Keep asking when a color without size still matches multiple SKUs."""
     tool = CartTool(cart_store=store)
     matched = tool._filter_skus("深灰色", _pants_skus())
-    assert len(matched) == 3  # M/L/XL 三个深灰色，无法唯一
+    assert len(matched) == 3  # Three sizes share this color, so the match is not unique.
 
 
 
 
 
-# --------------------------- LLM 语义消歧（"华为耳机"在 cart 也生效） ---------------------------
+# --------------------------- LLM semantic disambiguation in cart flows ---------------------------
 
 def test_add_ambiguous_name_uses_llm(store: CartStore, monkeypatch):
-    """同品牌多品类时（'华为'命中耳机+手机两款），先让 LLM 按子品类挑唯一一款。"""
-    # 屏幕上两款同品牌不同子品类
+    """Use the LLM to select one subcategory when a brand matches products in multiple categories."""
+    # The screen contains two products from one brand in different subcategories.
     sess = AgentSession()
     sess.remember_search(
         {"category": "数码电子"},
@@ -381,17 +381,17 @@ def test_add_ambiguous_name_uses_llm(store: CartStore, monkeypatch):
          {"product_id": "d2", "title": "华为 Pura 90 手机"}],
     )
     tool = CartTool(cart_store=store)
-    # dispatch 判为 add（无 index）
+    # Dispatch resolves to add without an index.
     monkeypatch.setattr(cart_module, "dispatch_action", _stub_dispatch("add"))
-    # 资料富化取不到详情不影响；直接桩 resolve_one 模拟 LLM 选中耳机 d1（候选第 0 个）
+    # Stub resolve_one to simulate the LLM selecting the first candidate; missing enrichment is irrelevant.
     monkeypatch.setattr(cart_module, "resolve_one", lambda query, cands: 0)
-    # begin_add 会查 SKU；d1 不在临时库 → list_skus 空 → 返回换一款提示，但关键是没反问“加哪一款”
+    # d1 has no temporary SKU, so begin_add suggests another product rather than asking which product was meant.
     res = tool.run("把华为耳机加进来", sess, {})
     assert res.payload.get("action") != "ask_which_product"
 
 
 def test_add_ambiguous_name_llm_unavailable_asks(store: CartStore, monkeypatch):
-    """LLM 不可用（resolve_one 返回 None）→ 必须列候选反问，绝不乱加。"""
+    """List candidates for clarification instead of adding arbitrarily when LLM resolution is unavailable."""
     sess = AgentSession()
     sess.remember_search(
         {"category": "数码电子"},

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# 重启开发后端：先停再启（带热重载）。
+# Restart the development backend with hot reload.
 #
-# 用法：
+# Usage:
 #   ./scripts/restart_backend.sh
 #   HOST=0.0.0.0 ./scripts/restart_backend.sh
 

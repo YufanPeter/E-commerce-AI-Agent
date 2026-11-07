@@ -1,16 +1,13 @@
 from __future__ import annotations
 
-"""ParsedQuery → Chroma where 子句的适配层。
+"""Adapter from ``ParsedQuery`` to a Chroma ``where`` clause.
 
-承担两层职责：
-1. 字段映射：把语义化的 ParsedQuery 翻成 Chroma 的 MongoDB 风格语法。
-2. 短路处理：没有任何硬过滤时返回 None，避免传一个空 dict 误触 Chroma 校验。
+It maps semantic fields to Chroma's MongoDB-like syntax and returns ``None`` when no hard
+filter exists, avoiding validation of an empty dictionary.
 
-不在这里做的事：
-- 价格 / 品牌的合法性校验（LLM enum + ParsedQuery dataclass 已经守门）
-- 软偏好 / 成分否定（不是 Chroma 能干的活，留给后置过滤 / 重排）
-  注意：品类/子类目否定（category_exclude/sub_category_exclude）是结构化字段，
-  在这里走 $nin 召回阶段排除；只有自由文本的成分否定才留到后置过滤。
+Price and brand validity are already checked upstream. Soft preferences and free-text
+ingredient exclusions remain postfilters, while structured category exclusions use
+``$nin`` here.
 """
 
 from typing import Any
@@ -19,16 +16,12 @@ from search.query_understanding import ParsedQuery, expand_brands
 
 
 def build_chroma_where(parsed: ParsedQuery) -> dict[str, Any] | None:
-    """根据 ParsedQuery.hard_filters 构造 Chroma collection.query 的 where。
+    """Build a Chroma query filter from ``ParsedQuery.hard_filters``.
 
-    Chroma 语法约束（重要）：
-        - 单条件可以直接 {"field": value}
-        - 多条件必须显式用 {"$and": [...]} 包裹，不能简单合并 dict
-        - $in / $nin 的值必须非空列表
+    One condition may be direct, several require explicit ``$and``, and ``$in``/``$nin``
+    values must be non-empty lists.
 
-    品牌处理：ParsedQuery 里存的是 canonical 名（如 "耐克"），但 Chroma
-    metadata 里同一品牌可能有多种写法（"耐克" / "Nike"）。这里用
-    expand_brands 把 canonical 展回所有变体，保证不漏召回。
+    Canonical brands expand to every metadata alias to preserve recall.
     """
     clauses: list[dict[str, Any]] = []
 
@@ -37,8 +30,7 @@ def build_chroma_where(parsed: ParsedQuery) -> dict[str, Any] | None:
     if parsed.sub_category:
         clauses.append({"sub_category": parsed.sub_category})
 
-    # 品类反选：在召回阶段就按结构化 metadata 字段排除，确定性、零泄漏。
-    # 这是企业级反选的正确做法——排除项压根不进候选集，而不是召回后再补救。
+    # Exclude structured categories during recall so disallowed items never enter candidates.
     if parsed.sub_category_exclude:
         clauses.append({"sub_category": {"$nin": list(parsed.sub_category_exclude)}})
     if parsed.category_exclude:

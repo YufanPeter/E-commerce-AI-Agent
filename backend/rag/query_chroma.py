@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-"""用于检查已构建 Chroma collection 的本地命令行工具。
+"""Local CLI for inspecting a built Chroma collection.
 
-这是开发调试工具，不是面向用户的 API 路径。实际服务应在常驻后端进程中
-实例化 ``ChromaRetriever`` 并复用。
+This is a development utility, not a user-facing API. Long-running services should
+create and reuse one ``ChromaRetriever`` instance.
 """
 
 import argparse
@@ -21,7 +21,7 @@ from rag.retriever import ChromaRetriever
 
 
 def parse_where(value: str) -> dict[str, Any] | None:
-    """解析命令行传入的 JSON metadata 过滤条件。"""
+    """Parse a JSON metadata filter supplied on the command line."""
     if not value:
         return None
     parsed = json.loads(value)
@@ -31,7 +31,7 @@ def parse_where(value: str) -> dict[str, Any] | None:
 
 
 def preview_result(chunks: list[Any], max_chars: int) -> None:
-    """打印简短的召回 chunk 预览，方便人工检查。"""
+    """Print a compact retrieved-chunk preview for manual inspection."""
     for index, chunk in enumerate(chunks, start=1):
         metadata = chunk.metadata
         distance_text = f" distance={chunk.distance:.4f}" if chunk.distance else ""
@@ -43,7 +43,7 @@ def preview_result(chunks: list[Any], max_chars: int) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    """解析本地检索检查命令的参数。"""
+    """Parse local retrieval-inspection arguments."""
     parser = argparse.ArgumentParser(description="Query an existing Chroma collection.")
     parser.add_argument("query")
     parser.add_argument("--persist-dir", type=Path, default=DEFAULT_PERSIST_DIR)
@@ -57,7 +57,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    """执行多次检索，并打印耗时和靠前 chunk 预览。"""
+    """Run repeated retrieval and print timings plus the leading chunks."""
     args = parse_args()
 
     init_start = time.perf_counter()

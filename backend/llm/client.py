@@ -45,7 +45,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _load_env_once() -> None:
-    """从仓库根的 .env 加载配置，已存在的环境变量不会被覆盖。"""
+    """Load repository-root ``.env`` values without overriding the environment."""
     load_dotenv(PROJECT_ROOT / ".env", override=False)
 
 

@@ -1,1 +1,1 @@
-"""RAG 索引构建与检索工具。"""
+"""RAG indexing and retrieval utilities."""

@@ -1,52 +1,54 @@
-# 对话式购物车状态同步测试样例
+# Conversational Cart State-Synchronization Test Cases
 
-## 目标
+[English](cart_state_sync_cases.md) | [简体中文](cart_state_sync_cases.zh-CN.md)
 
-验证后端 `cart` 工具通过 SSE 返回购物车快照后，iOS 导购页能实时同步本地 `cartItems`，购物车 Tab 立即反映对话式加购、删除、改数量和下单清空结果。
+## Goal
 
-## 前置条件
+Verify that cart snapshots returned by the backend cart tool over SSE update the iOS client's `cartItems` immediately after conversational additions, removals, quantity changes, and checkout.
 
-- 后端已启动，`/health` 返回 `{"status":"ok"}`。
-- iOS App 连接同一个后端会话。
-- 先通过导购推荐拿到至少 2 张商品卡片。
+## Preconditions
 
-## 样例 1：对话式加购后购物车 Tab 出现商品
+- The backend is running and `/health` returns `{"status":"ok"}`.
+- The iOS app is connected to that backend.
+- A recommendation turn has produced at least two product cards.
 
-1. 用户输入：`推荐 2000 元以内的蓝牙耳机`
-2. 等待商品卡片出现。
-3. 用户输入：`把第一个加入购物车`
-4. 预期：
-   - 导购回复确认加购成功。
-   - 切到购物车 Tab，出现第一张商品卡对应的商品。
-   - 购物车数量为 1，价格与商品 SKU 价格一致。
+## Case 1: add a product
 
-## 样例 2：改数量后购物车数量实时变化
+1. Enter `推荐 2000 元以内的蓝牙耳机`.
+2. Wait for product cards.
+3. Enter `把第一个加入购物车`.
+4. Verify that:
+   - The guide confirms the addition.
+   - The Cart tab shows the product from the first card.
+   - Quantity is one and price matches its SKU price.
 
-1. 在样例 1 基础上继续输入：`第一件改成 3 个`
-2. 预期：
-   - 导购回复确认数量修改。
-   - 购物车 Tab 中该商品数量变为 3。
-   - 底部合计金额同步变为 3 件小计。
+## Case 2: change quantity
 
-## 样例 3：删除第二个商品后购物车移除对应行
+1. Continue from case 1 and enter `第一件改成 3 个`.
+2. Verify that:
+   - The guide confirms the update.
+   - The Cart tab shows quantity three.
+   - The total reflects three units.
 
-1. 先通过对话加入两个不同商品。
-2. 用户输入：`删掉第二个`
-3. 预期：
-   - 导购回复确认删除。
-   - 购物车 Tab 只剩第一个商品。
-   - 底部合计金额只统计剩余商品。
+## Case 3: remove the second product
 
-## 样例 4：下单后购物车清空
+1. Add two different products through conversation.
+2. Enter `删掉第二个`.
+3. Verify that:
+   - The guide confirms removal.
+   - Only the first product remains in the Cart tab.
+   - The total includes only the remaining product.
 
-1. 购物车中至少有一件商品。
-2. 用户输入：`下单吧，地址用默认的`
-3. 预期：
-   - 导购回复订单号、件数、合计金额和默认地址。
-   - 购物车 Tab 变为空状态。
+## Case 4: clear after checkout
 
-## 回归关注点
+1. Ensure the cart contains at least one item.
+2. Enter `下单吧，地址用默认的`.
+3. Verify that:
+   - The guide reports the order number, item count, total, and default address.
+   - The Cart tab returns to its empty state.
 
-- `tool_result` 里的 `cart.lines` 补全商品详情时不阻塞 token 流式显示。
-- `checkout` action 即使没有 `cart.lines`，也要向前端发空购物车快照。
-- 购物车快照同步只更新本地购物车状态，不破坏已有商品卡片点击详情能力。
+## Regression checks
+
+- Hydrating `cart.lines` from a `tool_result` must not block streamed text tokens.
+- A checkout action must emit an empty cart snapshot even when no `cart.lines` field is present.
+- Updating local cart state must not break navigation from existing product cards to product details.

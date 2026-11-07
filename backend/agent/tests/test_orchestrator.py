@@ -1,12 +1,11 @@
-"""单元测试：用 mock 覆盖 orchestrator 的全部分支 + edge case。
+"""Mock-based unit tests covering orchestrator branches and edge cases.
 
-不依赖任何外部服务，可在 CI 中无脑跑。
-覆盖：
-- AgentSession 行为
-- Clarify / Fallback / Recommend Tool
-- AnswerComposer.compose / compose_stream
-- Orchestrator.handle_turn happy / 降级
-- Orchestrator.handle_turn_stream happy / 降级 / 事件契约
+The suite has no external-service dependencies and covers:
+- AgentSession behavior
+- Clarify, fallback, and recommendation tools
+- `AnswerComposer.compose` and `compose_stream`
+- Blocking orchestrator success and fallback paths
+- Streaming orchestrator success, fallback, and event contracts
 """
 
 from __future__ import annotations
@@ -35,10 +34,10 @@ from search.query_understanding import ParsedQuery
 from store.product_store import PriceRange, ProductDetail
 
 
-# ---------- 工具：构造伪响应 ----------
+# ---------- Helpers for fake responses ----------
 
 def _fake_tool_response(tool: str, rewritten: str, conf: str = "high", reason: str = "ok") -> Any:
-    """模拟 Ark function-calling 返回值的最小骨架。"""
+    """Build the minimum function-calling response shape."""
     args = json.dumps({
         "tool": tool,
         "rewritten_query": rewritten,
@@ -58,7 +57,7 @@ def _fake_chat_response(text: str) -> Any:
 
 
 def _fake_stream_chunks(pieces: list[str]):
-    """模拟 OpenAI stream=True 的迭代器：每个 chunk 一个 delta.content。"""
+    """Build a streaming iterator with one `delta.content` value per chunk."""
     for p in pieces:
         delta = SimpleNamespace(content=p)
         choice = SimpleNamespace(delta=delta, index=0, finish_reason=None)
@@ -104,7 +103,7 @@ def _fake_comparison(details, focus="", timeout=None):
 
 
 class _StubSearchService:
-    """模拟 SearchService，可控返回 hits 和 needs_clarification。"""
+    """Controllable SearchService stub returning configured hits and clarification state."""
     def __init__(self, hits: list[dict] | None = None, needs_clarify: bool = False):
         self._hits = hits or []
         self._needs_clarify = needs_clarify
@@ -146,7 +145,7 @@ class _StubSearchService:
 
 
 def _single_decomposer(query: str) -> list[SubRequest]:
-    """测试用 stub：永远当作单需求，避免 RecommendTool.run 触发真实 LLM 拆解。"""
+    """Treat every query as one request so RecommendTool does not call the real LLM decomposer."""
     return [SubRequest(label=query, query=query)]
 
 
@@ -246,7 +245,7 @@ class TestContextualSearchModes:
         assert "不要回退推荐上一轮品类" in (result.composer_hint or "")
 
 
-# ---------- AgentSession 测试 ----------
+# ---------- AgentSession tests ----------
 
 class TestAgentSession:
     def test_basic_history(self):
@@ -304,16 +303,16 @@ class TestRecommendTool:
         r = tool.run("500内精华", session, {})
         assert r.tool_name == "recommend"
         assert len(r.payload["products"]) == 1
-        # 精简后的商品卡只含展示字段，无 evidence/score 等内部字段
+        # Compact product cards contain display fields only, without evidence or internal scores.
         p = r.payload["products"][0]
         assert p["product_id"] == "p1"
         assert p["title"] == "雅诗兰黛精华"
         assert p["price"] == 480
         assert "score" not in p and "evidence" not in p
-        # debug 块仍保留原始数据，方便排查
+        # The debug block retains raw data for diagnosis.
         assert "parsed" in r.payload["debug"]
         assert len(r.payload["debug"]["hits_full"]) == 1
-        # summary 提供高层摘要
+        # Summary provides a high-level overview.
         assert r.payload["summary"]["hit_count"] == 1
         assert session.get("last_hits") == [{"product_id": "p1", "title": "雅诗兰黛精华"}]
         assert "1 款商品" in r.composer_hint
@@ -332,7 +331,7 @@ class TestRecommendTool:
         assert "模糊" in r.composer_hint
 
     def test_refine_path_skips_decompose(self):
-        """有 base_parsed（refine）时不应触发拆解：注入一个会爆炸的 decomposer 验证。"""
+        """Do not decompose a refinement with `base_parsed`; verify with a decomposer that would raise."""
         def _boom(_q: str):
             raise AssertionError("refine 路径不应调用 decomposer")
 
@@ -343,7 +342,7 @@ class TestRecommendTool:
         assert "groups" not in r.payload  # 单需求路径不产出 groups
 
     def test_multi_intent_fan_out_and_grouping(self):
-        """多需求：分别检索后按组聚合，products 扁平化，groups 保留分区。"""
+        """Search multiple requests separately, flatten products, and preserve grouped partitions."""
         hits = [
             {"product_id": "p1", "title": "安热沙防晒", "base_price": 298},
             {"product_id": "p2", "title": "速干短袖", "base_price": 99},
@@ -360,18 +359,18 @@ class TestRecommendTool:
         r = tool.run("去三亚旅游推荐衣服和防晒", session, {})
 
         assert r.tool_name == "recommend"
-        # groups 结构存在且含两个子需求标签
+        # The groups structure contains both sub-request labels.
         labels = [g["label"] for g in r.payload["groups"]]
         assert labels == ["防晒", "衣服"]
-        # 跨组去重：同一组商品不会重复进第二组（stub 每次返回相同 hits）
+        # Deduplicate across groups even though the stub returns the same hits each time.
         all_ids = [p["product_id"] for p in r.payload["products"]]
         assert len(all_ids) == len(set(all_ids))  # 无重复
-        # summary 反映多需求
+        # Summary reflects multiple requests.
         assert r.payload["summary"]["group_count"] >= 1
         assert r.payload["debug"]["multi_intent"] is True
-        # composer_hint 引导分组介绍
+        # The composer hint requests grouped presentation.
         assert "分组" in r.composer_hint
-        # last_hits 存合并后的全部命中
+        # `last_hits` stores the merged results.
         assert session.get("last_hits")
 
 
@@ -385,7 +384,7 @@ class TestComposerBlocking:
             narrative_override="请补充信息",
             needs_composer=False,
         )
-        # 即使 composer 内部 client 没 mock 也不会被调用
+        # The composer's internal client should not be called even if it is not mocked.
         out = AnswerComposer().compose(sr, AgentSession())
         assert out == "请补充信息"
 
@@ -479,7 +478,7 @@ class TestComposerStreaming:
             composer_hint="h",
         )
         with patch("agent.composer.get_client") as mock_client:
-            # 空 chunks（极端情况）
+            # Empty chunks represent an extreme edge case.
             mock_client.return_value.chat.completions.create.return_value = iter([])
             chunks = list(AnswerComposer().compose_stream(sr, AgentSession()))
         assert len(chunks) == 1
@@ -505,7 +504,7 @@ class TestComposerStreaming:
         assert "生成中断" not in chunks[0]
 
     def test_stream_handles_chunks_without_content(self):
-        """有些 chunk 只是 role/finish 信号，没 content；不能崩。"""
+        """Ignore role or finish chunks without content instead of failing."""
         sr = ToolResult(
             tool_name="recommend",
             payload={"query": "x"},
@@ -580,7 +579,7 @@ class TestComposerStreaming:
         assert "禁止写成长段参数介绍" in messages[0]["content"]
 
 
-# ---------- Orchestrator: 主流程 + 降级（非流式） ----------
+# ---------- Orchestrator: blocking main flow and fallbacks ----------
 
 class TestOrchestratorBlocking:
     def _patch_llm(self, router_resp, composer_text="OK"):
@@ -767,7 +766,7 @@ class TestOrchestratorBlocking:
             "focus_query": "续航怎么样",
         })
 
-        # 不打 patch route——若被调用会抛错；这里应跳过 router 直接 product_detail。
+        # Do not patch route: this path should skip the router and resume product detail directly.
         decision = agent._safe_route("第一款", session, {"timings": {}})
         assert decision.tool == "product_detail"
         assert decision.rewritten_query == "第一款"
@@ -806,7 +805,7 @@ class TestOrchestratorBlocking:
         session = AgentSession()
         session.set("pending_cart", {"product_id": "p1", "title": "x", "quantity": 1, "spec_text": ""})
 
-        # “暗夜黑 42码”是规格应答，必须留在 cart 完成加购。
+        # A color-and-size reply must stay in the cart flow to complete the addition.
         decision = agent._safe_route("暗夜黑 42码", session, {"timings": {}})
         assert decision.tool == "cart"
         assert session.get("pending_cart") is not None
@@ -819,7 +818,7 @@ class TestOrchestratorBlocking:
             tool="recommend", rewritten_query="推荐几款笔记本", confidence="high", reasoning="fresh",
         )
 
-        # 用户中途改口开新检索 → 释放 pending，交回正常路由。
+        # A new search request should release pending state and return to normal routing.
         with patch("agent.orchestrator.route", return_value=router_decision):
             decision = agent._safe_route("推荐几款笔记本", session, {"timings": {}})
         assert decision.tool == "recommend"
@@ -831,7 +830,7 @@ class TestOrchestratorBlocking:
         assert _is_new_search_escape("推荐几款笔记本") is True
         assert _is_new_search_escape("有没有便宜点的平板") is True
         assert _is_new_search_escape("换成华为的看看") is True
-        # 规格应答 / 聚焦指代不算逃逸
+        # Variant answers and focused references do not count as escaping the pending flow.
         assert _is_new_search_escape("暗夜黑 42码") is False
         assert _is_new_search_escape("这个加进来") is False
         assert _is_new_search_escape("第一个") is False
@@ -859,7 +858,7 @@ class TestOrchestratorBlocking:
             {"product_id": "pants", "title": "Nike Dri-FIT 男子训练长裤"},
             {"product_id": "tee", "title": "优衣库 DRY-EX 超快干圆领短袖T恤"},
         ])
-        # 模拟 router 把“第一个”错误改写成短裤；工具仍应使用 raw query 的首尾指代。
+        # Even if the router rewrites an ordinal incorrectly, the tool must use the raw query's reference.
         router_resp = _fake_tool_response("compare", "对比优衣库短裤和优衣库T恤")
         rc, _ = self._patch_llm(router_resp)
         with patch("agent.intent_router.get_client", return_value=rc), \
@@ -869,7 +868,7 @@ class TestOrchestratorBlocking:
         assert ids == ["hoodie", "tee"]
 
 
-# ---------- Orchestrator: edge cases（非流式） ----------
+# ---------- Orchestrator: blocking edge cases ----------
 
 class TestOrchestratorEdgeCases:
     def test_empty_input_shortcut(self):
@@ -954,7 +953,7 @@ class TestOrchestratorEdgeCases:
         with patch("agent.intent_router.get_client") as mock_rc:
             mock_rc.return_value.chat.completions.create.return_value = bad_resp
             resp = agent.handle_turn("x", AgentSession())
-        # 未知/漏填 tool 时退回 recommend（购物安全默认），不再误判成 clarify。
+        # An unknown or missing tool falls back to the shopping-safe recommendation default.
         assert resp.decision.tool == "recommend"
 
     def test_router_returns_no_tool_call(self):
@@ -1011,7 +1010,7 @@ class TestOrchestratorEdgeCases:
             Agent(tools={"recommend": RecommendTool()})  # 缺 clarify / fallback
 
 
-# ---------- Orchestrator: 流式 ----------
+# ---------- Orchestrator: streaming ----------
 
 class TestOrchestratorStreaming:
     def test_stream_happy_event_order(self):
@@ -1027,16 +1026,16 @@ class TestOrchestratorStreaming:
             )
             events = list(agent.handle_turn_stream("精华", AgentSession()))
         types = [e["type"] for e in events]
-        # 过滤掉 status 后断言核心管线顺序：meta → tool_result → token+ → done
+        # After filtering status events, verify the core order: metadata, tool result, tokens, done.
         core = [t for t in types if t != "status"]
         assert core[0] == "meta"
         assert core[1] == "tool_result"
         assert core[-1] == "done"
-        # 至少出现一个 status（路由阶段）
+        # At least one routing status event should appear.
         assert "status" in types
         tokens = [e["data"] for e in events if e["type"] == "token"]
         assert "".join(tokens) == "为你推荐 X"
-        # done 携带 timings + narrative
+        # The done event carries timings and the narrative.
         done_data = events[-1]["data"]
         assert done_data["narrative"] == "为你推荐 X"
         assert "router_ms" in done_data["timings"]
@@ -1044,21 +1043,21 @@ class TestOrchestratorStreaming:
         assert "composer_ms" in done_data["timings"]
 
     def test_stream_empty_input(self):
-        """空输入也能正常走完流式事件序列。"""
+        """Complete the streaming event sequence for empty input."""
         agent = _make_agent()
-        # 不应触发任何 LLM 调用
+        # No LLM call should occur.
         with patch("agent.intent_router.get_client") as mock_rc, \
              patch("agent.composer.get_client") as mock_cc:
             events = list(agent.handle_turn_stream("", AgentSession()))
             mock_rc.assert_not_called()
             mock_cc.assert_not_called()
         types = [e["type"] for e in events]
-        # 空输入快捷路径不发 status
+        # The empty-input fast path emits no status event.
         assert types == ["meta", "tool_result", "token", "done"]
         assert "品类" in events[2]["data"]
 
     def test_stream_clarify_path_uses_override(self):
-        """clarify tool 用 narrative_override，流式应只有一个 token 事件。"""
+        """Emit one token event when the clarification tool supplies a narrative override."""
         agent = _make_agent()
         router_resp = _fake_tool_response("clarify", "随便")
         with patch("agent.intent_router.get_client") as mock_rc:

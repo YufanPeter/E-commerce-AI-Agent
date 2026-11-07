@@ -36,7 +36,7 @@ from store.product_store import ProductStore
 
 logger = logging.getLogger(__name__)
 
-# 固定对比 2 个商品（对比表两列最清晰，也是用户预期）。
+# Compare exactly two products for a clear two-column table.
 _MAX_COMPARE = 2
 
 _NAME_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9]+|[\u4e00-\u9fff]{2,}")
@@ -73,7 +73,7 @@ class CompareTool:
                 "然后说「对比一下第一个和第二个」就可以。"
             )
 
-        # 前端对比页可能直接指定商品 id（绕过指代解析）。
+        # The comparison screen may provide product IDs directly.
         explicit_ids = slots.get("product_ids")
         if explicit_ids:
             product_ids = [pid for pid in explicit_ids][:_MAX_COMPARE]
@@ -88,17 +88,15 @@ class CompareTool:
                     product_ids = llm_ids
 
         if len(product_ids) < 2:
-            # 定位不到 2 款 → 反问。记下「正在对比追问」，下一轮用户回答
-            # 「第一个和第三个」时 orchestrator 才能把它强制送回 compare，
-            # 而不是被 router 误判成 product_detail/refine。候选就是 last_hits
-            # 全集，所以无需另存子集，只需标记待定态。
+            # Mark a pending comparison before asking, so an ordinal answer returns to
+            # this tool. Candidates are the complete last-hit set and need not be copied.
             session.set("pending_compare", {"hit_count": len(last_hits)})
             return self._plain(
                 "想对比哪几款呢？可以说「对比第一个和第三个」，"
                 "或者「对比华为和小米那两款」。"
             )
 
-        # 定位成功 → 清掉「对比追问」待定态，避免粘住下一轮。
+        # Clear resolved pending state so it does not capture the next turn.
         session.set("pending_compare", None)
 
         details = []
@@ -129,7 +127,7 @@ class CompareTool:
             return self._plain("对比生成出了点问题，稍后再试或换两款商品？")
         _remember_comparison(session, comparison, details)
 
-        # 把参与对比的商品回写工作记忆，便于后续"第一个加入购物车"等接续指代。
+        # Store compared products so later turns can refer to them by position.
         session.set(
             "last_hits",
             [
@@ -148,10 +146,11 @@ class CompareTool:
     def _resolve_targets(
         self, query: str, last_hits: list[dict[str, Any]], focus_index: int | None = None
     ) -> list[str]:
-        """把用户这句话定位到要对比的商品 id 列表（保序去重，最多 _MAX_COMPARE）。
+        """Resolve comparison product IDs, preserving order and uniqueness.
 
-        优先级：品牌/名称点名（"华为和小米这两款"）优先于泛指"这两款"；
-        否则再按显式序号（"第一个和第三个"）解析；都没说时默认前两个。"""
+        Explicit names take priority over generic demonstratives, followed by ordinals.
+        If no target is stated, use the first two products.
+        """
         strict_named = _resolve_context_names(query, last_hits)
         # 名称匹配用补齐了 SKU 规格值的候选：「黑色那款和白色那款对比」也能定位。
         enriched_hits = enrich_candidates(last_hits, self._store)
@@ -165,7 +164,7 @@ class CompareTool:
             index_query = _strip_generic_pair_words(query) if named else query
             indices = resolve_indices(index_query, len(last_hits), focus_index=focus_index)
             if len(indices) < 2:
-                for i in named:  # 合并序号与名称命中，保序去重
+                for i in named:  # Merge matches while preserving order and uniqueness.
                     if i not in indices:
                         indices.append(i)
         if len(indices) < 2 and not (strict_named or resolve_by_name(query, enriched_hits)):
@@ -181,8 +180,7 @@ class CompareTool:
     def _resolve_targets_llm(
         self, query: str, last_hits: list[dict[str, Any]]
     ) -> list[str]:
-        """规则定位不到 2 款时的 LLM 语义兜底：把 last_hits 补上品类/子品类后
-        交给共享分层 resolver（序号→名称→LLM）挑出最多 2 款。
+        """Use semantic resolution when rules cannot identify two products.
 
         让"对比华为耳机和小米手机"这类口语品类词也能命中对应商品；LLM 不可用
         时返回空列表，调用方据此继续走反问。"""
@@ -309,14 +307,14 @@ def is_spec_switch_reply(query: str, last_comparison: dict[str, Any] | None) -> 
 
 
 def _resolve_context_names(query: str, hits: list[dict[str, Any]]) -> list[int]:
-    """在上一轮 hits 内按“明确品牌/型号词”匹配用户点名的两款。
+    """Match explicitly named brands or models in the previous hits.
 
-    ``reference.resolve_by_name`` 偏召回，会把 ``Pro`` 这类通用型号词命中到
-    iPhone Pro。对 compare 来说，用户说“小米和华为这两款”时，我们更需要
-    保守地按上下文标题里的品牌/型号词定位，并忽略泛词。"""
+    Unlike the recall-oriented generic resolver, this matcher ignores generic model
+    terms such as ``Pro`` and favors conservative identification.
+    """
     text = query or ""
     lowered = text.lower()
-    mentions: list[tuple[int, int, int]] = []  # (出现位置, -词长度, hit index)
+    mentions: list[tuple[int, int, int]] = []  # (query position, -token length, hit index)
 
     for i, hit in enumerate(hits):
         tokens = _significant_tokens(hit.get("title", ""))
@@ -357,21 +355,22 @@ def _strip_generic_pair_words(query: str) -> str:
     return text
 
 
-# 明显的「开新检索/换品类」信号——出现这些词时，pending_compare 不再粘住。
+# Signals that release pending comparison state for a new search or category.
 _COMPARE_NEW_SEARCH_WORDS: tuple[str, ...] = (
     "推荐", "找", "有哪些", "有什么", "想买", "给我", "来几款", "换个", "换成", "看看别的",
     "加入购物车", "加购", "下单", "结算",
 )
 
-# 连接两个被点名商品的关系词（"第一个和第三个" / "华为跟小米"）。
+# Relationship words connecting two named products.
 _COMPARE_LINK_WORDS: tuple[str, ...] = ("和", "跟", "与", "还有", "以及", "对比", "比较", "vs", "VS")
 
 
 def is_compare_selection_reply(query: str, hit_count: int) -> bool:
-    """判断这句是否像在回答「想对比哪几款」，用于 pending_compare 的粘性判定。
+    """Return whether the query resembles an answer to a pending comparison.
 
-    命中条件：解析出 ≥2 个序号、命中 ≥2 个商品名、或含连接词（和/跟/对比）。
-    出现明显的开新检索词（推荐/找/加购…）则判否，让待定态及时释放。"""
+    Two ordinals or a relationship word count as an answer. New-search signals release
+    the pending state.
+    """
     text = (query or "").strip()
     if not text:
         return False
@@ -382,5 +381,4 @@ def is_compare_selection_reply(query: str, hit_count: int) -> bool:
     if any(word in text for word in _COMPARE_LINK_WORDS):
         return True
     return False
-
 

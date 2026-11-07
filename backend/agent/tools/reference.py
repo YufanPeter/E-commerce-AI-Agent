@@ -119,8 +119,8 @@ def resolve_indices(query: str, hit_count: int, focus_index: int | None = None) 
     return indices
 
 
-# title/brand 里有区分度的词：英文型号/品牌词（FreeBuds/Osprey/iPhone）
-# 与 ≥2 字的中文连续片段（华为/北面/双肩背包）。用于把"华为的那个"映射回具体商品。
+# Distinctive title/brand tokens: Latin model or brand names (FreeBuds/Osprey/iPhone)
+# and Chinese runs of at least two characters. These map references back to products.
 _NAME_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9]+|[\u4e00-\u9fff]{2,}")
 
 
@@ -222,8 +222,8 @@ def resolve_by_name(query: str, hits: list[dict]) -> list[int]:
     return name_matches or attr_matches
 
 
-# 加购/管车话里的动作词、量词、语气词——做全库点名检索前先剥掉，
-# 留下真正的商品关键词（品牌/品类/型号），如"把小米加进来"→"小米"。
+# Remove action words, quantifiers, and particles from cart utterances before a
+# catalog-wide name search, leaving useful brand/category/model terms.
 _ACTION_STOPWORDS = (
     "帮我", "麻烦", "请", "我想", "我要", "想要", "需要", "给我", "替我",
     "把", "将", "再", "也", "还", "这个", "那个", "这款", "那款", "这件", "那件",
@@ -239,20 +239,20 @@ _ACTION_STOPWORDS = (
 
 
 def extract_name_query(query: str) -> str:
-    """从加购话里抽出用于全库检索的商品关键词。
+    """Extract catalog-search keywords from an add-to-cart utterance.
 
-    策略：剥掉动作/量词/语气停用词后，保留剩余的品牌/品类/型号文本。
-    例："把小米加进来"→"小米"、"帮我加一个 OPPO Reno"→"OPPO Reno"、
-    "再来一件北面冲锋衣"→"北面冲锋衣"。剥光了（纯指代如"这个"）则返回空串，
-    交由调用方走指代消解而非全库检索。"""
+    Action words, quantifiers, and particles are removed while brand/category/model
+    text is retained. If nothing remains, as with a pure pronoun-only reference,
+    return an empty string so the caller uses reference resolution instead.
+    """
     text = (query or "").strip()
     if not text:
         return ""
     for word in _ACTION_STOPWORDS:
         text = text.replace(word, " ")
-    # 折叠空白、去掉残留标点
+    # Collapse whitespace and remove residual punctuation.
     cleaned = re.sub(r"[\s，。、!！?？~]+", " ", text).strip()
-    # 只剩序号指代（"第二个"/"前两个"/"这俩"）也不是商品关键词，视为空。
+    # Ordinal-only references are not product keywords either.
     if not cleaned or _ORDINAL_RE.fullmatch(cleaned) or cleaned in (
         "前", "俩", "两个", "两款", "全部", "所有", "都",
     ):

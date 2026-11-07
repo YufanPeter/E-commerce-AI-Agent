@@ -1,12 +1,12 @@
 import Foundation
 
-/// 对话历史的本地持久化仓库。
+/// Local persistence store for conversation history.
 ///
-/// 历史需要完整 transcript（文本 + 商品卡），只有前端持有完整渲染数据；后端
-/// `AgentSession` 仅保留截断的原文滑窗且重启即丢。因此历史落在客户端：序列化为
-/// `Documents/conversations.json`，App 重启或后端重启都不丢。
+/// Conversation history needs the complete transcript, including text and product cards, which only the client retains.
+/// The backend `AgentSession` keeps only a truncated text window and loses it on restart, so history is serialized to
+/// `Documents/conversations.json` on the client and survives both app and backend restarts.
 final class ConversationStore: ObservableObject {
-    /// 按 `updatedAt` 倒序，最新的对话排在最前。
+    /// Sorted by `updatedAt` in descending order, with the newest conversation first.
     @Published private(set) var conversations: [Conversation] = []
 
     private let fileURL: URL
@@ -29,7 +29,7 @@ final class ConversationStore: ObservableObject {
         load()
     }
 
-    /// 插入或更新一段对话；空白（无用户消息）对话不入库，避免历史里出现空条目。
+    /// Inserts or updates a conversation. Conversations without user messages are not stored.
     func upsert(_ conversation: Conversation) {
         guard conversation.hasUserMessage else { return }
         var updated = conversation
@@ -80,7 +80,7 @@ final class ConversationStore: ObservableObject {
             let decoded = try decoder.decode([Conversation].self, from: data)
             conversations = decoded.sorted { $0.updatedAt > $1.updatedAt }
         } catch {
-            // 损坏或不兼容的历史文件不应阻断 App 启动；丢弃即可。
+            // A corrupt or incompatible history file must not prevent app startup; discard it.
             conversations = []
         }
     }
@@ -95,7 +95,7 @@ final class ConversationStore: ObservableObject {
             let data = try encoder.encode(conversations)
             try data.write(to: fileURL, options: .atomic)
         } catch {
-            // 持久化失败仅影响下次启动的历史，不应中断当前会话。
+            // Persistence failures affect only the next launch and must not interrupt the current conversation.
         }
     }
 }

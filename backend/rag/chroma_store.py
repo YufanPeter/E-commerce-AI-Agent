@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Chroma 连接与 collection 初始化的共享入口。"""
+"""Shared Chroma connection and collection initialization."""
 
 import os
 from pathlib import Path
@@ -43,9 +43,8 @@ _QUERY_EMBEDDING_CACHE = _make_query_cache()
 class DashScopeEmbeddingFunction:
     """通过阿里云百炼多模态 embedding API 计算 Chroma 向量。
 
-    相比本地 ``SentenceTransformerEmbeddingFunction``，这里把 embedding 推理
-    放到云端，因此进程无需 import torch / sentence-transformers，冷启动从
-    分钟级降到秒级。离线建库和在线检索共用同一个 model，保证向量空间一致。
+    Remote inference removes local PyTorch/sentence-transformers dependencies. Offline
+    indexing and online retrieval share the same model to keep vector spaces consistent.
 
     qwen3-vl-embedding 支持批量文本，并与图片向量共享同一语义空间。更换
     模型或维度后必须重建向量库。
@@ -59,7 +58,7 @@ class DashScopeEmbeddingFunction:
         self._model = model
         self._batch_size = min(20, max(1, batch_size))
 
-    # 参数名必须是 input：chromadb 会校验 EmbeddingFunction.__call__ 的签名。
+    # Chroma validates that this parameter is named ``input``.
     def __call__(self, input: Sequence[str]) -> list[list[float]]:
         from llm.client import embed_multimodal_primary
 
@@ -77,9 +76,7 @@ class DashScopeEmbeddingFunction:
             )
         return vectors
 
-    # chromadb 1.x 检索时调用 embed_query(input=...)；
-    # 离线建库仍走 __call__（即 embed_documents）。两条路径输入输出形状一致，
-    # 这里统一委托给 __call__，从而同时兼容 0.6.x 与 1.x。
+    # Delegate query and document methods to the same implementation across Chroma versions.
     def embed_query(self, input: Sequence[str]) -> list[list[float]]:
         # 在线查询向量带 TTL 缓存：同一句检索词（热词 / 重试 / refine 承接）不必
         # 再打一次 embedding API，省下 ~300-800ms。
@@ -132,10 +129,10 @@ def create_collection(
     reset: bool = False,
     provider: str = "dashscope",
 ):
-    """打开配置好的 Chroma collection，必要时先清空旧索引。
+    """Open the configured Chroma collection, optionally clearing its old index.
 
-    离线建库脚本和运行时检索器共用这个工厂函数，避免 collection 名称、
-    持久化路径、embedding 模型和距离度量配置出现不一致。
+    Offline indexing and runtime retrieval share this factory to keep collection name,
+    persistence path, embedding model, and distance metric consistent.
     """
     try:
         import chromadb

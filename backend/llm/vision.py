@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-"""多模态「拍照找货」的视觉能力封装。
+"""Visual capabilities for multimodal product search.
 
-两件事，都围绕"把一张图变成系统能检索的东西"：
+Two operations convert an image into searchable representations:
 
 1. ``vision_extract_query(image)``：用多模态对话模型（DeepSeek deepseek-flash /
    百炼 Qwen-VL，由 LLM_PROVIDER 决定）把图片"看懂"成一句**中文检索 query**。这是图搜的主召回信号——把图像问题
@@ -32,7 +32,7 @@ from llm.client import (
 logger = logging.getLogger(__name__)
 
 
-# VLM 抽取检索 query 的系统提示：只描述商品本体，输出可直接检索的中文短语。
+# System prompt for extracting a directly searchable Chinese product phrase.
 _EXTRACT_SYSTEM = (
     "你是电商导购的视觉识别助手。用户给你一张商品图片，"
     "你要输出一句**中文商品检索关键词**，让系统据此在商品库里找同类商品。\n"
@@ -45,7 +45,7 @@ _EXTRACT_SYSTEM = (
     "4. 如果图里看不清商品或不是商品图，只输出两个字：无法识别。"
 )
 
-# 抽取失败/非商品图时的哨兵返回，调用方据此降级。
+# Sentinel returned for extraction failure or a non-product image.
 UNRECOGNIZED = "无法识别"
 
 
@@ -59,9 +59,9 @@ def _vision_timeout() -> float:
 
 
 def vision_extract_query(image: str) -> str:
-    """让 VLM 看图，返回一句中文检索 query；无法识别时返回 ``UNRECOGNIZED``。
+    """Return a Chinese image-search query or ``UNRECOGNIZED``.
 
-    image: 商品图片的远程 URL 或 ``data:image/...;base64,`` 内联串。
+    ``image`` may be a remote URL or inline ``data:image/...;base64,`` value.
     """
     if not image or not image.strip():
         return UNRECOGNIZED
@@ -84,10 +84,10 @@ def vision_extract_query(image: str) -> str:
         timeout=_vision_timeout(),
     )
     text = (response.choices[0].message.content or "").strip()
-    # 模型偶尔会带上引号/句号，清掉，保留纯关键词。
+    # Remove occasional quotes and terminal punctuation around model output.
     text = text.strip("「」\"'。．. \n\t")
     if not text or UNRECOGNIZED in text:
-        logger.info("vision_extract_query: 无法识别商品图")
+        logger.info("vision_extract_query could not identify a product in the image")
         return UNRECOGNIZED
     logger.info("vision_extract_query → %r", text)
     return text

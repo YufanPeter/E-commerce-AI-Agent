@@ -209,7 +209,7 @@ _HIT_KEEP_KEYS = ("title", "brand", "category", "sub_category", "price_display",
 
 
 def _trim_hit_for_llm(h: dict[str, Any]) -> dict[str, Any]:
-    """裁剪单条商品，保留话术字段并把 product_id 统一成 productId 供 LLM 回写。"""
+    """Keep narrative fields and normalize ``product_id`` to ``productId``."""
     out: dict[str, Any] = {}
     pid = h.get("product_id") or h.get("productId")
     if pid:
@@ -260,14 +260,14 @@ def _trim_payload_for_llm(payload: dict[str, Any]) -> dict[str, Any]:
             )
             if contextual.get(k)
         }
-    # parsed 现在收纳在 debug 块；老格式（顶层 parsed）也兼容
+    # Parsed intent now lives under debug; retain compatibility with the old top level.
     parsed = (payload.get("debug") or {}).get("parsed") or payload.get("parsed") or {}
     trimmed["parsed"] = {
         k: parsed.get(k)
         for k in ("category", "sub_category", "max_price", "min_price", "brand_include", "brand_exclude", "negative_ingredients")
         if parsed.get(k)
     }
-    # 商品列表：新格式叫 products，老格式叫 hits
+    # Product lists use ``products`` in the new format and ``hits`` in the old format.
     hits = payload.get("products") or payload.get("hits") or []
     trimmed["hits"] = [_trim_hit_for_llm(h) for h in hits]
     # 多需求场景：透传分组结构，让 composer 按需求分组介绍。

@@ -1,0 +1,250 @@
+{
+  "_meta": {
+    "purpose": "RAG 检索质量评测标注集。每条 query 的 relevant_ids 是基于 SQLite 商品库（100 商品）人工核对的标准答案（真值）。",
+    "label_source": "backend/storage/ecommerce_agent.sqlite3 的 products / product_price_ranges 真实数据，逐条核对得到。",
+    "metrics": ["Recall@K", "MRR", "NDCG@K"],
+    "note": "正确答案 = 满足查询语义且确实存在于库中的全部商品 product_id。用于对比『纯向量召回』与『向量+Rerank』两种链路的命中质量。"
+  },
+  "cases": [
+    {
+      "qid": "subcat_phone",
+      "query": "推荐几款智能手机",
+      "type": "subcategory",
+      "relevant_ids": ["p_digital_001", "p_digital_002", "p_digital_003", "p_digital_008", "p_digital_009", "p_digital_010", "p_digital_014", "p_digital_015", "p_digital_016", "p_digital_017"]
+    },
+    {
+      "qid": "subcat_tablet",
+      "query": "有什么平板电脑值得买",
+      "type": "subcategory",
+      "relevant_ids": ["p_digital_005", "p_digital_011", "p_digital_013", "p_digital_019", "p_digital_021", "p_digital_024", "p_digital_025"]
+    },
+    {
+      "qid": "subcat_laptop",
+      "query": "想买一台笔记本电脑",
+      "type": "subcategory",
+      "relevant_ids": ["p_digital_004", "p_digital_006", "p_digital_012", "p_digital_020", "p_digital_022", "p_digital_023"]
+    },
+    {
+      "qid": "subcat_running_shoe",
+      "query": "推荐跑步鞋",
+      "type": "subcategory",
+      "relevant_ids": ["p_clothes_007", "p_clothes_008", "p_clothes_009", "p_clothes_010"]
+    },
+    {
+      "qid": "subcat_basketball_shoe",
+      "query": "有没有好的篮球鞋",
+      "type": "subcategory",
+      "relevant_ids": ["p_clothes_011", "p_clothes_012", "p_clothes_013"]
+    },
+    {
+      "qid": "subcat_tshirt",
+      "query": "推荐短袖T恤",
+      "type": "subcategory",
+      "relevant_ids": ["p_clothes_001", "p_clothes_002", "p_clothes_003"]
+    },
+    {
+      "qid": "subcat_essence",
+      "query": "推荐几款精华",
+      "type": "subcategory",
+      "relevant_ids": ["p_beauty_001", "p_beauty_002", "p_beauty_004", "p_beauty_005", "p_beauty_009", "p_beauty_018", "p_beauty_024"]
+    },
+    {
+      "qid": "subcat_sunscreen",
+      "query": "有什么防晒推荐",
+      "type": "subcategory",
+      "relevant_ids": ["p_beauty_006", "p_beauty_010", "p_beauty_023"]
+    },
+    {
+      "qid": "subcat_cream",
+      "query": "推荐面霜",
+      "type": "subcategory",
+      "relevant_ids": ["p_beauty_007", "p_beauty_008", "p_beauty_012"]
+    },
+    {
+      "qid": "subcat_coffee",
+      "query": "推荐咖啡",
+      "type": "subcategory",
+      "relevant_ids": ["p_food_001", "p_food_002", "p_food_022", "p_food_023"]
+    },
+    {
+      "qid": "subcat_instant_food",
+      "query": "有什么方便食品",
+      "type": "subcategory",
+      "relevant_ids": ["p_food_011", "p_food_012", "p_food_020", "p_food_021"]
+    },
+    {
+      "qid": "subcat_soda",
+      "query": "推荐碳酸饮料",
+      "type": "subcategory",
+      "relevant_ids": ["p_food_004", "p_food_015", "p_food_024"]
+    },
+    {
+      "qid": "brand_apple_digital",
+      "query": "有没有苹果的数码产品",
+      "type": "brand",
+      "relevant_ids": ["p_digital_001", "p_digital_003", "p_digital_006", "p_digital_012", "p_digital_018", "p_digital_020", "p_digital_024", "p_digital_025"]
+    },
+    {
+      "qid": "brand_huawei_digital",
+      "query": "华为有什么产品",
+      "type": "brand",
+      "relevant_ids": ["p_digital_002", "p_digital_004", "p_digital_005", "p_digital_007", "p_digital_021"]
+    },
+    {
+      "qid": "brand_xiaomi_digital",
+      "query": "小米的数码产品有哪些",
+      "type": "brand",
+      "relevant_ids": ["p_digital_008", "p_digital_009", "p_digital_010", "p_digital_011"]
+    },
+    {
+      "qid": "brand_nike_sport",
+      "query": "有没有耐克的运动产品",
+      "type": "brand",
+      "relevant_ids": ["p_clothes_003", "p_clothes_007", "p_clothes_011", "p_clothes_021"]
+    },
+    {
+      "qid": "brand_uniqlo",
+      "query": "优衣库有什么",
+      "type": "brand",
+      "relevant_ids": ["p_clothes_001", "p_clothes_002", "p_clothes_023"]
+    },
+    {
+      "qid": "brand_adidas",
+      "query": "阿迪达斯的产品",
+      "type": "brand",
+      "relevant_ids": ["p_clothes_004", "p_clothes_008", "p_clothes_022"]
+    },
+    {
+      "qid": "price_phone_8000",
+      "query": "8000元以内的智能手机",
+      "type": "price",
+      "relevant_ids": ["p_digital_002", "p_digital_008", "p_digital_009", "p_digital_015", "p_digital_016", "p_digital_017"]
+    },
+    {
+      "qid": "price_tablet_5000",
+      "query": "5000元以内的平板电脑",
+      "type": "price",
+      "relevant_ids": ["p_digital_005", "p_digital_011", "p_digital_019", "p_digital_025"]
+    },
+    {
+      "qid": "price_running_shoe_1200",
+      "query": "1200元以内的跑步鞋",
+      "type": "price",
+      "relevant_ids": ["p_clothes_007", "p_clothes_009", "p_clothes_010"]
+    },
+    {
+      "qid": "price_essence_550",
+      "query": "550元以内的精华",
+      "type": "price",
+      "relevant_ids": ["p_beauty_005", "p_beauty_009", "p_beauty_018", "p_beauty_024"]
+    },
+    {
+      "qid": "price_coffee_90",
+      "query": "90元以内的咖啡",
+      "type": "price",
+      "relevant_ids": ["p_food_002", "p_food_022", "p_food_023"]
+    },
+    {
+      "qid": "brand_price_xiaomi_tablet",
+      "query": "3500元左右的小米平板",
+      "type": "brand_price",
+      "relevant_ids": ["p_digital_011"]
+    },
+    {
+      "qid": "subcat_earphone",
+      "query": "推荐真无线耳机",
+      "type": "subcategory",
+      "relevant_ids": ["p_digital_007", "p_digital_018"]
+    },
+    {
+      "qid": "subcat_hoodie",
+      "query": "有什么卫衣",
+      "type": "subcategory",
+      "relevant_ids": ["p_clothes_005", "p_clothes_022"]
+    },
+    {
+      "qid": "subcat_hiking_shoe",
+      "query": "推荐徒步鞋",
+      "type": "subcategory",
+      "relevant_ids": ["p_clothes_014", "p_clothes_015"]
+    },
+    {
+      "qid": "subcat_backpack",
+      "query": "有什么背包",
+      "type": "subcategory",
+      "relevant_ids": ["p_clothes_018", "p_clothes_025"]
+    },
+    {
+      "qid": "subcat_milk",
+      "query": "推荐牛奶",
+      "type": "subcategory",
+      "relevant_ids": ["p_food_007", "p_food_016"]
+    },
+    {
+      "qid": "subcat_yogurt",
+      "query": "有什么酸奶",
+      "type": "subcategory",
+      "relevant_ids": ["p_food_008", "p_food_017"]
+    },
+    {
+      "qid": "subcat_energy_drink",
+      "query": "推荐功能饮料",
+      "type": "subcategory",
+      "relevant_ids": ["p_food_005", "p_food_006", "p_food_025"]
+    },
+    {
+      "qid": "subcat_eye_cream",
+      "query": "推荐眼霜",
+      "type": "subcategory",
+      "relevant_ids": ["p_beauty_016", "p_beauty_021"]
+    },
+    {
+      "qid": "brand_oppo",
+      "query": "OPPO 有什么手机",
+      "type": "brand",
+      "relevant_ids": ["p_digital_014", "p_digital_015", "p_digital_016"]
+    },
+    {
+      "qid": "brand_vivo",
+      "query": "vivo 的数码产品",
+      "type": "brand",
+      "relevant_ids": ["p_digital_017", "p_digital_019"]
+    },
+    {
+      "qid": "brand_lenovo",
+      "query": "联想的笔记本",
+      "type": "brand",
+      "relevant_ids": ["p_digital_022", "p_digital_023"]
+    },
+    {
+      "qid": "brand_lancome",
+      "query": "兰蔻有什么",
+      "type": "brand",
+      "relevant_ids": ["p_beauty_002", "p_beauty_019"]
+    },
+    {
+      "qid": "brand_proya",
+      "query": "珀莱雅的护肤品",
+      "type": "brand",
+      "relevant_ids": ["p_beauty_009", "p_beauty_024"]
+    },
+    {
+      "qid": "price_laptop_8000",
+      "query": "8000元以内的笔记本电脑",
+      "type": "price",
+      "relevant_ids": ["p_digital_004", "p_digital_023"]
+    },
+    {
+      "qid": "price_cream_200",
+      "query": "200元以内的面霜",
+      "type": "price",
+      "relevant_ids": ["p_beauty_007", "p_beauty_008"]
+    },
+    {
+      "qid": "price_soda_50",
+      "query": "50元以内的碳酸饮料",
+      "type": "price",
+      "relevant_ids": ["p_food_004", "p_food_015", "p_food_024"]
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "_meta": {
+    "purpose": "否定语义过滤评测标注集。验证『不要含 X』类排他需求能否在检索结果中精准排除目标商品。",
+    "label_source": "对 backend/storage 商品文本逐条核对：marketing_description / official_faq / user_reviews 中关于成分的明确陈述。",
+    "metric": "违例率（结果中混入被排除商品的比例）+ 排除召回率（应排除商品被成功排除的比例）",
+    "alcohol_truth": {
+      "含酒精（应被排除）": ["p_beauty_010"],
+      "明确无酒精（应保留）": ["p_beauty_006", "p_beauty_007", "p_beauty_012", "p_beauty_014", "p_beauty_016", "p_beauty_017", "p_beauty_021", "p_beauty_022"],
+      "归属模糊（不纳入评测）": ["p_beauty_023"]
+    }
+  },
+  "cases": [
+    {
+      "qid": "neg_alcohol_sunscreen",
+      "query": "不要含酒精的防晒",
+      "category": "美妆护肤",
+      "sub_category": "防晒",
+      "force_negatives": ["酒精"],
+      "must_exclude": ["p_beauty_010"],
+      "should_include_if_present": ["p_beauty_006"],
+      "note": "防晒类共 3 款，p_beauty_010(安耐晒) 评论与FAQ明确含酒精成分须排除；p_beauty_006(巴黎欧莱雅) 明确不含酒精应保留。force_negatives 注入确保过滤逻辑被稳定触发，隔离 LLM 抽取的随机性。"
+    },
+    {
+      "qid": "neg_alcohol_skincare",
+      "query": "推荐不含酒精的护肤精华或面霜，敏感肌用",
+      "category": "美妆护肤",
+      "sub_category": null,
+      "force_negatives": ["酒精"],
+      "must_exclude": ["p_beauty_010"],
+      "should_include_if_present": ["p_beauty_007", "p_beauty_012"],
+      "note": "跨子类否定过滤：结果中不应出现明确含酒精的 p_beauty_010。"
+    }
+  ]
+}

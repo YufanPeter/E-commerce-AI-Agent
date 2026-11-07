@@ -31,12 +31,10 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class ActionSpec:
-    """一个可被 LLM 选择的动作声明。
+    """Action declaration available for LLM selection.
 
-    name:        动作标识（被 enum 锁定，返回值一定是其中之一）。
-    description: 给 LLM 的动作说明（什么场景选它）。
-    parameters:  该动作要抽取的参数，JSON-Schema 的 properties 片段。
-                 例：{"index": {"type": "integer", "description": "第几个，从1开始"}}
+    ``name`` is constrained by an enum, ``description`` tells the LLM when to select
+    the action, and ``parameters`` contains its JSON Schema properties.
     """
 
     name: str
@@ -46,7 +44,7 @@ class ActionSpec:
 
 @dataclass(frozen=True)
 class ActionDecision:
-    """分发结果：选了哪个动作 + 抽到的参数。"""
+    """Selected action and extracted arguments."""
 
     action: str
     args: dict[str, Any]
@@ -61,10 +59,10 @@ def dispatch_action(
     purpose: str,
     timeout: float = 6.0,
 ) -> ActionDecision:
-    """让 LLM 在 actions 里选一个并抽参。失败时抛异常，由调用方降级。
+    """Ask the LLM to select an action and extract its arguments.
 
-    purpose: 一句话说明这个工具是干嘛的，拼进 system prompt 给 LLM 语境
-             （如"管理用户的购物车并完成下单"）。
+    ``purpose`` supplies short tool context for the system prompt. Failures are raised
+    so the caller can choose the appropriate fallback.
     """
     schema = _build_schema(actions)
     system = (
@@ -93,20 +91,20 @@ def dispatch_action(
     valid = {a.name for a in actions}
     if action not in valid:
         raise ValueError(f"动作分发返回未知 action={action!r}，期望 {valid}")
-    # 把动作专属参数从顶层平铺里拆出来（schema 把它们和 action 放同级）
+    # Separate action-specific arguments from the schema's flat top-level object.
     params = {k: v for k, v in args.items() if k != "action" and v is not None}
     return ActionDecision(action=action, args=params, raw=args)
 
 
 # ---------------------------------------------------------------------------
-# 内部
+# Internal helpers
 # ---------------------------------------------------------------------------
 
 def _build_schema(actions: list[ActionSpec]) -> dict[str, Any]:
-    """把 ActionSpec 列表编成单个 function 的 JSON-Schema。
+    """Compile action specifications into one function-calling schema.
 
-    所有动作的参数合并到同一层 properties 下（各自可选），action 用 enum 锁定。
-    这样一次 function call 既选了动作、又抽了参数，省一轮往返。
+    Optional action parameters share one properties object, while an enum constrains
+    the action. One function call therefore selects the action and extracts arguments.
     """
     properties: dict[str, Any] = {
         "action": {
@@ -119,7 +117,7 @@ def _build_schema(actions: list[ActionSpec]) -> dict[str, Any]:
     }
     for spec in actions:
         for param_name, param_schema in spec.parameters.items():
-            # 同名参数被多个动作共用时，沿用第一个声明即可
+            # Reuse the first declaration when several actions share a parameter.
             properties.setdefault(param_name, param_schema)
 
     return {
