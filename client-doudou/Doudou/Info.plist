@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>用于语音输入商品需求，识别后会填入和兜兜的对话框。</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>用于将你的语音购物需求转成文字，再交给兜兜处理。</string>
+	<key>NSCameraUsageDescription</key>
+	<string>用于拍照找货：拍摄商品照片后由兜兜识别并找到相似商品。</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>用于从相册选择商品图片，由兜兜识别并找到相似商品。</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<!-- 局域网真机调试：允许明文 HTTP 连接到后端（如 http://192.168.x.x:8000）。
+		     仅用于开发 Demo；正式发布请改用 HTTPS 并移除此项。 -->
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
+</dict>
+</plist>
