@@ -44,10 +44,13 @@ def build_chroma_where(parsed: ParsedQuery) -> dict[str, Any] | None:
     if parsed.category_exclude:
         clauses.append({"category": {"$nin": list(parsed.category_exclude)}})
 
+    # 价格按 SKU 区间判断：预算上限只要有一个规格买得起（min_price ≤ 预算）就召回，
+    # 下限则要求最贵的规格也到得了（max_price ≥ 下限）。base_price 既不是最低也
+    # 不是最高，用它过滤会把"有便宜规格的商品"误杀、把"只有贵规格的"误放。
     if parsed.min_price is not None:
-        clauses.append({"base_price": {"$gte": float(parsed.min_price)}})
+        clauses.append({"max_price": {"$gte": float(parsed.min_price)}})
     if parsed.max_price is not None:
-        clauses.append({"base_price": {"$lte": float(parsed.max_price)}})
+        clauses.append({"min_price": {"$lte": float(parsed.max_price)}})
 
     if parsed.brand_include:
         clauses.append({"brand": {"$in": expand_brands(parsed.brand_include)}})

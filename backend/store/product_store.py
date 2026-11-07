@@ -445,9 +445,10 @@ def sku_from_row(row: sqlite3.Row) -> ProductSku:
 
 
 def price_display(price_range: PriceRange) -> str:
+    """单价「¥450」；多规格给完整区间「¥450 – ¥900」，不再只报「¥450 起」。"""
     if price_range.min_price == price_range.max_price:
         return f"¥{price_range.min_price:g}"
-    return f"¥{price_range.min_price:g} 起"
+    return f"¥{price_range.min_price:g} – ¥{price_range.max_price:g}"
 
 
 def parse_args() -> argparse.Namespace:

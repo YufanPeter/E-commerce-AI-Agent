@@ -1,0 +1,48 @@
+{"id": "m001", "text": "以后不要给我推荐苹果", "expect": [{"kind": "brand_avoid", "value": "Apple", "status": "active"}]}
+{"id": "m002", "text": "我一直不买华为", "expect": [{"kind": "brand_avoid", "value": "华为", "status": "active"}]}
+{"id": "m003", "text": "我喜欢耐克", "expect": [{"kind": "brand_like", "value": "Nike", "status": "active"}]}
+{"id": "m004", "text": "我是油皮", "expect": [{"kind": "attribute", "value": "油皮", "status": "active"}]}
+{"id": "m005", "text": "我皮肤比较干", "expect": [{"kind": "attribute", "value": "干皮", "status": "active"}]}
+{"id": "m006", "text": "我是敏感肌，用什么防晒好", "expect": [{"kind": "attribute", "value": "敏感肌", "status": "active"}]}
+{"id": "m007", "text": "我平时穿42码的鞋", "expect": [{"kind": "attribute", "value": "42码", "status": "active"}]}
+{"id": "m008", "text": "我一般穿L码", "expect": [{"kind": "attribute", "value": "L码", "status": "active"}]}
+{"id": "m009", "text": "我一般预算300到500", "expect": [{"kind": "budget", "value": "300-500", "status": "active"}]}
+{"id": "m010", "text": "买手机一般预算3000以内", "expect": [{"kind": "budget", "value": "-3000", "status": "active"}]}
+{"id": "m011", "text": "以后推荐轻便一点的", "expect": [{"kind": "style", "value": "轻量", "status": "active"}]}
+{"id": "m012", "text": "平时更看重性价比", "expect": [{"kind": "style", "value": "高性价比", "status": "active"}]}
+{"id": "m013", "text": "我主要看数码", "expect": [{"kind": "category", "value": "数码电子", "status": "active"}]}
+{"id": "m014", "text": "我对酒精过敏", "expect": [{"kind": "avoid_term", "value": "酒精", "status": "suggested"}]}
+{"id": "m015", "text": "我花生过敏", "expect": [{"kind": "avoid_term", "value": "花生", "status": "suggested"}]}
+{"id": "m016", "text": "我不能吃辣", "expect": [{"kind": "avoid_term", "value": "辣", "status": "suggested"}]}
+{"id": "m017", "text": "用惯了小米，换别的不习惯", "expect": [{"kind": "brand_like", "value": "小米", "status": "active"}]}
+{"id": "m018", "text": "家里两个娃，零食要小包装的", "expect": [{"kind": "attribute", "value": "*", "status": "active"}]}
+{"id": "m019", "text": "我这人脚比较大，一般穿45码", "expect": [{"kind": "attribute", "value": "45码", "status": "active"}]}
+{"id": "m020", "text": "华为的东西我是真用不来", "expect": [{"kind": "brand_avoid", "value": "华为", "status": "suggested"}]}
+{"id": "m021", "text": "我就认兰蔻", "expect": [{"kind": "brand_like", "value": "兰蔻", "status": "active"}]}
+{"id": "m022", "text": "买东西我只看性价比", "expect": [{"kind": "style", "value": "高性价比", "status": "active"}]}
+{"id": "m023", "text": "我从来不用含酒精的护肤品", "expect": [{"kind": "avoid_term", "value": "酒精", "status": "suggested"}]}
+{"id": "m024", "text": "我是大油皮，一到夏天满脸油", "expect": [{"kind": "attribute", "value": "油皮", "status": "active"}]}
+{"id": "m025", "text": "我吃素，肉都不碰", "expect": [{"kind": "avoid_term", "value": "*", "status": "suggested"}]}
+{"id": "m026", "text": "推荐通勤的双肩包", "expect": []}
+{"id": "m027", "text": "推荐轻便的跑鞋", "expect": []}
+{"id": "m028", "text": "预算500的耳机", "expect": []}
+{"id": "m029", "text": "500以内的蓝牙耳机", "expect": []}
+{"id": "m030", "text": "推荐手机，不要苹果", "expect": []}
+{"id": "m031", "text": "不要苹果的", "expect": []}
+{"id": "m032", "text": "这次想看看苹果", "expect": []}
+{"id": "m033", "text": "苹果手机怎么样", "expect": []}
+{"id": "m034", "text": "给我妈买个面霜，她是干皮", "expect": []}
+{"id": "m035", "text": "帮女朋友挑口红，她喜欢兰蔻", "expect": []}
+{"id": "m036", "text": "第一个加入购物车", "expect": []}
+{"id": "m037", "text": "对比一下前两款", "expect": []}
+{"id": "m038", "text": "今天想喝点咖啡", "expect": []}
+{"id": "m039", "text": "有没有适合油皮的洗面奶", "expect": []}
+{"id": "m040", "text": "换成512G的", "expect": []}
+{"id": "m041", "text": "有没有42码的", "expect": []}
+{"id": "m042", "text": "这款敏感肌能用吗", "expect": []}
+{"id": "m043", "text": "我要两件", "expect": []}
+{"id": "m044", "text": "我想看看华为手机", "expect": []}
+{"id": "m045", "text": "小米和华为哪个好", "expect": []}
+{"id": "m046", "text": "我想买个跑鞋", "expect": []}
+{"id": "m047", "text": "再便宜点", "expect": []}
+{"id": "m048", "text": "可以推荐点适合送我爸的吗", "expect": []}

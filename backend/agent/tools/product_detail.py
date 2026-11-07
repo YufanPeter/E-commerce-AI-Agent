@@ -36,7 +36,7 @@ from typing import Any
 
 from agent.session import AgentSession
 from agent.tools.base import ToolResult
-from agent.tools.resolve import resolve_one
+from agent.tools.resolve import enrich_candidates, focus_index_in, resolve_one
 from agent.tools.reference import resolve_by_name, resolve_indices
 from store.product_store import ProductDetail, ProductReview, ProductStore, price_display
 
@@ -146,7 +146,7 @@ class ProductDetailTool:
         if pending and pending.get("candidates"):
             return self._resolve_pending_detail(query, pending, session)
 
-        indices = resolve_indices(query, len(last_hits))
+        indices = resolve_indices(query, len(last_hits), focus_index=focus_index_in(last_hits, session))
         if indices:
             index = indices[0]
             if 0 <= index < len(last_hits):
@@ -169,6 +169,7 @@ class ProductDetailTool:
                     "brand": searchable_hits[i].get("brand", ""),
                     "category": searchable_hits[i].get("category", ""),
                     "sub_category": searchable_hits[i].get("sub_category", ""),
+                    "options": searchable_hits[i].get("options") or {},
                 }
                 for i in name_matches[:3]
             ]
@@ -229,21 +230,9 @@ class ProductDetailTool:
         return None, f"想了解「{titles}」里的哪一款呢？说「第一款」或直接报品牌名都行。", query
 
     def _hits_with_store_context(self, last_hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        enriched: list[dict[str, Any]] = []
-        for hit in last_hits:
-            item = dict(hit)
-            try:
-                detail = self._store.get_product_detail(hit["product_id"])
-            except Exception:  # noqa: BLE001 - 定位增强失败不应影响原始标题匹配
-                detail = None
-            if detail is not None:
-                item.setdefault("title", detail.title)
-                item["brand"] = detail.brand
-                # 带上品类/子品类，LLM 消歧才能把「耳机」对应到「真无线耳机」那款。
-                item["category"] = detail.category
-                item["sub_category"] = detail.sub_category
-            enriched.append(item)
-        return enriched
+        # 带上品类 / 子品类 / SKU 规格值：「耳机」能对应到「真无线耳机」那款，
+        # 「黑色那个」能对应到有黑色规格的那款。
+        return enrich_candidates(last_hits, self._store)
 
     def _retrieve_evidence(
         self,

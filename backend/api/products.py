@@ -8,15 +8,23 @@ from __future__ import annotations
 端点：
     GET /products/{id}        单品详情
     GET /products?ids=a,b,c   批量查询
+    GET /images/{id}          商品主图（直接从仓库 data/ 目录读文件）
+
+商品图：原来挂在火山 TOS 的 bucket 已不存在（全部 404），现在由后端自己提供
+``/images/{product_id}``，imageURL 按请求的 Host 拼成绝对地址；需要走 CDN /
+公网域名时设 ``PRODUCT_IMAGE_BASE_URL``。manifest / 库里的远程 URL 只在本地
+没有图片文件时才作为兜底。
 
 数据源：SQLite ProductStore（backend/store/product_store.py）。
 """
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import FileResponse
 
 from store.product_store import (
     DEFAULT_DB_PATH,
@@ -30,6 +38,8 @@ from store.product_store import (
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 IMAGE_MANIFEST_PATH = PROJECT_ROOT / "backend" / "cdn" / "image_manifest.json"
+DATA_DIR = PROJECT_ROOT / "data"
+_IMAGE_MEDIA_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
 
 router = APIRouter()
 store = ProductStore(DEFAULT_DB_PATH)
@@ -46,8 +56,72 @@ def load_image_manifest() -> dict[str, str]:
 image_manifest = load_image_manifest()
 
 
+def local_image_file(detail: ProductDetail) -> Path | None:
+    """商品主图在仓库 data/ 下的文件；没有或路径越界返回 None。"""
+    rel = (getattr(detail, "image_path", None) or "").strip()
+    if not rel:
+        return None
+    path = (DATA_DIR / rel).resolve()
+    try:
+        path.relative_to(DATA_DIR.resolve())
+    except ValueError:
+        return None
+    return path if path.is_file() else None
+
+
+def image_base_url(request: Request | None) -> str | None:
+    """拼 imageURL 用的前缀：优先 PRODUCT_IMAGE_BASE_URL（CDN / 公网域名），否则用本次请求的 Host。"""
+    configured = (os.getenv("PRODUCT_IMAGE_BASE_URL") or "").strip().rstrip("/")
+    if configured:
+        return configured
+    if request is None:
+        return None
+    return str(request.base_url).rstrip("/")
+
+
+def absolutize_image_urls(payload: Any, image_base: str | None) -> Any:
+    """把 Agent 产出的结构化 payload 里的商品图地址改成后端自己的 /images/{id}。
+
+    compare 工具（comparison.products[].image_url）等是在没有 request 的 Agent 层生成的，
+    只能拿到 manifest / 库里的远程 URL；这里在 API 出口统一改写。就地修改并返回同一对象。
+    """
+    if not image_base or not isinstance(payload, dict):
+        return payload
+
+    def _rewrite(item: dict[str, Any]) -> None:
+        pid = item.get("product_id") or item.get("productId") or item.get("productID")
+        if not pid:
+            return
+        detail = store.get_product_detail(str(pid))
+        if detail is not None and local_image_file(detail) is not None:
+            item["image_url"] = f"{image_base}/images/{pid}"
+
+    comparison = payload.get("comparison")
+    if isinstance(comparison, dict):
+        for item in comparison.get("products") or []:
+            if isinstance(item, dict):
+                _rewrite(item)
+    for item in payload.get("products") or []:
+        if isinstance(item, dict) and "image_url" in item:
+            _rewrite(item)
+    return payload
+
+
+@router.get("/images/{product_id}")
+def get_product_image(product_id: str) -> FileResponse:
+    detail = store.get_product_detail(product_id)
+    path = local_image_file(detail) if detail is not None else None
+    if path is None:
+        raise HTTPException(
+            status_code=404,
+            detail=error_payload(code="IMAGE_NOT_FOUND", message="Product image not found", retryable=False),
+        )
+    media_type = _IMAGE_MEDIA_TYPES.get(path.suffix.lower(), "application/octet-stream")
+    return FileResponse(path, media_type=media_type, headers={"Cache-Control": "public, max-age=86400"})
+
+
 @router.get("/products/{product_id}")
-def get_product(product_id: str) -> dict[str, Any]:
+def get_product(product_id: str, request: Request) -> dict[str, Any]:
     detail = store.get_product_detail(product_id)
     if detail is None:
         raise HTTPException(
@@ -58,17 +132,21 @@ def get_product(product_id: str) -> dict[str, Any]:
                 retryable=False,
             ),
         )
-    return product_payload(detail)
+    return product_payload(detail, image_base=image_base_url(request))
 
 
 @router.get("/products")
-def get_products(ids: str = Query(..., description="Comma-separated product ids")) -> dict[str, Any]:
+def get_products(
+    request: Request,
+    ids: str = Query(..., description="Comma-separated product ids"),
+) -> dict[str, Any]:
     product_ids = [product_id.strip() for product_id in ids.split(",") if product_id.strip()]
     products = []
+    base = image_base_url(request)
     for product_id in product_ids:
         detail = store.get_product_detail(product_id)
         if detail is not None:
-            products.append(product_payload(detail))
+            products.append(product_payload(detail, image_base=base))
     return {
         "requestID": "products_by_id",
         "products": products,
@@ -147,8 +225,15 @@ def default_error_code(status_code: int) -> str:
     return f"API_HTTP_{status_code}"
 
 
-def product_payload(detail: ProductDetail) -> dict[str, Any]:
-    image_url = image_manifest.get(detail.product_id) or detail.image_url
+def resolve_image_url(detail: ProductDetail, image_base: str | None = None) -> str | None:
+    """本地有图就指向后端自己的 /images/{id}；没有才退回 manifest / 库里的远程 URL。"""
+    if image_base and local_image_file(detail) is not None:
+        return f"{image_base}/images/{detail.product_id}"
+    return image_manifest.get(detail.product_id) or detail.image_url
+
+
+def product_payload(detail: ProductDetail, image_base: str | None = None) -> dict[str, Any]:
+    image_url = resolve_image_url(detail, image_base)
     specs = specifications_payload(detail.skus)
     return {
         "productID": detail.product_id,
@@ -158,6 +243,11 @@ def product_payload(detail: ProductDetail) -> dict[str, Any]:
         "imageURL": image_url,
         "detailURL": None,
         "price": money(detail.price_range.min_price, price_display(detail.price_range)),
+        "priceRange": {
+            "min": money(detail.price_range.min_price),
+            "max": money(detail.price_range.max_price),
+            "skuCount": detail.price_range.sku_count,
+        },
         "originalPrice": None,
         "availability": availability(detail.skus),
         "summary": detail.marketing_description or None,

@@ -20,6 +20,12 @@ def test_score_unknown_product_returns_none():
     assert idx.score([1.0, 0.0], "missing") is None
 
 
+def test_mismatched_vector_dimensions_do_not_produce_silent_score():
+    idx = VisualIndex({"a": [1.0, 0.0]})
+    assert idx.score([1.0], "a") is None
+    assert idx.score_many([1.0], ["a"]) == {}
+
+
 def test_score_is_magnitude_invariant():
     # 余弦只看方向，不看模长：放大查询向量不改变分数
     idx = VisualIndex({"a": [3.0, 4.0]})

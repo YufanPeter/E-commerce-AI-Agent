@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from agent.session import AgentSession
+from llm.cache import TTLCache
 from llm.client import get_client, get_model_id
 
 
@@ -131,8 +132,30 @@ SYSTEM_PROMPT = """你是电商导购 Agent 的路由器，唯一职责是把用
 """
 
 
+# 首轮路由缓存：没有对话历史时，路由结果只取决于 query 本身，
+# 同一句话（demo 热词 / 用户重试）不必再打一次 LLM。
+_FIRST_TURN_CACHE: TTLCache[IntentDecision] = TTLCache(maxsize=512)
+
+
+def clear_route_cache() -> None:
+    _FIRST_TURN_CACHE.clear()
+
+
 def route(query: str, session: AgentSession, timeout: float = 6.0) -> IntentDecision:
     """主入口。LLM 失败时抛异常，由 orchestrator 决定降级。"""
+    cache_key = " ".join((query or "").split()) if not session.history_for_router() else None
+    if cache_key:
+        cached = _FIRST_TURN_CACHE.get(cache_key)
+        if cached is not None:
+            logger.info("router cache hit → tool=%s", cached.tool)
+            return cached
+    decision = _route_uncached(query, session, timeout)
+    if cache_key:
+        _FIRST_TURN_CACHE.set(cache_key, decision)
+    return decision
+
+
+def _route_uncached(query: str, session: AgentSession, timeout: float) -> IntentDecision:
     user_content = _build_user_content(query, session)
 
     client = get_client()
@@ -144,7 +167,7 @@ def route(query: str, session: AgentSession, timeout: float = 6.0) -> IntentDeci
     args: dict[str, Any] | None = None
     for attempt in range(2):
         response = client.chat.completions.create(
-            model=get_model_id(),
+            model=get_model_id(role="fast"),
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_content},

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +21,10 @@ from rag.chroma_store import (
     DEFAULT_PERSIST_DIR,
     create_collection,
 )
+
+_UPSERT_ATTEMPTS = 5
+_RETRY_BASE_SECONDS = 5.0
+_PROGRESS_EVERY_CHUNKS = 1000
 
 
 @dataclass(frozen=True)
@@ -57,6 +62,23 @@ def sku_summary(product: dict[str, Any]) -> str:
     return "；".join(summaries)
 
 
+def price_range_metadata(product: dict[str, Any]) -> dict[str, float | int]:
+    """SKU 价格区间：min_price / max_price / sku_count。
+
+    预算过滤必须按「最低 SKU 价 ≤ 预算」判断（有一个规格买得起就该召回），
+    而不是按 base_price；展示也要给用户看到区间，而不是只报最低价。
+    没有 SKU 时退回 base_price。"""
+    prices = [
+        float(sku["price"])
+        for sku in product.get("skus", []) or []
+        if sku.get("price") is not None and str(sku.get("status", "active")) == "active"
+    ]
+    if not prices:
+        base = float(product.get("base_price", 0) or 0)
+        return {"min_price": base, "max_price": base, "sku_count": 0}
+    return {"min_price": min(prices), "max_price": max(prices), "sku_count": len(prices)}
+
+
 def base_metadata(
     product: dict[str, Any],
     chunk_type: str,
@@ -70,6 +92,7 @@ def base_metadata(
         "category": product.get("category", ""),
         "sub_category": product.get("sub_category", ""),
         "base_price": float(product.get("base_price", 0)),
+        **price_range_metadata(product),
         "image_path": product.get("image_path", ""),
         "chunk_type": chunk_type,
         "source_index": source_index,
@@ -225,14 +248,63 @@ def batched(items: list[Chunk], size: int) -> Iterable[list[Chunk]]:
         yield items[start : start + size]
 
 
-def upsert_chunks(collection: Any, chunks: list[Chunk], batch_size: int) -> None:
-    """分批计算向量并写入 Chroma。"""
+def _upsert_with_retry(collection: Any, chunk_batch: list[Chunk]) -> None:
+    """单批失败时退避重试；重试耗尽才抛错，已写入的批次可用 --resume 跳过。"""
+    for attempt in range(1, _UPSERT_ATTEMPTS + 1):
+        try:
+            collection.upsert(
+                ids=[chunk.id for chunk in chunk_batch],
+                documents=[chunk.document for chunk in chunk_batch],
+                metadatas=[chunk.metadata for chunk in chunk_batch],
+            )
+            return
+        except Exception as exc:  # noqa: BLE001 - embedding 接口的瞬时错误类型不固定
+            if attempt == _UPSERT_ATTEMPTS:
+                raise
+            delay = _RETRY_BASE_SECONDS * 2 ** (attempt - 1)
+            print(
+                f"Upsert failed (attempt {attempt}/{_UPSERT_ATTEMPTS}): {exc!r}; "
+                f"retrying in {delay:.0f}s",
+                flush=True,
+            )
+            time.sleep(delay)
+
+
+def upsert_chunks(
+    collection: Any,
+    chunks: list[Chunk],
+    batch_size: int,
+    resume: bool = False,
+) -> int:
+    """分批计算向量并写入 Chroma，返回本次写入的 chunk 数。
+
+    resume=True 时跳过 collection 里已有的 chunk id，不重复调用 embedding。
+    只按 id 判断，所以数据内容变化后要用 --reset 全量重建。
+    """
+    started = time.perf_counter()
+    processed = written = 0
+    last_report = 0
     for chunk_batch in batched(chunks, batch_size):
-        collection.upsert(
-            ids=[chunk.id for chunk in chunk_batch],
-            documents=[chunk.document for chunk in chunk_batch],
-            metadatas=[chunk.metadata for chunk in chunk_batch],
-        )
+        pending = chunk_batch
+        if resume:
+            found = collection.get(ids=[chunk.id for chunk in chunk_batch], include=[])
+            existing = set(found["ids"])
+            pending = [chunk for chunk in chunk_batch if chunk.id not in existing]
+        if pending:
+            _upsert_with_retry(collection, pending)
+        processed += len(chunk_batch)
+        written += len(pending)
+        if processed - last_report >= _PROGRESS_EVERY_CHUNKS or processed == len(chunks):
+            last_report = processed
+            elapsed = time.perf_counter() - started
+            remaining = len(chunks) - processed
+            eta = elapsed / written * remaining if written else 0.0
+            print(
+                f"Progress: {processed}/{len(chunks)} written={written} "
+                f"elapsed={elapsed / 60:.1f}min eta={eta / 60:.1f}min",
+                flush=True,
+            )
+    return written
 
 
 def print_stats(chunks: list[Chunk]) -> None:
@@ -258,7 +330,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--embedding-model", default=DEFAULT_EMBEDDING_MODEL)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--reset", action="store_true")
-    return parser.parse_args()
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="跳过 collection 中已存在的 chunk id，从上次中断处继续。",
+    )
+    args = parser.parse_args()
+    if args.reset and args.resume:
+        parser.error("--reset 和 --resume 不能同时使用")
+    return args
 
 
 def main() -> None:
@@ -273,7 +353,8 @@ def main() -> None:
         embedding_model=args.embedding_model,
         reset=args.reset,
     )
-    upsert_chunks(collection, chunks, args.batch_size)
+    written = upsert_chunks(collection, chunks, args.batch_size, resume=args.resume)
+    print(f"Chunks written this run: {written}")
     print(f"Chroma collection ready: {args.collection}")
     print(f"Indexed chunks: {collection.count()}")
     print(f"Persist dir: {args.persist_dir}")

@@ -4,17 +4,18 @@
 
 通过引入大语言模型（LLM）与检索增强生成（RAG）技术，系统能够理解用户的模糊意图与多模态输入（如语音、图片），实现从个性化推荐、商品对比到购物车管理的自然对话闭环，为用户提供更加智能、连贯的购物体验。
 
-技术栈：**SwiftUI（iOS 客户端） + FastAPI（异步网关） + ChromaDB（向量检索） + SQLite（事实库） + 豆包 Ark / 智谱 Rerank（大模型）**。
+技术栈：**SwiftUI（iOS 客户端） + FastAPI（异步网关） + ChromaDB（向量检索） + SQLite（事实库） + DeepSeek（对话 / 意图 / 看图）+ 阿里云百炼（向量 / 精排；也可作对话 Fallback）/ 豆包与智谱（Fallback）**。
 
 ## ✨ 核心亮点与功能特性
 
 ### 📱 1. 原生客户端体验 (SwiftUI)
-- **对话式流式渲染**：支持逐字 SSE 流式响应，对话内无缝嵌入交互式商品卡片。
+- **对话式流式渲染**：SSE 结构化流式——开场白逐字到达、商品卡片随各自解说逐张弹出、追问最后出现，像语音助手一样按顺序“说完一句再给一张卡”。
 - **多模态交互**：集成原生语音识别，支持拍照或相册选图进行“以图搜货”。
 - **流畅动效**：打磨卡片弹入、购物车同步等原生动画，提供商业级使用体验。
 
 ### 🧠 2. 智能 Agent 与意图管理
 - **意图路由编排**：`router → tool → composer` 三段式流水线，LLM 仅负责意图分类，固定流水线负责执行，控制力强、可观测。
+- **首字加速**：router 与 query 解析 / 多需求拆解并行预取；首轮路由、query 解析、话术、查询向量带 TTL 缓存；多需求拆解先做确定性预判再决定是否调 LLM；主模型失败后熔断，冷却期内直接走 fallback 不再白等。
 - **渐进式需求收敛**：精准识别模糊意图，通过主动反问（Clarify）引导用户细化需求。
 - **排他性过滤**：支持“不要含酒精”等否定语义解析，在检索条件中精准排除。
 - **智能对比决策**：自动提取商品关键维度（成分、价格等）生成结构化对比表。
@@ -22,7 +23,7 @@
 - **跨会话记忆**：从对话中抽取用户偏好（预算 / 肤质 / 关注品类等）并支持撤销。
 
 ### 🔍 3. 多模态 RAG 检索引擎
-- **混合检索与精排**：基于 ChromaDB 向量检索，结合 Zhipu 云端 Rerank 提升召回精度。
+- **混合检索与精排**：基于双 Chroma 向量空间检索，结合百炼 `qwen3-rerank` 提升召回精度；百炼不可用时整链路切换到豆包向量索引与智谱 Rerank。
 - **图文双模态理解**：商品图接入视觉特征提取，完美支持图片搜索场景。
 - **事实一致性保障**：价格与库存等关键参数强依赖 SQLite，杜绝大模型“幻觉”。
 
@@ -43,8 +44,8 @@
                                       │             │              │
                               ┌───────▼──────┐ ┌────▼─────┐ ┌──────▼───────┐
                               │ search/ + rag/│ │  store/  │ │    llm/      │
-                              │ ChromaDB 检索 │ │  SQLite  │ │ 豆包/智谱 API │
-                              │  + 智谱 Rerank│ │ 事实/购物车│ │   统一封装    │
+                              │ ChromaDB 检索 │ │  SQLite  │ │ DeepSeek/百炼 │
+                              │ + 百炼 Rerank│ │ 事实/购物车│ │   统一封装    │
                               └──────────────┘ └──────────┘ └──────────────┘
 ```
 
@@ -99,23 +100,25 @@
 
 需要修改后端、调试或离线建库时使用。
 
-**1. 配置环境变量** —— 在仓库根目录创建 `.env` 文件，填入相关 API 密钥（仅本地运行后端时需要；连云服务器走方式 A 无需此步）：
+**1. 配置环境变量** —— 在仓库根目录创建 `.env` 文件（可直接 `cp .env.example .env`），填入 API 密钥（仅本地运行后端时需要；连云服务器走方式 A 无需此步）：
 
 ```bash
-# 豆包大模型（对话与意图识别）
-ARK_API_KEY=你的豆包API_Key
-ARK_MODEL=你的endpoint_id
-ARK_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
+# 一个百炼 key 全包：对话 / 意图识别走百炼托管的 DeepSeek，看图走 Qwen3-VL，向量与精排走百炼
+LLM_PROVIDER=dashscope
+DASHSCOPE_API_KEY=你的百炼_API_Key                 # https://bailian.console.aliyun.com/
+DASHSCOPE_MODEL=deepseek-v4.1-flash              # 文本 + function calling
+DASHSCOPE_VISION_MODEL=qwen3-vl-plus             # 拍照找货看图（deepseek-v4.1-flash 也能看图，但慢一倍）
+DASHSCOPE_FAST_MODEL=qwen-flash                  # 路由 / 解析等结构化小任务用更快的模型，话术仍用 DeepSeek
+DASHSCOPE_EMBEDDING_MODEL=qwen3-vl-embedding
+DASHSCOPE_RERANK_MODEL=qwen3-rerank
+USE_RERANK=1                                     # 不想花精排费用时设 0
 
-# 向量库 embedding（豆包多模态 embedding 接入点）
-ARK_EMBEDDING_API_KEY=你的embedding_API_Key   # 不填则回退复用 ARK_API_KEY
-ARK_EMBEDDING_MODEL=你的embedding_endpoint_id
-
-# 智谱云端 rerank (用于高精度二次重排)
-ZHIPU_API_KEY=你的智谱APIKey
-RERANK_MODEL=rerank
-RERANK_BASE_URL=https://open.bigmodel.cn/api/paas/v4/rerank
+# 也可改走 DeepSeek 官方 API：LLM_PROVIDER=deepseek + DEEPSEEK_API_KEY（https://platform.deepseek.com/api_keys），
+# deepseek-flash 文本 + 图片一个模型；向量 / 精排仍需上面的百炼 key。
+# 可选 fallback：豆包（ARK_API_KEY + ARK_MODEL）
 ```
+
+只填一个 `DASHSCOPE_API_KEY` 即可跑通全部功能。`.env.example` 里有完整说明（熔断冷却、缓存 TTL、预取开关等）。启动后访问 `http://127.0.0.1:8000/llm/status` 可看到当前 provider 链与各后端是否被熔断。
 
 **2. 启动后端服务**（环境要求：Python 3.10+）：
 
@@ -128,6 +131,7 @@ RERANK_BASE_URL=https://open.bigmodel.cn/api/paas/v4/rerank
 | 脚本 | 作用 |
 | --- | --- |
 | `./scripts/start_backend.sh` | 建虚拟环境、装依赖并启动后端 |
+| `cd backend && python -m rag.migrate_price_metadata --all` | 给已建好的 Chroma 索引补 SKU 价格区间元数据（升级到价格区间版本后、不想重建索引时跑一次） |
 | `./scripts/stop_backend.sh` | 停止后端服务 |
 | `./scripts/restart_backend.sh` | 重启后端服务 |
 | `./scripts/dev.sh` | 开发模式（uvicorn 自动重载） |
@@ -175,7 +179,7 @@ backend/
 │   └── visual_index.py        # 以图搜货视觉索引
 ├── rag/                # 向量数据库与检索增强模块
 │   ├── retriever.py    # ChromaDB 向量召回执行器
-│   ├── reranker.py     # 智谱云端精排接入层
+│   ├── reranker.py     # 百炼主用、智谱 fallback 的云端精排
 │   ├── chroma_store.py # Chroma 集合封装
 │   └── build_*.py      # 离线数据向量化建库脚本(文本/图像/对比索引)
 ├── store/              # 事实数据与持久化层 (SQLite)
@@ -185,7 +189,7 @@ backend/
 │   ├── user_memory_store.py # 用户偏好(核心记忆)存储
 │   └── import_*.py          # 商品数据 / 图片清单导入脚本
 └── llm/                # 大模型客户端统一封装
-    ├── client.py       # 豆包 Ark / embedding / 智谱 rerank 客户端单例
+    ├── client.py       # 百炼 Chat / embedding / 智谱 rerank 客户端单例
     └── vision.py       # 多模态视觉理解
 ```
 

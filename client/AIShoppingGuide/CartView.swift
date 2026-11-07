@@ -608,14 +608,8 @@ private struct CartSpecificationEditorSheet: View {
 
     private var header: some View {
         HStack(alignment: .top, spacing: 12) {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(LinearGradient(colors: [AppTheme.softPurple, AppTheme.softBlue], startPoint: .topLeading, endPoint: .bottomTrailing))
-                .frame(width: 72, height: 72)
-                .overlay {
-                    Image(systemName: "shippingbox")
-                        .font(.system(size: 26, weight: .semibold))
-                        .foregroundStyle(AppTheme.primary)
-                }
+            ProductRemoteImage(url: product.imageURL, cornerRadius: 16, placeholderIcon: "shippingbox")
+                .frame(width: 76, height: 76)
 
             VStack(alignment: .leading, spacing: 6) {
                 Text(product.priceDisplay(for: selectedOptions))
@@ -631,6 +625,7 @@ private struct CartSpecificationEditorSheet: View {
                     .lineLimit(1)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
         .surfacePanel(cornerRadius: 20)
     }

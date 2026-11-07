@@ -29,6 +29,8 @@ struct ComparisonContext: Identifiable, Hashable {
 struct GuideView: View {
     @Binding var cartItems: [CartItem]
     @ObservedObject var preferenceStore: PreferenceStore
+    /// RootView 切 Tab 只改透明度，视图不会消失，语音浮层要靠它知道该关麦了。
+    var isActiveTab: Bool = true
     @StateObject private var store = ConversationStore()
     @State private var messages: [ChatMessage] = []
     @State private var inputText = ""
@@ -61,7 +63,12 @@ struct GuideView: View {
     /// 待发送的图片草稿：选/拍图后先挂在输入区，待用户配上文字一起发送；nil 表示无附件。
     @State private var pendingImageData: Data?
     @State private var pendingMemoryUpdate: MemoryUpdatePayload?
-    @StateObject private var speechInput = SpeechInputController()
+    @State private var isVoiceOverlayPresented = false
+    @State private var didConsiderVoiceAutoStart = false
+    /// 回答刚结束时麦克风暂不响应，见 handleMicTap。
+    @State private var micTapsIgnoredUntil = Date.distantPast
+    /// 当前流式回合的任务句柄，停止键靠它取消请求。
+    @State private var activeAgentTask: Task<Void, Never>?
     @FocusState private var isInputFocused: Bool
 
     private let agentService = RESTAgentService()
@@ -74,6 +81,12 @@ struct GuideView: View {
     private let streamPunctuationDelay: UInt64 = 70_000_000
     private let streamLineBreakDelay: UInt64 = 110_000_000
     private let streamCardRevealDelay: UInt64 = 180_000_000
+    /// 结构化流式：两张卡片之间至少隔这么久再弹下一张（后端解说到得再快、或命中缓存一次全到，也一张一张来）。
+    private let streamCardMinGap: TimeInterval = 0.42
+    /// 追问胶囊逐条出现的最小间隔。
+    private let streamFollowupMinGap: TimeInterval = 0.16
+    /// 开场白一次到达超过这么多字（缓存命中 / 大块 chunk）时，按逐字节奏打出来。
+    private let streamOpeningTypewriterThreshold = 10
     private let streamRetryBaseDelay: UInt64 = 650_000_000
     private let streamRetryMaxAttempts = 3
 
@@ -109,7 +122,20 @@ struct GuideView: View {
                         }
                     )
                     .padding(.bottom, composerBottomPadding)
+                    .opacity(isVoiceOverlayPresented ? 0 : 1)
+                    .allowsHitTesting(!isVoiceOverlayPresented)
                     .zIndex(1)
+
+                if isVoiceOverlayPresented {
+                    VoiceCaptureOverlay(
+                        hints: voiceRecognitionHints,
+                        onOutcome: handleVoiceOutcome,
+                        onCancel: dismissVoiceOverlay
+                    )
+                    .padding(.bottom, composerBottomPadding)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .zIndex(3)
+                }
 
                 if let pendingMemoryUpdate {
                     memoryUpdateBanner(pendingMemoryUpdate)
@@ -178,6 +204,12 @@ struct GuideView: View {
                 if suggestions == nil {
                     await loadSuggestions()
                 }
+                autoStartVoiceIfAppropriate()
+            }
+            .onChange(of: isActiveTab) { _, isActive in
+                if !isActive {
+                    dismissVoiceOverlay()
+                }
             }
         }
     }
@@ -190,14 +222,28 @@ struct GuideView: View {
                 .font(.footnote.weight(.medium))
                 .lineLimit(2)
             Spacer()
-            Button("撤销") {
-                Task { @MainActor in
-                    await preferenceStore.undo(update)
-                    pendingMemoryUpdate = nil
+            HStack(spacing: 8) {
+                Button("撤销") {
+                    Task { @MainActor in
+                        await preferenceStore.undo(update)
+                        withAnimation(.easeOut(duration: 0.18)) {
+                            pendingMemoryUpdate = nil
+                        }
+                    }
+                }
+                .foregroundStyle(AppTheme.primary)
+
+                Divider()
+                    .frame(height: 16)
+
+                Button("确定") {
+                    withAnimation(.easeOut(duration: 0.18)) {
+                        pendingMemoryUpdate = nil
+                    }
                 }
             }
             .font(.footnote.weight(.semibold))
-            .foregroundStyle(AppTheme.primary)
+            .foregroundStyle(AppTheme.textSecondary)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -313,7 +359,8 @@ struct GuideView: View {
                         onProductTap: { openProductDetail($0) },
                         onSpecSubmit: { send($0) },
                         onCompareTap: { comparisonContext = ComparisonContext(candidates: $0) },
-                        onFollowUpTap: fillInputWithFollowUp
+                        onFollowUpTap: sendPrompt,
+                        onSeeMore: { sendPrompt("更多\($0)") }
                     )
                     .id(message.id)
                     .transition(
@@ -345,6 +392,7 @@ struct GuideView: View {
             DragGesture(minimumDistance: 8)
                 .onChanged { _ in
                     isUserInteractingWithChat = true
+                    shouldHoldLatestQuestionAnchor = false
                     if isAssistantStreaming {
                         isAutoFollowEnabled = false
                     }
@@ -519,51 +567,59 @@ struct GuideView: View {
                     .foregroundStyle(AppTheme.textPrimary)
                     .focused($isInputFocused)
 
-                Button {
-                    Task {
-                        await speechInput.toggle()
-                    }
-                } label: {
-                    Image(systemName: speechInput.isListening ? "waveform.circle.fill" : "mic.fill")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(speechInput.isListening ? AppTheme.primary : AppTheme.textSecondary)
-                        .frame(width: 32, height: 32)
-                }
-                .buttonStyle(.tactile)
-
-                Button(action: sendCurrentInput) {
-                    Image(systemName: "arrow.up")
-                        .font(.system(size: 17, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 38, height: 38)
-                        .background(
-                            (canSend ? AppTheme.primary : AppTheme.textSecondary.opacity(0.4)),
-                            in: Circle()
-                        )
-                }
-                .buttonStyle(.tactile)
-                .disabled(!canSend)
-                .animation(.easeOut(duration: 0.18), value: canSend)
+                composerTrailingButtons
             }
             .padding(.vertical, 8)
             .padding(.horizontal, 10)
             .floatingLiquidPanel(cornerRadius: 24)
-
-            if let error = speechInput.errorMessage {
-                Text(error)
-                    .font(.caption)
-                    .foregroundStyle(AppTheme.error)
-                    .padding(.horizontal, 14)
-            }
         }
-        .onChange(of: speechInput.transcript) { _, newValue in
-            if speechInput.isListening {
-                inputText = newValue
+        .onChange(of: isAssistantStreaming) { wasStreaming, isStreaming in
+            if wasStreaming && !isStreaming {
+                micTapsIgnoredUntil = Date().addingTimeInterval(0.7)
             }
         }
     }
 
-    private var canSend: Bool {
+    /// 输入栏右侧按钮：有内容就能发送，生成中且没内容时是停止键，空闲时是麦克风。
+    /// 只挂了图片时麦克风和发送都在，用户可以直接发图，也可以先说一句补充要求。
+    @ViewBuilder
+    private var composerTrailingButtons: some View {
+        let hasText = !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if !hasText && !isAssistantStreaming {
+            Button(action: handleMicTap) {
+                Image(systemName: "mic.fill")
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(AppTheme.textSecondary)
+                    .frame(width: 38, height: 38)
+            }
+            .buttonStyle(.tactile)
+            .accessibilityLabel("语音输入")
+        }
+
+        if hasComposerPayload {
+            Button(action: sendCurrentInput) {
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 17, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 38, height: 38)
+                    .background(AppTheme.primary, in: Circle())
+            }
+            .buttonStyle(.tactile)
+            .accessibilityLabel(isAssistantStreaming ? "停止并发送" : "发送")
+        } else if isAssistantStreaming {
+            Button(action: stopGeneration) {
+                Image(systemName: "stop.fill")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(AppTheme.background)
+                    .frame(width: 38, height: 38)
+                    .background(AppTheme.textPrimary, in: Circle())
+            }
+            .buttonStyle(.tactile)
+            .accessibilityLabel("停止生成")
+        }
+    }
+
+    private var hasComposerPayload: Bool {
         !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || pendingImageData != nil
     }
 
@@ -619,27 +675,29 @@ struct GuideView: View {
     }
 
     /// 点击 followup 建议：填入输入框供用户编辑，不直接发送。
-    private func fillInputWithFollowUp(_ prompt: String) {
+    /// 点追问或"查看更多"：等于用户发了这句话，生成中会先停掉当前回答。
+    private func sendPrompt(_ prompt: String) {
         let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         inputText = trimmed
-        isInputFocused = true
+        sendCurrentInput()
     }
 
     private func sendCurrentInput() {
         let trimmed = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         let attachment = pendingImageData
-        // 至少要有文字或图片其一才发送
+        // 至少要有文字或图片其一才发送；生成中发新消息等于先停掉当前回答
         guard !trimmed.isEmpty || attachment != nil else { return }
-        speechInput.stop()
+        stopGeneration()
+        guard canStartSend(query: trimmed, imageData: attachment) else { return }
         inputText = ""
         pendingImageData = nil
         send(trimmed, imageData: attachment)
     }
 
     private func send(_ query: String, imageData: Data? = nil) {
+        guard canStartSend(query: query, imageData: imageData) else { return }
         isComposerExpanded = false
-        speechInput.stop()
         lastQuery = query
         if currentTitle == GuideView.newConversationTitle {
             currentTitle = imageData != nil && query.isEmpty
@@ -648,25 +706,148 @@ struct GuideView: View {
         }
         let userMessage = ChatMessage(sender: .user, text: query, localImageData: imageData)
         pendingAutoFollowWorkItem?.cancel()
-        // 发送后保持自动跟随到最新，确保用户气泡和 AI 回复始终可见、不被输入框遮住。
-        isAutoFollowEnabled = true
+        // Alexa 式阅读顺序：把这条问题钉在顶部，回答在下方一段段长出来；
+        // 不跟随滚到底部，生成完也不往下跳，用户从上往下读。
+        isAutoFollowEnabled = false
         isNearChatBottom = true
         isUserInteractingWithChat = false
         shouldShowJumpToLatest = false
-        shouldHoldLatestQuestionAnchor = false
-        pendingQuestionAnchorID = nil
+        shouldHoldLatestQuestionAnchor = true
+        pendingQuestionAnchorID = userMessage.id
         let placeholder = imageData != nil
             ? "正在识别图片并匹配商品"
             : loadingSearchText(for: query)
         // 用户气泡 + 助手占位一起以弹性动画淡入，避免"啪"地直接出现。
         withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
             messages.append(userMessage)
-            messages.append(ChatMessage(sender: .ai, text: placeholder, state: .understanding))
+            messages.append(ChatMessage(
+                sender: .ai,
+                text: placeholder,
+                state: .understanding,
+                thinkingSteps: [imageData != nil ? "正在识别图片" : "思考中"]
+            ))
         }
         runAgent(for: query, imageBase64: imageData?.base64EncodedString())
     }
 
+    // MARK: - 语音输入
+
+    /// 把真实库存里的类目和热搜词交给识别器，提高品牌名、品类词的命中率。
+    private var voiceRecognitionHints: [String] {
+        guard let suggestions else { return [] }
+        return suggestions.categories + suggestions.hotSearches
+    }
+
+    /// 停止键和麦克风在同一位置。回答恰好结束时，用户想点停止却会点到刚换上来的麦克风，
+    /// 所以按钮切换后短暂忽略点击。
+    private func handleMicTap() {
+        guard Date() >= micTapsIgnoredUntil else { return }
+        presentVoiceOverlay()
+    }
+
+    private func presentVoiceOverlay() {
+        isInputFocused = false
+        isComposerExpanded = false
+        withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
+            isVoiceOverlayPresented = true
+        }
+    }
+
+    private func dismissVoiceOverlay() {
+        guard isVoiceOverlayPresented else { return }
+        withAnimation(.easeOut(duration: 0.2)) {
+            isVoiceOverlayPresented = false
+        }
+    }
+
+    private func handleVoiceOutcome(_ outcome: VoiceCaptureOutcome) {
+        dismissVoiceOverlay()
+        switch outcome {
+        case .send(let text):
+            inputText = text
+            sendCurrentInput()
+        case .draft(let text):
+            inputText = text
+            isInputFocused = true
+        case .noSpeech:
+            break
+        }
+    }
+
+    /// 启动时停在空对话页就直接开麦。只在用户已授权时才开，不会一启动就弹系统权限框。
+    private func autoStartVoiceIfAppropriate() {
+        guard !didConsiderVoiceAutoStart else { return }
+        didConsiderVoiceAutoStart = true
+        guard isActiveTab,
+              messages.isEmpty,
+              inputText.isEmpty,
+              !isInputFocused,
+              SpeechInputController.isAuthorizedWithoutPrompt else { return }
+        presentVoiceOverlay()
+    }
+
+    // MARK: - 停止生成
+
+    /// 取消当前回合并保留用户已经看到的内容。断开连接后，后端会关闭 LLM 流并记录半截回合。
+    private func stopGeneration() {
+        guard isAssistantStreaming else { return }
+        activeAgentTask?.cancel()
+        activeAgentTask = nil
+        guard let index = messages.lastIndex(where: { $0.sender == .ai }) else { return }
+
+        var message = messages[index]
+        let placeholderOpening = searchingRecommendationOpening(for: lastQuery)
+        let hasCards = !message.products.isEmpty || message.comparison != nil || message.specSelection != nil
+        let hasRealOpening = message.structuredContent.map {
+            !$0.opening.isEmpty && $0.opening != placeholderOpening
+        } ?? false
+        // 思考步骤还在，说明回答一个字都没开始，这时的 text 只是阶段提示
+        let hasRealText = message.structuredContent == nil
+            && message.state == .generating
+            && !message.text.isEmpty
+            && (message.thinkingSteps ?? []).isEmpty
+
+        if hasCards || hasRealOpening || hasRealText {
+            message.wasStopped = true
+            if !hasRealOpening, let content = message.structuredContent {
+                let opening = completedRecommendationOpening(for: lastQuery, products: message.products)
+                message.text = opening
+                message.structuredContent = StructuredContent(
+                    opening: opening,
+                    items: content.items,
+                    followup: content.followup,
+                    summary: content.summary
+                )
+            }
+        } else {
+            message.text = "已停止生成"
+            message.structuredContent = nil
+        }
+        message.state = .ready
+        message.canRetry = false
+        message.streamingStatusText = nil
+        message.isGeneratingFollowups = false
+        message.followupError = nil
+        message.thinkingSteps = nil
+        withAnimation(.easeOut(duration: 0.18)) {
+            messages[index] = message
+        }
+        persistCurrent()
+        refreshCartAfterStop()
+    }
+
+    /// 用户可能在加购工具已执行后才点停止，这时收不到购物车快照，稍后从后端对一次账。
+    private func refreshCartAfterStop() {
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            if let snapshot = try? await productService.fetchAgentCart() {
+                syncCartItems(from: snapshot)
+            }
+        }
+    }
+
     private func retryLast() {
+        guard !isAssistantStreaming else { return }
         messages.removeAll { $0.canRetry }
         let query = lastQuery.isEmpty ? "重新推荐" : lastQuery
         pendingAutoFollowWorkItem?.cancel()
@@ -674,8 +855,18 @@ struct GuideView: View {
         shouldHoldLatestQuestionAnchor = false
         pendingQuestionAnchorID = nil
         shouldShowJumpToLatest = false
-        messages.append(ChatMessage(sender: .ai, text: "正在重新匹配商品", state: .understanding))
+        messages.append(ChatMessage(
+            sender: .ai,
+            text: "正在重新匹配商品",
+            state: .understanding,
+            thinkingSteps: ["思考中"]
+        ))
         runAgent(for: query)
+    }
+
+    private func canStartSend(query: String, imageData: Data?) -> Bool {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (!trimmed.isEmpty || imageData != nil) && !isAssistantStreaming
     }
 
     // MARK: - 拍照找货
@@ -721,7 +912,7 @@ struct GuideView: View {
     }
 
     private func runAgent(for query: String, imageBase64: String? = nil) {
-        Task { @MainActor in
+        activeAgentTask = Task { @MainActor in
             await runAgentWithRetry(for: query, imageBase64: imageBase64)
         }
     }
@@ -737,6 +928,8 @@ struct GuideView: View {
                 await generateTitleIfNeeded()
                 return
             } catch {
+                // 用户点了停止：界面已由 stopGeneration 收尾，不算失败也不重试
+                if Task.isCancelled { return }
                 lastError = error
                 attempt += 1
                 let hasProducts = latestAssistantMessage?.products.isEmpty == false
@@ -775,16 +968,35 @@ struct GuideView: View {
             var hydrated: [Product] = []
             var statusText = imageBase64 == nil ? loadingSearchText(for: query) : "正在识别图片并匹配商品"
 
+            // 结构化流式（新协议）：后端按"开场白逐字 → 每款商品解说 → 追问"顺序下发，
+            // 卡片随自己的解说到达时才弹出，而不是检索一完成就整批砸出来。
+            var hasStructuredStream = false
+            var streamedOpening = ""
+            var streamedItems: [StructuredItem] = []
+            var streamedFollowups: [String] = []
+            var streamedSummary: String?
+            // 商品已补全但还没收到任何结构化片段：先只摆开场占位，等解说到了再逐张弹卡片。
+            // 若后端是旧协议（只发 token），在首个 token / done 时退回旧的整批预览。
+            var pendingProductPreview = false
+            // 节奏控制：上一张卡片 / 上一条追问弹出的时刻，保证按固定节奏一个一个来
+            var lastCardRevealAt = Date.distantPast
+            var lastFollowupRevealAt = Date.distantPast
+
             let request = AgentRequestPayload(
                 sessionID: currentSessionID,
                 text: query,
                 imageBase64: imageBase64
             )
             for try await event in agentService.streamResponse(for: request) {
+                try Task.checkCancellation()
                 switch event.type {
                 case .status:
                     if let status = event.status {
                         statusText = status.message.isEmpty ? statusText : status.message
+                        appendThinkingStep(status.message)
+                        if hasStructuredStream {
+                            break
+                        }
                         if narrative.isEmpty && hydrated.isEmpty {
                             updateLastAI(
                                 text: statusText,
@@ -797,12 +1009,120 @@ struct GuideView: View {
                     }
 
                 case .products:
-                    hydrated = event.products.map(Product.init(payload:))
-                    await revealProductPreview(
-                        query: query,
-                        rawText: narrative.isEmpty ? statusText : narrative,
-                        products: hydrated
-                    )
+                    hydrated = event.products.map { payload in
+                        var product = Product(payload: payload)
+                        product.budgetHint = event.budgets[payload.productID]
+                        return product
+                    }
+                    if hasStructuredStream {
+                        renderStructuredStream(
+                            query: query,
+                            opening: streamedOpening,
+                            items: streamedItems,
+                            followups: streamedFollowups,
+                            summary: streamedSummary,
+                            hydrated: hydrated
+                        )
+                    } else {
+                        // 卡片等解说到了再逐张弹出，这段时间继续显示思考步骤
+                        pendingProductPreview = true
+                    }
+
+                case .openingDelta:
+                    if let piece = event.textDelta {
+                        hasStructuredStream = true
+                        pendingProductPreview = false
+                        setStreamingStatus(hydrated.isEmpty ? "正在整理推荐" : "正在介绍商品")
+                        if piece.count >= streamOpeningTypewriterThreshold {
+                            // 一大块一次到（缓存命中）：按逐字节奏打出来，别"啪"地整句出现
+                            for character in piece {
+                                guard !Task.isCancelled else { break }
+                                streamedOpening.append(character)
+                                renderStructuredStream(
+                                    query: query,
+                                    opening: streamedOpening,
+                                    items: streamedItems,
+                                    followups: streamedFollowups,
+                                    summary: streamedSummary,
+                                    hydrated: hydrated
+                                )
+                                try? await Task.sleep(nanoseconds: streamDelay(for: character))
+                            }
+                        } else {
+                            streamedOpening += piece
+                            renderStructuredStream(
+                                query: query,
+                                opening: streamedOpening,
+                                items: streamedItems,
+                                followups: streamedFollowups,
+                                summary: streamedSummary,
+                                hydrated: hydrated
+                            )
+                        }
+                    }
+
+                case .itemDescription:
+                    if let pid = event.productID {
+                        hasStructuredStream = true
+                        pendingProductPreview = false
+                        let description = event.textDelta ?? ""
+                        guard !streamedItems.contains(where: { $0.productId == pid }) else { break }
+                        // 一张一张来：距上一张不足最小间隔就等一等（后续事件在流里排队，不会丢）
+                        await paceReveal(since: lastCardRevealAt, minGap: streamCardMinGap)
+                        try Task.checkCancellation()
+                        lastCardRevealAt = Date()
+                        streamedItems.append(StructuredItem(productId: pid, description: description, group: event.group))
+                        let remaining = hydrated.count - streamedItems.count
+                        setStreamingStatus(remaining > 0 ? "正在介绍商品" : "生成追问中")
+                        withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.86)) {
+                            renderStructuredStream(
+                                query: query,
+                                opening: streamedOpening,
+                                items: streamedItems,
+                                followups: streamedFollowups,
+                                summary: streamedSummary,
+                                hydrated: hydrated
+                            )
+                        }
+                    }
+
+                case .summary:
+                    if let text = event.textDelta {
+                        hasStructuredStream = true
+                        pendingProductPreview = false
+                        streamedSummary = text
+                        withAnimation(.easeOut(duration: 0.18)) {
+                            renderStructuredStream(
+                                query: query,
+                                opening: streamedOpening,
+                                items: streamedItems,
+                                followups: streamedFollowups,
+                                summary: streamedSummary,
+                                hydrated: hydrated
+                            )
+                        }
+                    }
+
+                case .followup:
+                    if let text = event.textDelta, !streamedFollowups.contains(text) {
+                        hasStructuredStream = true
+                        pendingProductPreview = false
+                        await paceReveal(since: lastFollowupRevealAt, minGap: streamFollowupMinGap)
+                        try Task.checkCancellation()
+                        lastFollowupRevealAt = Date()
+                        streamedFollowups.append(text)
+                        setStreamingStatus("生成追问中")
+                        withAnimation(.easeOut(duration: 0.18)) {
+                            renderStructuredStream(
+                                query: query,
+                                opening: streamedOpening,
+                                items: streamedItems,
+                                followups: streamedFollowups,
+                                summary: streamedSummary,
+                                hydrated: hydrated
+                            )
+                        }
+                    }
 
                 case .cartSnapshot:
                     if let snapshot = event.cartSnapshot {
@@ -820,6 +1140,15 @@ struct GuideView: View {
                 case .textDelta:
                     if let piece = event.textDelta {
                         narrative += piece
+                        if hasStructuredStream {
+                            // 结构化片段已经渲染过，这条是后端为旧客户端附带的完整 JSON，仅留作 rawText。
+                            break
+                        }
+                        if pendingProductPreview {
+                            // 旧协议后端：没有结构化片段，退回整批预览
+                            pendingProductPreview = false
+                            await revealProductPreview(query: query, rawText: statusText, products: hydrated)
+                        }
                         let trimmedNarrative = narrative.trimmingCharacters(in: .whitespacesAndNewlines)
                         if isStructuredNarrative || trimmedNarrative.first == "{" {
                             isStructuredNarrative = true
@@ -829,6 +1158,7 @@ struct GuideView: View {
                                 markFollowupGenerationInProgress("生成追问中")
                             }
                         } else {
+                            clearThinkingSteps()
                             visibleNarrative = await revealTextDelta(
                                 piece,
                                 currentText: visibleNarrative,
@@ -848,28 +1178,159 @@ struct GuideView: View {
                     }
 
                 case .done:
-                    await finishStreamingResponse(
-                        rawText: narrative.isEmpty ? statusText : narrative,
-                        visibleText: visibleNarrative,
-                        fallbackText: statusText,
-                        products: hydrated
-                    )
+                    if hasStructuredStream {
+                        finishStructuredStream(
+                            query: query,
+                            rawText: narrative,
+                            opening: streamedOpening,
+                            items: streamedItems,
+                            followups: streamedFollowups,
+                            summary: streamedSummary,
+                            hydrated: hydrated
+                        )
+                    } else {
+                        if pendingProductPreview {
+                            pendingProductPreview = false
+                            await revealProductPreview(query: query, rawText: statusText, products: hydrated)
+                        }
+                        await finishStreamingResponse(
+                            rawText: narrative.isEmpty ? statusText : narrative,
+                            visibleText: visibleNarrative,
+                            fallbackText: statusText,
+                            products: hydrated
+                        )
+                    }
 
                 default:
                     break
                 }
             }
 
+            // 被取消时 for-await 会正常退出，不能走下面"没收到 done"的兜底
+            try Task.checkCancellation()
+
             // 流正常结束但未收到 done 时的兜底
             if let index = messages.lastIndex(where: { $0.sender == .ai }),
                messages[index].state != .ready, messages[index].state != .failed {
-                await finishStreamingResponse(
-                    rawText: narrative.isEmpty ? statusText : narrative,
-                    visibleText: visibleNarrative,
-                    fallbackText: statusText,
-                    products: hydrated
-                )
+                if hasStructuredStream {
+                    finishStructuredStream(
+                        query: query,
+                        rawText: narrative,
+                        opening: streamedOpening,
+                        items: streamedItems,
+                        followups: streamedFollowups,
+                        summary: streamedSummary,
+                        hydrated: hydrated
+                    )
+                } else {
+                    if pendingProductPreview {
+                        await revealProductPreview(query: query, rawText: statusText, products: hydrated)
+                    }
+                    await finishStreamingResponse(
+                        rawText: narrative.isEmpty ? statusText : narrative,
+                        visibleText: visibleNarrative,
+                        fallbackText: statusText,
+                        products: hydrated
+                    )
+                }
             }
+    }
+
+    // MARK: - 结构化流式渲染（开场白 → 卡片逐张 → 追问）
+
+    /// 距上次弹出不足 minGap 就等到够为止；流里后到的事件会排队，不会丢。
+    private func paceReveal(since last: Date, minGap: TimeInterval) async {
+        let elapsed = Date().timeIntervalSince(last)
+        guard elapsed < minGap else { return }
+        try? await Task.sleep(nanoseconds: UInt64((minGap - elapsed) * 1_000_000_000))
+    }
+
+    /// 流式进行中显示在当前 AI 消息底部的「生成中」文案；nil 则隐藏。
+    private func setStreamingStatus(_ text: String?) {
+        guard !Task.isCancelled else { return }
+        guard let index = messages.lastIndex(where: { $0.sender == .ai }) else { return }
+        if messages[index].streamingStatusText != text {
+            messages[index].streamingStatusText = text
+        }
+    }
+
+    /// 把后端的阶段提示记成一条思考步骤，已经显示过的不重复。
+    private func appendThinkingStep(_ text: String) {
+        guard !Task.isCancelled else { return }
+        guard let index = messages.lastIndex(where: { $0.sender == .ai }),
+              messages[index].structuredContent == nil else { return }
+        let step = text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "…."))
+        guard !step.isEmpty, messages[index].thinkingSteps?.last != step else { return }
+        withAnimation(.easeOut(duration: 0.2)) {
+            messages[index].thinkingSteps = (messages[index].thinkingSteps ?? []) + [step]
+        }
+    }
+
+    private func clearThinkingSteps() {
+        guard !Task.isCancelled else { return }
+        guard let index = messages.lastIndex(where: { $0.sender == .ai }) else { return }
+        messages[index].thinkingSteps = nil
+    }
+
+    /// 按"解说到达顺序"渲染：只有拿到专属解说的商品才出现卡片。
+    private func renderStructuredStream(
+        query: String,
+        opening: String,
+        items: [StructuredItem],
+        followups: [String],
+        summary: String?,
+        hydrated: [Product]
+    ) {
+        let byID = Dictionary(hydrated.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let visibleProducts = items.compactMap { byID[$0.productId] }
+        let openingText = opening.isEmpty ? searchingRecommendationOpening(for: query) : opening
+        updateLastAI(
+            text: openingText,
+            state: .generating,
+            products: visibleProducts,
+            structuredContent: StructuredContent(opening: openingText, items: items, followup: followups, summary: summary),
+            isGeneratingFollowups: followups.isEmpty
+        )
+    }
+
+    /// 流结束：补齐没拿到解说的商品（用检索理由兜底）、补默认追问，切到 ready。
+    private func finishStructuredStream(
+        query: String,
+        rawText: String,
+        opening: String,
+        items: [StructuredItem],
+        followups: [String],
+        summary: String?,
+        hydrated: [Product]
+    ) {
+        let byID = Dictionary(hydrated.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var orderedProducts = items.compactMap { byID[$0.productId] }
+        var finalItems = items
+        for product in hydrated where !orderedProducts.contains(where: { $0.id == product.id }) {
+            orderedProducts.append(product)
+            finalItems.append(StructuredItem(productId: product.id, description: product.reason))
+        }
+        let openingText = opening.isEmpty
+            ? completedRecommendationOpening(for: query, products: orderedProducts)
+            : opening
+        let finalFollowups = followups.isEmpty && !orderedProducts.isEmpty
+            ? fallbackFollowups(for: query, products: orderedProducts)
+            : followups
+        let content = StructuredContent(opening: openingText, items: finalItems, followup: finalFollowups, summary: summary)
+        setStreamingStatus(nil)
+        withAnimation(.easeOut(duration: 0.18)) {
+            updateLastAI(
+                text: rawText.isEmpty ? openingText : rawText,
+                state: .ready,
+                products: orderedProducts,
+                structuredContent: content,
+                isGeneratingFollowups: false,
+                followupError: nil
+            )
+        }
+        markAssistantResponseReadyForScroll()
     }
 
     private func revealTextDelta(
@@ -975,7 +1436,8 @@ struct GuideView: View {
                 structuredContent: StructuredContent(
                     opening: stableOpening,
                     items: content.items,
-                    followup: content.followup
+                    followup: content.followup,
+                    summary: content.summary
                 ),
                 completionSummary: content.opening,
                 isGeneratingFollowups: false,
@@ -1010,7 +1472,7 @@ struct GuideView: View {
                     text: rawText,
                     state: .generating,
                     products: visibleProducts,
-                    structuredContent: StructuredContent(opening: content.opening, items: content.items)
+                    structuredContent: StructuredContent(opening: content.opening, items: content.items, summary: content.summary)
                 )
             }
             if index < (products.indices.last ?? index) {
@@ -1057,9 +1519,13 @@ struct GuideView: View {
         guard attempt < maxAttempts else { return }
         let retryText = "连接中断，正在第 \(attempt + 1) 次重试"
         updateLastAI(text: retryText, state: .understanding, products: nil)
+        if let index = messages.lastIndex(where: { $0.sender == .ai }) {
+            messages[index].thinkingSteps = [retryText]
+        }
     }
 
     private func markFollowupGenerationInProgress(_ text: String) {
+        guard !Task.isCancelled else { return }
         guard let index = messages.lastIndex(where: { $0.sender == .ai }) else { return }
         messages[index].isGeneratingFollowups = true
         messages[index].followupError = nil
@@ -1067,6 +1533,7 @@ struct GuideView: View {
     }
 
     private func markFollowupGenerationFailed(_ message: String) {
+        guard !Task.isCancelled else { return }
         guard let index = messages.lastIndex(where: { $0.sender == .ai }) else { return }
         messages[index].isGeneratingFollowups = false
         messages[index].followupError = message
@@ -1082,7 +1549,12 @@ struct GuideView: View {
             ?? products.map { StructuredItem(productId: $0.id, description: $0.reason) }
         let completion = completedRecommendationOpening(for: query, products: products)
         let followups = fallbackFollowups(for: query, products: products)
-        messages[index].structuredContent = StructuredContent(opening: opening, items: items, followup: followups)
+        messages[index].structuredContent = StructuredContent(
+            opening: opening,
+            items: items,
+            followup: followups,
+            summary: message.structuredContent?.summary
+        )
         messages[index].completionSummary = completion
         messages[index].isGeneratingFollowups = false
         messages[index].followupError = nil
@@ -1100,11 +1572,12 @@ struct GuideView: View {
         return prompts
     }
 
+    /// 回答完成：松开问题锚点但不往下跳；内容超出一屏时给「跳到最新」按钮。
     private func markAssistantResponseReadyForScroll() {
         shouldHoldLatestQuestionAnchor = false
         pendingQuestionAnchorID = nil
-        isAutoFollowEnabled = true
-        shouldShowJumpToLatest = false
+        isAutoFollowEnabled = false
+        shouldShowJumpToLatest = !isNearChatBottom
     }
 
     private func streamDelay(for character: Character) -> UInt64 {
@@ -1171,6 +1644,7 @@ struct GuideView: View {
 
     /// 开启全新对话：存档当前 → 清空 → 换新 session_id（后端会 mint 新会话）。
     private func startNewConversation() {
+        stopGeneration()
         persistCurrent()
         resetScrollFollowState()
         messages = []
@@ -1206,6 +1680,7 @@ struct GuideView: View {
 
     /// 重开历史对话：存档当前 → 载入选中会话（含其 session_id，可继续追问）。
     private func openConversation(_ conversation: Conversation) {
+        stopGeneration()
         persistCurrent()
         resetScrollFollowState()
         messages = conversation.messages
@@ -1339,8 +1814,18 @@ struct GuideView: View {
     /// - 刚发送（短回复流式中）：把用户这条问题滚到顶部，让用户从头读，AI 回复在下方展开。
     /// - 其它情况（长回复、出商品卡、已就绪）：跟随到最新内容底部，确保新内容不被输入框遮住。
     private func driveAutoScroll(_ proxy: ScrollViewProxy) {
+        if shouldHoldLatestQuestionAnchor, let anchorID = pendingQuestionAnchorID {
+            // 问题钉在顶部，回答在下方长出来；超出一屏只提示「跳到最新」，不自动滚
+            scrollToQuestion(anchorID, proxy: proxy)
+            if !isNearChatBottom {
+                shouldShowJumpToLatest = true
+            }
+            return
+        }
         if let message = latestAssistantMessage, message.state == .ready || message.state == .failed {
-            forceScrollToLatestMessage(proxy)
+            if isAutoFollowEnabled {
+                forceScrollToLatestMessage(proxy)
+            }
             return
         }
         handleContentChange(proxy)
@@ -1432,9 +1917,14 @@ struct GuideView: View {
         isGeneratingFollowups: Bool? = nil,
         followupError: String? = nil
     ) {
+        // 已取消的回合可能刚从 sleep 醒来，不能覆盖 stopGeneration 的收尾或下一轮的消息
+        guard !Task.isCancelled else { return }
         guard let index = messages.lastIndex(where: { $0.sender == .ai }) else { return }
         messages[index].text = text
         messages[index].state = state
+        if state == .ready || state == .failed {
+            messages[index].thinkingSteps = nil
+        }
         if let products {
             messages[index].products = products
         }
@@ -1456,12 +1946,14 @@ struct GuideView: View {
     /// 把后端「请选择规格」的可交互卡片挂到当前 AI 消息上；后续 token/done
     /// 只更新文本与状态，不会清掉已挂上的卡片。
     private func attachSpecSelection(_ spec: SpecSelection) {
+        guard !Task.isCancelled else { return }
         guard let index = messages.lastIndex(where: { $0.sender == .ai }) else { return }
         messages[index].specSelection = spec
     }
 
     /// 把对比结果挂到当前 AI 消息上，对话流里直接渲染对比卡片。
     private func attachComparison(_ comparison: ProductComparisonPayload) {
+        guard !Task.isCancelled else { return }
         guard let index = messages.lastIndex(where: { $0.sender == .ai }) else { return }
         messages[index].comparison = comparison
     }
@@ -1506,11 +1998,14 @@ struct MessageRow: View {
     let onSpecSubmit: (String) -> Void
     let onCompareTap: ([Product]) -> Void
     let onFollowUpTap: (String) -> Void
+    var onSeeMore: (String) -> Void = { _ in }
     
     private struct ProductSection: Identifiable, Equatable {
         let id: String
         let product: Product
         let description: String?
+        /// 这款商品是所属分区的第一款时，在卡片上方显示分区标题。
+        var groupHeader: String? = nil
         
         init(product: Product, description: String?) {
             self.id = product.id
@@ -1519,7 +2014,9 @@ struct MessageRow: View {
         }
         
         static func == (lhs: ProductSection, rhs: ProductSection) -> Bool {
-            lhs.product.id == rhs.product.id && lhs.description == rhs.description
+            lhs.product.id == rhs.product.id
+                && lhs.description == rhs.description
+                && lhs.groupHeader == rhs.groupHeader
         }
     }
     
@@ -1591,6 +2088,7 @@ struct MessageRow: View {
         
         // 结构化内容：优先 productId 精确匹配，失败则按顺序对齐（兼容 LLM 返回序号的情况）
         if let content = parsedStructuredContent {
+            var currentGroup: String?
             return products.enumerated().map { index, product in
                 let item = content.items.first { $0.productId == product.id }
                     ?? (index < content.items.count ? content.items[index] : nil)
@@ -1598,7 +2096,12 @@ struct MessageRow: View {
                     let cleaned = RecommendationCopy.sanitized($0.description)
                     return cleaned.isEmpty ? nil : cleaned
                 } ?? (product.reason.isEmpty ? nil : product.reason)
-                return ProductSection(product: product, description: description)
+                var section = ProductSection(product: product, description: description)
+                if let group = item?.group, !group.isEmpty, group != currentGroup {
+                    section.groupHeader = group
+                    currentGroup = group
+                }
+                return section
             }
         }
         
@@ -1629,7 +2132,10 @@ struct MessageRow: View {
                         )
                 }
 
-                if message.state == .ready || isRevealingStructuredContent {
+                if let steps = activeThinkingSteps {
+                    ThinkingStepsView(steps: steps)
+                        .transition(.opacity)
+                } else if message.state == .ready || isRevealingStructuredContent {
                     if message.sender == .user {
                         Text(message.text)
                             .font(.subheadline)
@@ -1672,26 +2178,33 @@ struct MessageRow: View {
                     
                     // 2. 商品卡片 + 解说交替展示
                     ForEach(productSections) { section in
+                        if let header = section.groupHeader {
+                            ProductSectionHeader(title: header) {
+                                onSeeMore(header)
+                            }
+                            .modifier(GhostReveal(isActive: isRevealingStructuredContent))
+                        }
+
                         ProductCard(product: section.product) {
                             onProductTap(section.product)
                         }
-                        .transition(.opacity.combined(with: .scale).combined(with: .offset(y: 20)))
+                        .modifier(GhostReveal(isActive: isRevealingStructuredContent))
+                        .transition(.offset(y: 16))
 
                         if let description = section.description {
                             Text(description)
                                 .font(.subheadline)
-                                .foregroundStyle(AppTheme.textSecondary)
-                                .lineLimit(2)
+                                .foregroundStyle(AppTheme.textPrimary)
                                 .lineSpacing(4)
+                                .fixedSize(horizontal: false, vertical: true)
                                 .padding(.horizontal, 14)
                                 .padding(.vertical, 8)
-                                .transition(.opacity)
+                                .modifier(GhostReveal(isActive: isRevealingStructuredContent))
                         }
                     }
 
-                    if let completionSummary = message.completionSummary,
-                       !completionSummary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        Text(completionSummary)
+                    if let closingSummary {
+                        Text(closingSummary)
                             .font(.subheadline)
                             .foregroundStyle(AppTheme.textPrimary)
                             .lineSpacing(6)
@@ -1705,7 +2218,7 @@ struct MessageRow: View {
                             .transition(.opacity.combined(with: .move(edge: .top)))
                     }
                     
-                    // 3. 追问 Prompt（点击填入输入框，不直接发送）
+                    // 3. 追问 Prompt（点击直接发送）
                     if !followups.isEmpty {
                         VStack(alignment: .leading, spacing: 6) {
                             ForEach(followups, id: \.self) { prompt in
@@ -1726,8 +2239,9 @@ struct MessageRow: View {
                         .padding(.top, 8)
                     }
 
-                    if message.isGeneratingFollowups {
-                        ClaudeStyleLoadingStatus(text: "生成追问中")
+                    if message.streamingStatusText != nil || message.isGeneratingFollowups {
+                        // 流式进行中：统一一个加载动画，不区分「介绍商品 / 生成追问」
+                        StreamingPulseIndicator()
                             .padding(.top, 8)
                             .transition(.opacity.combined(with: .move(edge: .top)))
                     } else if let followupError = message.followupError {
@@ -1760,6 +2274,14 @@ struct MessageRow: View {
                         )
                 } else if !displayText.isEmpty {
                     loadingText
+                }
+
+                if message.wasStopped == true {
+                    Label("已停止", systemImage: "stop.circle")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(AppTheme.textSecondary)
+                        .padding(.horizontal, 4)
+                        .transition(.opacity)
                 }
 
                 if !examples.isEmpty {
@@ -1895,6 +2417,25 @@ struct MessageRow: View {
         }
     }
 
+    /// 回答开始前显示思考步骤；一旦有开场白或正文就不再显示。
+    private var activeThinkingSteps: [String]? {
+        guard message.sender == .ai,
+              message.state != .ready,
+              message.state != .failed,
+              message.structuredContent == nil,
+              let steps = message.thinkingSteps,
+              !steps.isEmpty else { return nil }
+        return steps
+    }
+
+    /// 模型写的结尾总结优先；没有时用本地兜底生成的完成说明。
+    private var closingSummary: String? {
+        let candidate = parsedStructuredContent?.summary ?? message.completionSummary
+        guard let candidate,
+              !candidate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return candidate
+    }
+
     private var isRevealingStructuredContent: Bool {
         message.sender == .ai && message.state == .generating && message.structuredContent != nil
     }
@@ -1914,6 +2455,117 @@ struct MessageRow: View {
         case .ai:
             return message.state == .failed ? AppTheme.error.opacity(0.08) : AppTheme.surface
         }
+    }
+}
+
+/// 流式进行中挂在消息底部的加载动画：三个依次起伏的圆点，不带文字。
+private struct StreamingPulseIndicator: View {
+    @State private var phase = 0
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(0..<3, id: \.self) { index in
+                Circle()
+                    .fill(AppTheme.primary.opacity(phase == index ? 0.95 : 0.35))
+                    .frame(width: 7, height: 7)
+                    .scaleEffect(phase == index ? 1.25 : 0.85)
+                    .animation(.easeInOut(duration: 0.3), value: phase)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(AppTheme.surface, in: Capsule())
+        .overlay(Capsule().stroke(AppTheme.border, lineWidth: 1))
+        .accessibilityLabel("生成中")
+        .task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                phase = (phase + 1) % 3
+            }
+        }
+    }
+}
+
+/// 思考步骤时间线：做完的变灰，正在做的高亮并呼吸。
+private struct ThinkingStepsView: View {
+    let steps: [String]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(Array(steps.enumerated()), id: \.offset) { index, step in
+                let isActive = index == steps.count - 1
+                HStack(alignment: .firstTextBaseline, spacing: 9) {
+                    ThinkingStepDot(isActive: isActive)
+                    Text(isActive ? "\(step)…" : step)
+                        .font(.footnote.weight(isActive ? .medium : .regular))
+                        .foregroundStyle(isActive ? AppTheme.textPrimary : AppTheme.textSecondary.opacity(0.7))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .transition(.opacity.combined(with: .offset(y: 6)))
+            }
+        }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 2)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+private struct ThinkingStepDot: View {
+    let isActive: Bool
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 20, paused: !isActive || reduceMotion)) { context in
+            let wave = sin(context.date.timeIntervalSinceReferenceDate * 3.4)
+            Circle()
+                .fill(isActive ? AppTheme.primary : AppTheme.textSecondary.opacity(0.45))
+                .frame(width: 6, height: 6)
+                .scaleEffect(isActive && !reduceMotion ? 1 + 0.22 * wave : 1)
+                .opacity(isActive && !reduceMotion ? 0.72 + 0.28 * wave : 1)
+        }
+        .frame(width: 8, height: 8)
+    }
+}
+
+/// 分区标题：左边说明这组的共同点，右边"查看更多"继续看同类、不重复已展示的。
+private struct ProductSectionHeader: View {
+    let title: String
+    let onSeeMore: () -> Void
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(AppTheme.textPrimary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 8)
+            Button("查看更多", action: onSeeMore)
+                .font(.footnote.weight(.medium))
+                .foregroundStyle(AppTheme.primary)
+                .buttonStyle(.tactile)
+        }
+        .padding(.horizontal, 4)
+        .padding(.top, 6)
+    }
+}
+
+/// 流式到达的内容先以半透明的幽灵态出现，再慢慢变实。历史消息和已完成的回答直接显示。
+private struct GhostReveal: ViewModifier {
+    let isActive: Bool
+
+    @State private var isRevealed = false
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(isActive && !isRevealed ? 0.25 : 1)
+            .saturation(isActive && !isRevealed ? 0.2 : 1)
+            .onAppear {
+                guard isActive, !isRevealed else { return }
+                withAnimation(.easeOut(duration: 0.55)) {
+                    isRevealed = true
+                }
+            }
     }
 }
 
@@ -1981,32 +2633,133 @@ private struct ClaudeStyleLoadingStatus: View {
 
 }
 
+/// 一次语音输入的结果。
+enum VoiceCaptureOutcome: Equatable {
+    /// 说完了，直接发送。
+    case send(String)
+    /// 像是说到一半，放回输入框让用户补完，不直接发送也不丢弃。
+    case draft(String)
+    /// 一直没有说话，收起浮层。
+    case noSpeech
+}
+
+/// 判断用户是否说完。纯逻辑，不依赖音频，时间由调用方传入。
+struct VoiceEndpointDetector {
+    enum Decision: Equatable {
+        case keepListening, send, draft, noSpeech
+    }
+
+    /// 识别结果多久没变算说完。
+    var silenceToSend: TimeInterval = 1.6
+    /// 句子像没说完时多等一会儿，用户可能在想。
+    var silenceToDraft: TimeInterval = 3.5
+    /// 麦克风还要安静这么久才算停，避免识别结果滞后时打断用户。
+    var voiceQuietGap: TimeInterval = 0.8
+    /// 环境噪音会让麦克风一直不安静，超过这个额外时长就不再看音量。
+    var noisyRoomExtra: TimeInterval = 2.4
+    /// 一个字都没识别到时的等待上限。
+    var noSpeechTimeout: TimeInterval = 8
+    /// 音量高于它算有人在说话。
+    var voicedLevel: CGFloat = 0.18
+
+    private let startedAt: Date
+    private var lastTranscriptChangeAt: Date
+    private var lastVoicedAt: Date
+
+    init(startedAt: Date) {
+        self.startedAt = startedAt
+        self.lastTranscriptChangeAt = startedAt
+        self.lastVoicedAt = startedAt
+    }
+
+    mutating func noteTranscriptChanged(at now: Date) {
+        lastTranscriptChangeAt = now
+    }
+
+    mutating func noteLevel(_ level: CGFloat, at now: Date) {
+        if level >= voicedLevel {
+            lastVoicedAt = now
+        }
+    }
+
+    func decide(transcript: String, now: Date) -> Decision {
+        let text = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else {
+            return now.timeIntervalSince(startedAt) >= noSpeechTimeout ? .noSpeech : .keepListening
+        }
+        let incomplete = Self.looksIncomplete(text)
+        let required = incomplete ? silenceToDraft : silenceToSend
+        let sinceTranscript = now.timeIntervalSince(lastTranscriptChangeAt)
+        let isQuiet = now.timeIntervalSince(lastVoicedAt) >= voiceQuietGap
+        guard (sinceTranscript >= required && isQuiet) || sinceTranscript >= required + noisyRoomExtra else {
+            return .keepListening
+        }
+        return incomplete ? .draft : .send
+    }
+
+    /// 以连接词、语气词结尾的话大概率没说完。
+    static func looksIncomplete(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+        guard !trimmed.isEmpty else { return false }
+        let chineseEndings = [
+            "和", "跟", "还有", "然后", "以及", "或者", "但是", "而且", "那个", "这个",
+            "就是", "比如", "我想", "我要", "想要", "帮我", "呃", "嗯"
+        ]
+        if chineseEndings.contains(where: { trimmed.hasSuffix($0) }) {
+            return true
+        }
+        let englishEndings: Set<String> = ["of", "and", "the", "to", "with", "for", "a", "an", "or", "but"]
+        let lastWord = trimmed.lowercased().split(whereSeparator: { !$0.isLetter }).last.map(String.init)
+        return lastWord.map(englishEndings.contains) ?? false
+    }
+}
+
+/// 转写太长时只留结尾，超出部分用省略号代替。中文按两个单位算，英文按一个。
+func voiceTranscriptTail(_ text: String, maxUnits: Int = 108) -> String {
+    var units = 0
+    var kept: [Character] = []
+    for character in text.reversed() {
+        let width = character.isASCII ? 1 : 2
+        if units + width > maxUnits {
+            return "…" + String(kept.reversed())
+        }
+        units += width
+        kept.append(character)
+    }
+    return text
+}
+
 @MainActor
 final class SpeechInputController: NSObject, ObservableObject, SFSpeechRecognizerDelegate {
     @Published private(set) var isListening = false
     @Published private(set) var transcript = ""
+    /// 0...1 的麦克风音量，驱动音量条。
+    @Published private(set) var level: CGFloat = 0
     @Published private(set) var errorMessage: String?
+    /// 一次语音输入结束后写入，只写一次。
+    @Published private(set) var outcome: VoiceCaptureOutcome?
+
+    /// 权限都已授予，开麦不会弹系统权限框。
+    static var isAuthorizedWithoutPrompt: Bool {
+        SFSpeechRecognizer.authorizationStatus() == .authorized
+            && AVAudioApplication.shared.recordPermission == .granted
+    }
 
     private let speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "zh_CN"))
     private let audioEngine = AVAudioEngine()
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
+    private var endpointTask: Task<Void, Never>?
+    private var detector = VoiceEndpointDetector(startedAt: Date())
 
     override init() {
         super.init()
         speechRecognizer?.delegate = self
     }
 
-    func toggle() async {
-        if isListening {
-            stop()
-        } else {
-            await start()
-        }
-    }
-
-    func start() async {
+    func start(hints: [String] = []) async {
         errorMessage = nil
+        outcome = nil
         guard speechRecognizer?.isAvailable == true else {
             errorMessage = "语音识别暂时不可用。"
             return
@@ -2019,6 +2772,8 @@ final class SpeechInputController: NSObject, ObservableObject, SFSpeechRecognize
             errorMessage = "请允许麦克风权限后再使用语音输入。"
             return
         }
+        // 用户可能在权限弹框期间已经取消了
+        guard !Task.isCancelled else { return }
 
         recognitionTask?.cancel()
         recognitionTask = nil
@@ -2031,30 +2786,44 @@ final class SpeechInputController: NSObject, ObservableObject, SFSpeechRecognize
 
             let request = SFSpeechAudioBufferRecognitionRequest()
             request.shouldReportPartialResults = true
+            request.addsPunctuation = true
+            request.contextualStrings = Array(hints.prefix(100))
             recognitionRequest = request
 
             let inputNode = audioEngine.inputNode
             inputNode.removeTap(onBus: 0)
             let recordingFormat = inputNode.outputFormat(forBus: 0)
-            inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak request] buffer, _ in
-                request?.append(buffer)
+            // 没有可用麦克风时格式为空，直接 installTap 会让进程崩溃
+            guard recordingFormat.sampleRate > 0, recordingFormat.channelCount > 0 else {
+                stop()
+                errorMessage = "没有检测到可用的麦克风。"
+                return
             }
+            let tap = Self.makeTapBlock(request: request) { [weak self] value in
+                Task { @MainActor in
+                    self?.applyLevel(value)
+                }
+            }
+            inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat, block: tap)
 
             audioEngine.prepare()
             try audioEngine.start()
             isListening = true
+            detector = VoiceEndpointDetector(startedAt: Date())
+            startEndpointLoop()
 
             recognitionTask = speechRecognizer?.recognitionTask(with: request) { [weak self] result, error in
                 Task { @MainActor in
-                    guard let self else { return }
+                    guard let self, self.isListening else { return }
                     if let result {
-                        self.transcript = result.bestTranscription.formattedString
+                        self.updateTranscript(result.bestTranscription.formattedString)
                         if result.isFinal {
-                            self.stop()
+                            self.finishWithCurrentTranscript()
+                            return
                         }
                     }
                     if error != nil {
-                        self.stop()
+                        self.handleRecognitionFailure()
                     }
                 }
             }
@@ -2064,17 +2833,108 @@ final class SpeechInputController: NSObject, ObservableObject, SFSpeechRecognize
         }
     }
 
+    /// 用户点音量条表示说完了，不再等静音判断。
+    func finishNow() {
+        guard isListening, !currentText.isEmpty else { return }
+        finish(.send(currentText))
+    }
+
     func stop() {
+        endpointTask?.cancel()
+        endpointTask = nil
         if audioEngine.isRunning {
             audioEngine.stop()
-            audioEngine.inputNode.removeTap(onBus: 0)
         }
+        audioEngine.inputNode.removeTap(onBus: 0)
         recognitionRequest?.endAudio()
         recognitionTask?.cancel()
         recognitionRequest = nil
         recognitionTask = nil
         isListening = false
+        level = 0
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    }
+
+    private var currentText: String {
+        transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func updateTranscript(_ text: String) {
+        guard text != transcript else { return }
+        transcript = text
+        detector.noteTranscriptChanged(at: Date())
+    }
+
+    private func applyLevel(_ value: CGFloat) {
+        guard isListening else { return }
+        // 上升跟得快、回落慢一点，音量条才不会抖
+        level = max(value, level * 0.82)
+        detector.noteLevel(value, at: Date())
+    }
+
+    private func startEndpointLoop() {
+        endpointTask?.cancel()
+        endpointTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                guard !Task.isCancelled, let self else { return }
+                self.evaluateEndpoint()
+            }
+        }
+    }
+
+    private func evaluateEndpoint() {
+        guard isListening else { return }
+        switch detector.decide(transcript: transcript, now: Date()) {
+        case .keepListening:
+            break
+        case .send:
+            finish(.send(currentText))
+        case .draft:
+            finish(.draft(currentText))
+        case .noSpeech:
+            finish(.noSpeech)
+        }
+    }
+
+    private func finishWithCurrentTranscript() {
+        finish(currentText.isEmpty ? .noSpeech : .send(currentText))
+    }
+
+    /// 识别中断时已经听到的话不能丢，放回输入框。
+    private func handleRecognitionFailure() {
+        finish(currentText.isEmpty ? .noSpeech : .draft(currentText))
+    }
+
+    private func finish(_ result: VoiceCaptureOutcome) {
+        guard outcome == nil else { return }
+        stop()
+        outcome = result
+    }
+
+    /// 音频线程上运行，所以不能继承 MainActor 隔离。
+    private nonisolated static func makeTapBlock(
+        request: SFSpeechAudioBufferRecognitionRequest,
+        onLevel: @escaping @Sendable (CGFloat) -> Void
+    ) -> AVAudioNodeTapBlock {
+        { [weak request] buffer, _ in
+            request?.append(buffer)
+            onLevel(normalizedLevel(of: buffer))
+        }
+    }
+
+    /// 把这段音频的响度换算成 0...1，-50dB 以下算静音，-12dB 以上算满格。
+    private nonisolated static func normalizedLevel(of buffer: AVAudioPCMBuffer) -> CGFloat {
+        guard let samples = buffer.floatChannelData?[0], buffer.frameLength > 0 else { return 0 }
+        let count = Int(buffer.frameLength)
+        var sum: Float = 0
+        for index in 0..<count {
+            sum += samples[index] * samples[index]
+        }
+        let rms = (sum / Float(count)).squareRoot()
+        guard rms > 0 else { return 0 }
+        let decibels = 20 * log10(rms)
+        return CGFloat(min(1, max(0, (decibels + 50) / 38)))
     }
 
     private func requestSpeechAuthorization() async -> Bool {
@@ -2087,14 +2947,8 @@ final class SpeechInputController: NSObject, ObservableObject, SFSpeechRecognize
 
     private func requestMicrophoneAuthorization() async -> Bool {
         await withCheckedContinuation { continuation in
-            if #available(iOS 17.0, *) {
-                AVAudioApplication.requestRecordPermission { granted in
-                    continuation.resume(returning: granted)
-                }
-            } else {
-                AVAudioSession.sharedInstance().requestRecordPermission { granted in
-                    continuation.resume(returning: granted)
-                }
+            AVAudioApplication.requestRecordPermission { granted in
+                continuation.resume(returning: granted)
             }
         }
     }
@@ -2103,12 +2957,133 @@ final class SpeechInputController: NSObject, ObservableObject, SFSpeechRecognize
         _ speechRecognizer: SFSpeechRecognizer,
         availabilityDidChange available: Bool
     ) {
-        if !available {
-            Task { @MainActor in
-                stop()
+        Task { @MainActor in
+            if !available {
                 errorMessage = "语音识别暂时不可用。"
+                stop()
             }
         }
+    }
+}
+
+/// 语音输入浮层：盖住输入栏，对话内容仍然可见。实时转写在上，音量条在下。
+/// 控制器由浮层自己持有，音量每秒刷新几十次也不会让整个对话页重绘。
+private struct VoiceCaptureOverlay: View {
+    let hints: [String]
+    let onOutcome: (VoiceCaptureOutcome) -> Void
+    let onCancel: () -> Void
+
+    @StateObject private var speech = SpeechInputController()
+    @Environment(\.scenePhase) private var scenePhase
+
+    var body: some View {
+        VStack(spacing: 14) {
+            promptText
+                .multilineTextAlignment(.center)
+                .lineLimit(3)
+                .lineSpacing(3)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 24)
+                .animation(.easeOut(duration: 0.12), value: speech.transcript)
+
+            VoiceWaveform(level: speech.level)
+                .contentShape(Rectangle())
+                .onTapGesture { speech.finishNow() }
+                .accessibilityElement()
+                .accessibilityLabel("正在聆听")
+                .accessibilityHint("点按结束说话并发送")
+                .accessibilityAddTraits(.isButton)
+
+            Button("取消", action: onCancel)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(AppTheme.textSecondary)
+                .frame(minWidth: 88, minHeight: 36)
+                .contentShape(Rectangle())
+        }
+        .padding(.top, 48)
+        .padding(.bottom, 4)
+        .frame(maxWidth: .infinity)
+        .background(alignment: .bottom) {
+            // 渐隐只占顶部留白，转写文字下面始终是实底，长句也不会和商品卡片叠在一起
+            VStack(spacing: 0) {
+                LinearGradient(
+                    colors: [AppTheme.background.opacity(0), AppTheme.background],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: 40)
+                AppTheme.background
+            }
+            .padding(.bottom, -AppTheme.guideComposerBottomPadding)
+            .ignoresSafeArea(edges: .bottom)
+        }
+        .task {
+            await speech.start(hints: hints)
+        }
+        .onChange(of: speech.outcome) { _, outcome in
+            if let outcome {
+                onOutcome(outcome)
+            }
+        }
+        // 只看 background：系统权限弹框会让 scenePhase 变成 inactive，不能因此收起
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .background {
+                onCancel()
+            }
+        }
+        // 进商品详情页时视图会消失，要同步收起，否则返回时会重新开麦
+        .onDisappear {
+            speech.stop()
+            onCancel()
+        }
+    }
+
+    @ViewBuilder
+    private var promptText: some View {
+        if let error = speech.errorMessage {
+            Text(error)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(AppTheme.error)
+        } else if speech.transcript.isEmpty {
+            Text("请说话")
+                .font(.subheadline)
+                .foregroundStyle(AppTheme.textSecondary)
+        } else {
+            Text(voiceTranscriptTail(speech.transcript))
+                .font(.body.weight(.bold))
+                .foregroundStyle(AppTheme.textPrimary)
+        }
+    }
+}
+
+/// 五根音量条。没声音时收成五个圆点，有声音时中间高两边低。
+private struct VoiceWaveform: View {
+    let level: CGFloat
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private let weights: [CGFloat] = [0.55, 0.8, 1, 0.8, 0.55]
+    private let barWidth: CGFloat = 8
+    private let maxBarHeight: CGFloat = 38
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30)) { context in
+            let time = context.date.timeIntervalSinceReferenceDate
+            HStack(spacing: 5) {
+                ForEach(weights.indices, id: \.self) { index in
+                    Capsule()
+                        .fill(AppTheme.primary)
+                        .frame(width: barWidth, height: height(of: index, at: time))
+                }
+            }
+            .frame(height: maxBarHeight)
+        }
+    }
+
+    private func height(of index: Int, at time: TimeInterval) -> CGFloat {
+        let wobble = reduceMotion ? 1 : 0.72 + 0.28 * CGFloat(sin(time * 9 + Double(index) * 1.4))
+        let fraction = min(1, level * weights[index] * wobble)
+        return barWidth + (maxBarHeight - barWidth) * fraction
     }
 }
 struct ComposerAction: View {
@@ -2171,9 +3146,18 @@ struct ProductCard: View {
                 .foregroundStyle(AppTheme.textPrimary)
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
-            Text(product.priceDisplay(for: product.defaultSpecificationSelection))
+            // 多规格显示完整区间，避免「¥480 起」让用户以为看中的规格也是这个价
+            Text(product.priceRangeDisplay)
                 .font(.title3.bold())
                 .foregroundStyle(AppTheme.error)
+            if let caption = product.budgetHint?.caption {
+                Text(caption)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(AppTheme.textSecondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(AppTheme.secondary.opacity(0.6), in: Capsule())
+            }
 
             Button(action: onDetail) {
                 HStack(spacing: 6) {

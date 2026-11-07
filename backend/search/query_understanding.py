@@ -5,7 +5,7 @@ from __future__ import annotations
 职责边界：
     本模块只做「数据契约 + 编排 + 缓存」，不做任何关键字/正则解析。
     自然语言到 ParsedQuery 的真实工作全部交给 search.llm_parser，
-    由豆包 function calling 完成（详见 docs/后端业务技术选型与流程设计.md）。
+    由当前主 LLM 的 function calling 完成（详见 docs/后端业务技术选型与流程设计.md）。
 
 为什么不再保留规则兜底：
     规则版在 query 覆盖率、否定语义、同义词等维度上全面落后 LLM，
@@ -24,7 +24,7 @@ import logging
 import os
 import re
 import sqlite3
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import asdict, dataclass, field, fields, replace
 from functools import lru_cache
 from pathlib import Path
 
@@ -57,6 +57,9 @@ class ParsedQuery:
     soft_terms: list[str] = field(default_factory=list)
     retrieval_query: str = ""
     needs_clarification: bool = False
+    # 用户点名、但商品库里没有的品牌或品类（「三星手机」「扫地机器人」）。
+    # 非空时检索直接返回空结果，由话术坦诚说明，而不是拿相近的商品顶替。
+    unavailable_terms: list[str] = field(default_factory=list)
 
     @property
     def hard_filters(self) -> dict[str, object]:
@@ -135,6 +138,7 @@ class ParsedQuery:
             soft_terms=union(self.soft_terms, base.soft_terms),
             retrieval_query=retrieval_query,
             needs_clarification=False,
+            unavailable_terms=list(self.unavailable_terms or []),
         )
 
 
@@ -153,8 +157,40 @@ BRAND_ALIASES: dict[str, tuple[str, ...]] = {
 }
 
 _EXTRA_BRAND_ALIASES: dict[str, tuple[str, ...]] = {
-    "Apple 苹果": ("Apple", "apple", "iphone", "iPhone"),
+    "Apple 苹果": ("Apple", "apple", "iphone", "iPhone", "ipad", "iPad", "macbook", "MacBook", "airpods", "AirPods"),
+    "阿迪达斯": ("adidas", "Adidas", "三叶草"),
+    "露露乐蒙": ("lululemon", "Lululemon"),
+    "始祖鸟": ("arcteryx", "Arc'teryx"),
+    "萨洛蒙": ("salomon", "SALOMON", "Salomon"),
+    "迈乐": ("merrell", "Merrell"),
+    "迪卡侬": ("decathlon", "Decathlon"),
+    "欧莱雅": ("巴黎欧莱雅",),
+    "巴黎欧莱雅": ("欧莱雅", "loreal", "L'Oreal"),
+    "资生堂": ("shiseido", "Shiseido"),
+    "雅诗兰黛": ("estee lauder", "Estee Lauder"),
+    "兰蔻": ("lancome", "Lancome"),
+    "科颜氏": ("kiehl's", "Kiehl's", "kiehls"),
+    "理肤泉": ("la roche-posay", "La Roche-Posay"),
 }
+
+
+def brand_is_named_in(brand: str, query: str) -> bool:
+    """用户是否在这句话里真的提到了这个品牌（含别名）。
+
+    LLM 会凭俗称猜品牌（「红腰子」猜成兰蔻），猜错后品牌硬过滤会把正确商品直接挡掉。
+    品牌只有被用户明确说出来才能进硬过滤，其余情况交给向量检索。
+    """
+    text = (query or "").lower()
+    if not text or not brand:
+        return False
+    candidates = {brand, *BRAND_ALIASES.get(brand, ()), *_EXTRA_BRAND_ALIASES.get(brand, ())}
+    for canonical, variants in BRAND_ALIASES.items():
+        if brand in variants:
+            candidates.update([canonical, *variants, *_EXTRA_BRAND_ALIASES.get(canonical, ())])
+    # 「Apple 苹果」这种复合写法，拆开任一段说到都算
+    for candidate in list(candidates):
+        candidates.update(part for part in candidate.split() if len(part) >= 2)
+    return any(candidate.lower() in text for candidate in candidates if candidate)
 
 
 @lru_cache(maxsize=1)
@@ -170,20 +206,30 @@ def load_taxonomy(db_path: Path = DEFAULT_DB_PATH) -> dict[str, object]:
     用 lru_cache 让进程内只读一次；建库脚本变更后重启服务生效。
     """
     if not db_path.exists():
-        return {"sub_to_cat": {}, "brands": [], "brand_expand": {}}
+        return {"sub_to_cat": {}, "brands": [], "brand_expand": {}, "titles": [], "catalog_text": "", "brand_subs": {}}
 
     with sqlite3.connect(db_path) as conn:
         rows = conn.execute(
             "SELECT DISTINCT category, sub_category, brand FROM products"
         ).fetchall()
+        title_rows = conn.execute("SELECT title, sub_category FROM products").fetchall()
+        try:
+            descriptions = conn.execute("SELECT marketing_description FROM product_descriptions").fetchall()
+        except sqlite3.Error:
+            descriptions = []
 
     sub_to_cat: dict[str, str] = {}
     raw_brands: set[str] = set()
+    brand_subs: dict[str, set[str]] = {}
     for category, sub_category, brand in rows:
         if sub_category:
             sub_to_cat[sub_category] = category
         if brand:
             raw_brands.add(brand)
+            brand_subs.setdefault(brand, set()).add(sub_category)
+    catalog_text = " ".join(
+        [*(title for title, _ in title_rows), *(text or "" for (text,) in descriptions), *raw_brands]
+    ).lower()
 
     # 反向索引：variant → canonical
     variant_to_canonical: dict[str, str] = {}
@@ -211,6 +257,10 @@ def load_taxonomy(db_path: Path = DEFAULT_DB_PATH) -> dict[str, object]:
         "sub_to_cat": sub_to_cat,
         "brands": sorted(canonicals),
         "brand_expand": brand_expand,
+        # 校验 LLM 解析结果用的事实：商品名、商品文本、品牌实际覆盖的子类目
+        "titles": [(title, sub) for title, sub in title_rows],
+        "catalog_text": catalog_text,
+        "brand_subs": {brand: sorted(subs) for brand, subs in brand_subs.items()},
     }
 
 
@@ -272,6 +322,28 @@ def _cached_understand(normalized_query: str) -> ParsedQuery:
     return parse_query_with_llm(normalized_query)
 
 
+# 并发去重：orchestrator 在 router 还在跑时就预取 query 解析；若 tool 阶段紧接着
+# 要同一个结果，等那个在飞的调用而不是再打一次 LLM。
+_DEDUPER: "Deduper | None" = None
+
+
+def _deduper():
+    global _DEDUPER
+    if _DEDUPER is None:
+        from llm.cache import Deduper
+
+        _DEDUPER = Deduper(max_workers=2, name="understand")
+    return _DEDUPER
+
+
+def prefetch_understand(query: str) -> None:
+    """后台预取 query 解析（结果落进 LRU）；失败静默，正式调用时会重试。"""
+    normalized = normalize_query(query or "")
+    if not normalized:
+        return
+    _deduper().prefetch(("understand", normalized), lambda: _cached_understand(normalized))
+
+
 def understand_query(query: str) -> ParsedQuery:
     """所有上层模块（API、Agent、retriever）唯一应该调的入口。
 
@@ -285,7 +357,7 @@ def understand_query(query: str) -> ParsedQuery:
     if not normalized:
         return ParsedQuery(original_query=query, needs_clarification=True)
     try:
-        parsed = _cached_understand(normalized)
+        parsed = _deduper().run(("understand", normalized), lambda: _cached_understand(normalized))
         return _merge_regex_brand_excludes(parsed, query)
     except Exception as exc:  # noqa: BLE001
         logger.warning(
@@ -493,22 +565,7 @@ def _merge_regex_brand_excludes(parsed: ParsedQuery, query: str) -> ParsedQuery:
             brand_excludes.append(brand)
     if brand_excludes == list(parsed.brand_exclude or []):
         return parsed
-    return ParsedQuery(
-        original_query=parsed.original_query,
-        intent=parsed.intent,
-        category=parsed.category,
-        sub_category=parsed.sub_category,
-        category_exclude=parsed.category_exclude,
-        sub_category_exclude=parsed.sub_category_exclude,
-        max_price=parsed.max_price,
-        min_price=parsed.min_price,
-        brand_include=parsed.brand_include,
-        brand_exclude=brand_excludes,
-        negative_ingredients=parsed.negative_ingredients,
-        soft_terms=parsed.soft_terms,
-        retrieval_query=parsed.retrieval_query,
-        needs_clarification=parsed.needs_clarification,
-    )
+    return replace(parsed, brand_exclude=brand_excludes)
 
 
 # ---------------------------------------------------------------------------

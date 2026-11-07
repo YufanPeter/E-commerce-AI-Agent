@@ -4,14 +4,14 @@ from __future__ import annotations
 
 两件事，都围绕"把一张图变成系统能检索的东西"：
 
-1. ``vision_extract_query(image)``：用视觉大模型（VLM，复用现有 Ark 聊天 endpoint）
-   把图片"看懂"成一句**中文检索 query**。这是图搜的主召回信号——把图像问题
+1. ``vision_extract_query(image)``：用多模态对话模型（DeepSeek deepseek-flash /
+   百炼 Qwen-VL，由 LLM_PROVIDER 决定）把图片"看懂"成一句**中文检索 query**。这是图搜的主召回信号——把图像问题
    转成已经跑通的文本 RAG 问题，从而复用整条 search_service 链路。
 
-2. ``embed_image(image)``：用现有多模态 embedding 接入点把图片编码成向量
+2. ``embed_image(image)``：用百炼多模态 embedding 把图片编码成向量
    （与文本 embedding 同一个 2048 维空间），供"视觉相似"重排用。
 
-``image`` 入参统一接受两种形式，与 Ark ``image_url`` 字段一致：
+``image`` 入参统一接受两种形式，与 OpenAI 兼容 ``image_url`` 字段一致：
     - 远程 URL：``https://.../x.jpg``
     - 内联 base64：``data:image/jpeg;base64,/9j/4AAQ...``
 前端 demo 走 base64 直传，无需对象存储中转。
@@ -20,7 +20,13 @@ from __future__ import annotations
 import logging
 import os
 
-from llm.client import get_client, get_embedding_client, get_model_id
+from llm.client import (
+    embed_multimodal_primary,
+    embed_multimodal_with_provider,
+    get_embedding_model_id,
+    get_client,
+    get_vision_model_id,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -44,7 +50,12 @@ UNRECOGNIZED = "无法识别"
 
 
 def _vision_timeout() -> float:
-    return float(os.getenv("ARK_VISION_TIMEOUT", os.getenv("ARK_TIMEOUT", "30")))
+    return float(
+        os.getenv(
+            "LLM_VISION_TIMEOUT",
+            os.getenv("DASHSCOPE_VISION_TIMEOUT", os.getenv("DASHSCOPE_TIMEOUT", "30")),
+        )
+    )
 
 
 def vision_extract_query(image: str) -> str:
@@ -57,7 +68,7 @@ def vision_extract_query(image: str) -> str:
 
     client = get_client()
     response = client.chat.completions.create(
-        model=get_model_id(),
+        model=get_vision_model_id(),
         messages=[
             {"role": "system", "content": _EXTRACT_SYSTEM},
             {
@@ -82,21 +93,56 @@ def vision_extract_query(image: str) -> str:
     return text
 
 
-def embed_image(image: str) -> list[float]:
-    """把图片编码成向量（与文本 embedding 同一空间，2048 维）。
+def parsed_query_from_phrase(phrase: str):
+    """把 VLM 抽出的检索短语确定性地变成 ParsedQuery，图搜据此跳过 LLM query 解析。
 
-    复用现有多模态 embedding 接入点（``/embeddings/multimodal``）。
+    图搜的硬过滤只需要品类：在短语里按"最长匹配"找库里真实存在的子类目名
+    （如“精华液”命中“精华”、“跑步鞋”命中“跑步鞋”），再反查一级类目。价格 / 品牌 /
+    否定这些约束在纯图搜里本来就不存在，不值得为它们再花一次 2s 的 LLM 往返。
+    """
+    from search.query_understanding import ParsedQuery, load_taxonomy
+
+    text = (phrase or "").strip()
+    sub_to_cat = load_taxonomy()["sub_to_cat"]
+    sub = None
+    for candidate in sorted(sub_to_cat, key=len, reverse=True):
+        if candidate and candidate in text:
+            sub = candidate
+            break
+    return ParsedQuery(
+        original_query=text,
+        intent="product_search",
+        category=sub_to_cat.get(sub) if sub else None,
+        sub_category=sub,
+        retrieval_query=text,
+        needs_clarification=False,
+    )
+
+
+def embed_image(image: str) -> list[float]:
+    """把图片编码成向量（与文本 embedding 同一空间，默认 2048 维）。
+
     image: 远程 URL 或 ``data:image/...;base64,`` 内联串。
     """
-    client = get_embedding_client()
-    model = os.getenv("ARK_EMBEDDING_MODEL", "doubao-embedding-text-240715")
-    response = client.post(
-        "/embeddings/multimodal",
-        body={
-            "model": model,
-            "input": [{"type": "image_url", "image_url": {"url": image}}],
-        },
-        cast_to=object,
+    _, vectors = embed_multimodal_with_provider(
+        [{"image": image}],
+        model=get_embedding_model_id(),
     )
-    embedding = response["data"]["embedding"]
-    return list(embedding)
+    return vectors[0]
+
+
+def embed_image_with_provider(image: str) -> tuple[str, list[float]]:
+    """编码图片并返回实际 provider，供调用方选择同空间的视觉索引。"""
+    provider, vectors = embed_multimodal_with_provider(
+        [{"image": image}],
+        model=get_embedding_model_id(),
+    )
+    return provider, vectors[0]
+
+
+def embed_image_primary(image: str) -> list[float]:
+    """只用百炼编码图片，供构建百炼视觉索引，禁止混入豆包向量。"""
+    return embed_multimodal_primary(
+        [{"image": image}],
+        model=get_embedding_model_id(),
+    )[0]

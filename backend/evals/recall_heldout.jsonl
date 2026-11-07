@@ -1,0 +1,71 @@
+{"id": "h001", "group": "semantic", "query": "皮肤爱泛红干痒，想要款修护面霜", "relevant": ["p_beauty_007", "p_beauty_012"]}
+{"id": "h002", "group": "semantic", "query": "想把毛孔收一收的精华", "relevant": ["p_beauty_018", "p_beauty_002"]}
+{"id": "h003", "group": "semantic", "query": "抗皱淡纹的精华液", "relevant": ["p_beauty_024", "p_beauty_001"]}
+{"id": "h004", "group": "semantic", "query": "通勤用清爽不油腻的防晒", "relevant": ["p_beauty_023", "p_beauty_006"]}
+{"id": "h005", "group": "semantic", "query": "丝绒哑光的唇釉", "relevant": ["p_beauty_015"]}
+{"id": "h006", "group": "semantic", "query": "画眉不容易晕的眉笔", "relevant": ["p_beauty_025"]}
+{"id": "h007", "group": "semantic", "query": "全脸都能抹的眼霜", "relevant": ["p_beauty_016"]}
+{"id": "h008", "group": "semantic", "query": "涂抹式的补水面膜", "relevant": ["p_beauty_022"]}
+{"id": "h009", "group": "semantic", "query": "开会分屏多任务的大屏平板", "relevant": ["p_digital_005", "p_digital_021"]}
+{"id": "h010", "group": "semantic", "query": "写代码用的苹果笔记本", "relevant": ["p_digital_006", "p_digital_020"]}
+{"id": "h011", "group": "semantic", "query": "碳纤维机身的商务本", "relevant": ["p_digital_022"]}
+{"id": "h012", "group": "semantic", "query": "7英寸大屏影音手机", "relevant": ["p_digital_009"]}
+{"id": "h013", "group": "semantic", "query": "苹果最大屏的手机", "relevant": ["p_digital_003"]}
+{"id": "h014", "group": "semantic", "query": "和华为手机协同的笔记本", "relevant": ["p_digital_004"]}
+{"id": "h015", "group": "semantic", "query": "带碳板的竞速跑鞋", "relevant": ["p_clothes_010"]}
+{"id": "h016", "group": "semantic", "query": "膝盖不好想要缓震好的篮球鞋", "relevant": ["p_clothes_012", "p_clothes_011", "p_clothes_013"]}
+{"id": "h017", "group": "semantic", "query": "健身房穿的快干短袖", "relevant": ["p_clothes_002", "p_clothes_003"]}
+{"id": "h018", "group": "semantic", "query": "潮一点的logo连帽卫衣", "relevant": ["p_clothes_022", "p_clothes_005"]}
+{"id": "h019", "group": "semantic", "query": "耐磨防泼水的户外长裤", "relevant": ["p_clothes_017"]}
+{"id": "h020", "group": "semantic", "query": "透气防晒的运动鸭舌帽", "relevant": ["p_clothes_024"]}
+{"id": "h021", "group": "semantic", "query": "夏天训练穿的速干短裤", "relevant": ["p_clothes_023"]}
+{"id": "h022", "group": "semantic", "query": "日常穿的束脚针织裤", "relevant": ["p_clothes_006", "p_clothes_004"]}
+{"id": "h023", "group": "semantic", "query": "冷萃即溶黑咖啡", "relevant": ["p_food_022"]}
+{"id": "h024", "group": "semantic", "query": "奶香味的三合一速溶咖啡", "relevant": ["p_food_002"]}
+{"id": "h025", "group": "semantic", "query": "茉莉花味的茶饮料", "relevant": ["p_food_014"]}
+{"id": "h026", "group": "semantic", "query": "白桃味的气泡水", "relevant": ["p_food_004"]}
+{"id": "h027", "group": "semantic", "query": "补充维生素C的饮料", "relevant": ["p_food_025"]}
+{"id": "h028", "group": "semantic", "query": "希腊风味的酸奶", "relevant": ["p_food_017"]}
+{"id": "h029", "group": "semantic", "query": "有机奶源的纯牛奶", "relevant": ["p_food_007"]}
+{"id": "h030", "group": "semantic", "query": "海鲜味的杯面", "relevant": ["p_food_020"]}
+{"id": "h031", "group": "semantic", "query": "早餐当点心吃的肉松饼", "relevant": ["p_food_010"]}
+{"id": "h032", "group": "alias", "query": "KT9", "relevant": ["p_clothes_012"]}
+{"id": "h033", "group": "alias", "query": "全城12", "relevant": ["p_clothes_013"]}
+{"id": "h034", "group": "alias", "query": "水溶C100", "relevant": ["p_food_025"]}
+{"id": "h035", "group": "alias", "query": "特仑苏", "relevant": ["p_food_016"]}
+{"id": "h036", "group": "alias", "query": "安慕希", "relevant": ["p_food_017"]}
+{"id": "h037", "group": "alias", "query": "AirPods", "relevant": ["p_digital_018"]}
+{"id": "h038", "group": "alias", "query": "ThinkPad", "relevant": ["p_digital_022"]}
+{"id": "h039", "group": "alias", "query": "牛油果眼霜", "relevant": ["p_beauty_021"]}
+{"id": "h040", "group": "alias", "query": "东方树叶", "relevant": ["p_food_003", "p_food_014"]}
+{"id": "h041", "group": "alias", "query": "Find X9", "relevant": ["p_digital_015"]}
+{"id": "h042", "group": "negation", "query": "手机不要小米和OPPO", "gold_filter": {"sub_category": "智能手机"}, "forbid": {"brand": ["小米", "OPPO"]}}
+{"id": "h043", "group": "negation", "query": "精华不要雅诗兰黛和兰蔻", "gold_filter": {"sub_category": "精华"}, "forbid": {"brand": ["雅诗兰黛", "兰蔻"]}}
+{"id": "h044", "group": "negation", "query": "不要耐克的短袖T恤", "relevant": ["p_clothes_001", "p_clothes_002"], "forbid": {"brand": ["耐克", "Nike"]}}
+{"id": "h045", "group": "negation", "query": "不含酒精的隔离防晒", "relevant": ["p_beauty_006"]}
+{"id": "h046", "group": "negation", "query": "零糖的可乐", "relevant": ["p_food_015"]}
+{"id": "h047", "group": "negation", "query": "不是碳酸的饮料", "forbid": {"sub_category": ["碳酸饮料"]}}
+{"id": "h048", "group": "negation", "query": "除了苹果以外的笔记本", "relevant": ["p_digital_004", "p_digital_022", "p_digital_023"], "forbid": {"brand": ["Apple 苹果", "苹果"]}}
+{"id": "h049", "group": "negation", "query": "不要泡面，想要坚果", "relevant": ["p_food_009", "p_food_019"], "forbid": {"sub_category": ["方便食品"]}}
+{"id": "h050", "group": "out_of_catalog", "query": "电饭煲", "expect_empty": true}
+{"id": "h051", "group": "out_of_catalog", "query": "狗粮", "expect_empty": true}
+{"id": "h052", "group": "out_of_catalog", "query": "洗衣液", "expect_empty": true}
+{"id": "h053", "group": "out_of_catalog", "query": "森海塞尔耳机", "expect_empty": true}
+{"id": "h054", "group": "out_of_catalog", "query": "LV包包", "expect_empty": true}
+{"id": "h055", "group": "out_of_catalog", "query": "200元以内的笔记本", "expect_empty": true}
+{"id": "h056", "group": "out_of_catalog", "query": "乐高积木", "expect_empty": true}
+{"id": "h057", "group": "out_of_catalog", "query": "雅马哈钢琴", "expect_empty": true}
+{"id": "h058", "group": "out_of_catalog", "query": "儿童自行车", "expect_empty": true}
+{"id": "h059", "group": "out_of_catalog", "query": "运动手表", "expect_empty": true}
+{"id": "h060", "group": "out_of_catalog", "query": "蓝牙音箱", "expect_empty": true}
+{"id": "h061", "group": "out_of_catalog", "query": "无人机", "expect_empty": true}
+{"id": "h062", "group": "out_of_catalog", "query": "20元以内的精华", "expect_empty": true}
+{"id": "h063", "group": "out_of_catalog", "query": "高跟鞋", "expect_empty": true}
+{"id": "h064", "group": "structured", "query": "7000以内的手机", "gold_filter": {"sub_category": "智能手机", "max_price": 7000}, "expect": {"sub_category": "智能手机", "max_price": 7000}}
+{"id": "h065", "group": "structured", "query": "不超过100块的咖啡", "gold_filter": {"sub_category": "咖啡", "max_price": 100}, "expect": {"sub_category": "咖啡", "max_price": 100}}
+{"id": "h066", "group": "structured", "query": "1000到2000的跑鞋", "gold_filter": {"sub_category": "跑步鞋", "min_price": 1000, "max_price": 2000}, "expect": {"sub_category": "跑步鞋", "min_price": 1000, "max_price": 2000}}
+{"id": "h067", "group": "structured", "query": "华为的平板", "gold_filter": {"sub_category": "平板电脑", "brand_include": ["华为"]}, "expect": {"sub_category": "平板电脑", "brand_include": ["华为"]}}
+{"id": "h068", "group": "structured", "query": "优衣库的T恤", "gold_filter": {"sub_category": "短袖T恤", "brand_include": ["优衣库"]}, "expect": {"sub_category": "短袖T恤", "brand_include": ["优衣库"]}}
+{"id": "h069", "group": "structured", "query": "想看看防晒", "gold_filter": {"sub_category": "防晒"}, "expect": {"sub_category": "防晒"}}
+{"id": "h070", "group": "structured", "query": "联想笔记本", "gold_filter": {"sub_category": "笔记本电脑", "brand_include": ["联想"]}, "expect": {"sub_category": "笔记本电脑", "brand_include": ["联想"]}}
+{"id": "h071", "group": "structured", "query": "看看酸奶", "gold_filter": {"sub_category": "酸奶"}, "expect": {"sub_category": "酸奶"}}

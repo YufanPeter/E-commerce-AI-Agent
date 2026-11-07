@@ -75,3 +75,14 @@ skills-lock.json
 
 # Debug logs
 *-debug.log
+
+# Amazon Reviews 2023 raw files and generated samples
+data/*.jsonl.gz
+data_amazon_*/
+backend/storage_amazon_*/
+
+# Eval reports: keep the baseline and final summaries, the rest can be regenerated
+backend/evals/reports/*
+!backend/evals/reports/baseline.md
+!backend/evals/reports/final_dev.md
+!backend/evals/reports/final_heldout.md

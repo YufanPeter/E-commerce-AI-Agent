@@ -138,9 +138,37 @@ struct ProductSearchResponse: Codable, Hashable {
     let evidence: [EvidencePayload]?
 }
 
+/// 对比请求里的一件商品 + 可选的指定规格；不传规格由后端按预算 / 最便宜自动选。
+struct ComparisonItemRequest: Codable, Hashable {
+    let productID: String
+    let skuID: String?
+}
+
 struct ProductComparisonRequest: Codable, Hashable {
     let productIDs: [String]
     let focus: String?
+    /// 指定规格时用它（优先于 productIDs）。
+    var items: [ComparisonItemRequest]? = nil
+    var budgetMax: Double? = nil
+}
+
+/// 对比表里一个商品的规格（选中的 / 可切换的）。
+struct ComparisonSKUPayload: Codable, Hashable, Identifiable {
+    let skuID: String
+    let label: String
+    let price: Double
+    let priceDisplay: String
+    let reason: String?
+
+    var id: String { skuID }
+
+    enum CodingKeys: String, CodingKey {
+        case skuID = "sku_id"
+        case label
+        case price
+        case priceDisplay = "price_display"
+        case reason
+    }
 }
 
 /// 对比表里的一个商品表头（轻量，与后端 /compare 的 products[] 对齐）。
@@ -150,10 +178,16 @@ struct ComparisonProductPayload: Codable, Hashable, Identifiable {
     let brand: String?
     let price: Double
     let imageURL: URL?
+    /// 本次对比选中的规格（SKU 级对比）；老后端没有则为 nil。
+    var sku: ComparisonSKUPayload? = nil
+    /// 该商品全部可切换规格。
+    var skus: [ComparisonSKUPayload]? = nil
 
     var id: String { productID }
 
     enum CodingKeys: String, CodingKey {
+        case sku
+        case skus
         case productID = "product_id"
         case title
         case brand
@@ -275,6 +309,14 @@ struct AgentToolActionPayload: Codable, Hashable {
 enum AgentStreamEventType: String, Codable, Hashable {
     case status
     case textDelta
+    /// 结构化流式：开场白的一段增量文本（按到达顺序逐字渲染）。
+    case openingDelta
+    /// 结构化流式：某一款商品的专属解说已生成（此时弹出该商品的卡片）。
+    case itemDescription
+    /// 结构化流式：结尾总结。
+    case summary
+    /// 结构化流式：一条追问 Prompt。
+    case followup
     case products
     case comparison
     case clarification
@@ -318,11 +360,20 @@ struct AgentStreamEventPayload: Identifiable, Codable, Hashable {
     let memoryUpdate: MemoryUpdatePayload?
     let error: APIErrorPayload?
     let traceID: String?
+    /// itemDescription 事件：解说对应的商品 ID；其余事件为 nil。
+    let productID: String?
+    /// itemDescription 事件：所属分区的小标题；没有分区时为 nil。
+    let group: String?
+    /// products 事件：按商品 ID 索引的预算匹配信息（后端 tool_result.products[].budget）。
+    let budgets: [String: ProductBudgetHint]
 
     init(
         id: String = UUID().uuidString,
         type: AgentStreamEventType,
         textDelta: String? = nil,
+        productID: String? = nil,
+        group: String? = nil,
+        budgets: [String: ProductBudgetHint] = [:],
         status: AgentStatusPayload? = nil,
         products: [ProductPayload] = [],
         comparison: ProductComparisonPayload? = nil,
@@ -337,6 +388,9 @@ struct AgentStreamEventPayload: Identifiable, Codable, Hashable {
         self.id = id
         self.type = type
         self.textDelta = textDelta
+        self.productID = productID
+        self.group = group
+        self.budgets = budgets
         self.status = status
         self.products = products
         self.comparison = comparison
@@ -507,6 +561,96 @@ struct UserPreferencePayload: Codable, Hashable {
             preferenceNote: nil,
             notes: nil
         )
+    }
+}
+
+// MARK: - 记忆页
+
+struct MemoryItemPayload: Identifiable, Codable, Hashable {
+    let id: String
+    let kind: String
+    let group: String
+    let label: String
+    let scope: String?
+    let source: String
+    let sourceLabel: String
+    let evidence: String?
+    let effect: String
+    let needsCare: Bool
+    let useCount: Int
+
+    enum CodingKeys: String, CodingKey {
+        case id, kind, group, label, scope, source, evidence, effect
+        case sourceLabel = "source_label"
+        case needsCare = "needs_care"
+        case useCount = "use_count"
+    }
+}
+
+struct MemoryGroupPayload: Identifiable, Codable, Hashable {
+    let name: String
+    let items: [MemoryItemPayload]
+    var id: String { name }
+}
+
+struct MemoryActivityPayload: Identifiable, Codable, Hashable {
+    let id: String
+    let type: String
+    let text: String
+    let at: String
+}
+
+struct MemoryViewPayload: Codable, Hashable {
+    let userID: String
+    let personalizationEnabled: Bool
+    let summary: String
+    let groups: [MemoryGroupPayload]
+    let suggestions: [MemoryItemPayload]
+    let activity: [MemoryActivityPayload]
+    let count: Int
+
+    enum CodingKeys: String, CodingKey {
+        case summary, groups, suggestions, activity, count
+        case userID = "user_id"
+        case personalizationEnabled = "personalization_enabled"
+    }
+}
+
+struct MemoryActionResult: Codable, Hashable {
+    let message: String
+    let undoToken: String?
+    let view: MemoryViewPayload
+
+    private struct Update: Codable, Hashable {
+        let undoToken: String?
+        enum CodingKeys: String, CodingKey { case undoToken = "undo_token" }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case message, view, updates
+        case undoToken = "undo_token"
+    }
+
+    init(message: String, undoToken: String?, view: MemoryViewPayload) {
+        self.message = message
+        self.undoToken = undoToken
+        self.view = view
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        message = try container.decode(String.self, forKey: .message)
+        view = try container.decode(MemoryViewPayload.self, forKey: .view)
+        let direct = try container.decodeIfPresent(String.self, forKey: .undoToken)
+        let updates = try container.decodeIfPresent([Update].self, forKey: .updates)
+        undoToken = direct ?? updates?.compactMap(\.undoToken).first
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(message, forKey: .message)
+        try container.encodeIfPresent(undoToken, forKey: .undoToken)
+        try container.encode(view, forKey: .view)
     }
 }
 

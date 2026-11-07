@@ -11,6 +11,7 @@ from __future__ import annotations
 """
 
 import json
+import re
 from typing import Any
 
 from llm.client import get_client, get_model_id
@@ -18,6 +19,7 @@ from search.query_understanding import (
     BRAND_ALIASES,
     INGREDIENT_BLOCKLIST,
     ParsedQuery,
+    brand_is_named_in,
     load_taxonomy,
 )
 
@@ -113,6 +115,14 @@ def _build_tool_schema(taxonomy: dict) -> dict:
                         "items": {"type": "string"},
                         "description": "主观偏好词，如 '轻量'、'通勤'、'性价比'。用于召回后重排，不做硬过滤。",
                     },
+                    "unavailable_terms": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "用户点名要的品牌或品类，但候选列表里完全没有对应项时填用户的原词，"
+                            "如 '三星手机' → ['三星']，'扫地机器人' → ['扫地机器人']。候选里有对应项或只是描述需求时留空。"
+                        ),
+                    },
                     "needs_clarification": {
                         "type": "boolean",
                         "description": "query 过于模糊（如'随便看看'）无法检索时为 true。",
@@ -129,6 +139,7 @@ def _build_tool_schema(taxonomy: dict) -> dict:
                     "min_price",
                     "negative_ingredients",
                     "soft_terms",
+                    "unavailable_terms",
                     "needs_clarification",
                 ],
                 "additionalProperties": False,
@@ -162,12 +173,19 @@ SYSTEM_PROMPT = """你是电商搜索的需求解析器。严格遵守以下规�
    - "无糖" → ["糖"]；"不含酒精" → ["酒精"]
    特例：用户字面就是说成分（"无咖啡因"）时填该成分本身 → ["咖啡因"]。
    注意：不要把用户正在搜索的主体品类填进来（搜"饮料"时别填"饮料"），只填要排除的部分。
-5. 一级品类（category）同义词映射（用户只给大类、没给子品类时务必填 category）：
+   【严禁把想要的东西填进来】：用户没说"不/无/别/除了"就不是排除。"敏感肌能用的防晒"、
+   "防水的鞋"、"保湿的爽肤水"里的 敏感肌/防水/保湿 都是想要的属性，放进 soft_terms。
+5. 品牌只填用户明确说出的：俗称（"小黑瓶""红腰子"）不要猜品牌，brand_include 留空。
+6. 用户点名的品牌或具体品类在候选里完全没有时填 unavailable_terms，不要找相近品类顶替，category 也留 null：
+   "空气炸锅" → unavailable_terms=["空气炸锅"]；"猫粮" → unavailable_terms=["猫粮"]；"索尼耳机" → unavailable_terms=["索尼"]。
+   俗称和产品昵称（"小白鞋""大白瓶"）不算库外，不确定时 sub_category 留 null，交给语义检索。
+7. 一级品类（category）同义词映射（用户只给大类、没给子品类时务必填 category）：
    - "美妆"/"化妆品"/"护肤"/"护肤品" → "美妆护肤"
    - "数码"/"电子产品"/"3C" → "数码电子"
    - "衣服"/"服装"/"运动装"/"运动" → "服饰运动"
-   - "零食"/"吃的"/"食品"/"生活用品" → "食品生活"
-6. 子品类（sub_category）同义词要映射到官方值：
+   - "吃的"/"喝的"/"食品"/"饮料" → "食品饮料"
+8. 子品类（sub_category）同义词要映射到官方值：
+   - "零食"/"坚果" → "坚果/零食"
    - "运动鞋"/"跑鞋" → "跑步鞋"
    - "手机" → "智能手机"
    - "ipad"/"平板" → "平板电脑"
@@ -182,13 +200,13 @@ SYSTEM_PROMPT = """你是电商搜索的需求解析器。严格遵守以下规�
    - "BB霜"/"气垫"/"粉底" → "粉底液"
    - 若用户说的子品类在 enum 里找不到对应官方值，宁可只填 category、把 sub_category 留 null，
      也不要硬套一个语义不符的子类（如"口红"绝不能映射到"眉笔"）。
-7. needs_clarification 只在 query 完全没有任何商品线索时才设为 true（如\"随便看看\"、\"你好\"）；
+9. needs_clarification 只在 query 完全没有任何商品线索时才设为 true（如\"随便看看\"、\"你好\"）；
    只要识别到 category / sub_category / brand / 价格 / 偏好中任意一项，就设为 false。
-8. 数字提取要小心：
+10. 数字提取要小心：
    - "300 以内" → max_price=300
    - "200 到 500" → min_price=200, max_price=500
    - "iPhone 15" 不是价格
-9. 不确定的字段填 null 或空数组，不要瞎猜。
+11. 不确定的字段填 null 或空数组，不要瞎猜。
 """
 
 
@@ -200,7 +218,7 @@ def parse_query_with_llm(
     query: str,
     timeout: float = 6.0,
 ) -> ParsedQuery:
-    """调用豆包 Ark 的 function calling 抽取意图。
+    """调用当前主 LLM 的 function calling 抽取意图。
 
     失败时抛出异常，由编排层决定是否降级到规则版。
     """
@@ -209,7 +227,7 @@ def parse_query_with_llm(
 
     client = get_client()
     response = client.chat.completions.create(
-        model=get_model_id(),
+        model=get_model_id(role="fast"),
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": query},
@@ -381,13 +399,38 @@ def _repair_param_leak(text: str) -> str:
 _SHORT_NEGATIVE_ALLOW: frozenset[str] = frozenset({"辣", "甜", "咸", "酸", "苦"})
 
 
-def _clean_negatives(values: list[str] | None) -> list[str]:
+# 用户表达排除的说法。「不」只有紧贴排除词时才算（「不辣」），避免「不错的防水鞋」误判。
+_NEGATION_WINDOW_CUES: tuple[str, ...] = (
+    "不要", "不想", "不含", "不带", "不加", "不添加", "没有", "别", "除了", "排除",
+    "拒绝", "讨厌", "不吃", "不喝", "不用", "不喜欢", "过敏", "忌", "无", "免", "零", "非",
+)
+
+
+def term_is_negated_in_query(term: str, query: str) -> bool:
+    """排除词必须是用户真的否定过的词：字面出现，且前面紧跟否定说法。
+
+    LLM 经常把想要的属性填进排除词（「敏感肌能用的防晒」→ 排除「敏感肌」），
+    这类错误会把正确商品全部挡掉，所以在代码里校验，不靠 prompt 约束。
+    """
+    start = 0
+    while True:
+        index = query.find(term, start)
+        if index < 0:
+            return False
+        window = query[max(0, index - 6):index]
+        if any(cue in window for cue in _NEGATION_WINDOW_CUES) or query[max(0, index - 1):index] in {"不", "0"}:
+            return True
+        start = index + len(term)
+
+
+def _clean_negatives(values: list[str] | None, query: str | None = None) -> list[str]:
     """归一化 LLM 给出的排除词（不再用白名单约束，支持任意"不要X"）。
 
-    后置过滤是子串匹配，天然安全：匹配不到的词不会误伤商品。这里只做：
+    这里只做：
     - 去首尾空白、去空串、去重（保序）；
     - 丢掉长度 < 2 的单字噪声（如 "的"、"水" 太宽泛易误伤），
-      但保留已知短词白名单（如 "糖"）和常见口味单字（辣/甜/咸/酸/苦）。
+      但保留已知短词白名单（如 "糖"）和常见口味单字（辣/甜/咸/酸/苦）；
+    - 传了 query 时，丢掉用户并没有否定过的词。
     """
     if not values:
         return []
@@ -398,6 +441,8 @@ def _clean_negatives(values: list[str] | None) -> list[str]:
         if not term or term in seen:
             continue
         if len(term) < 2 and term not in INGREDIENT_BLOCKLIST and term not in _SHORT_NEGATIVE_ALLOW:
+            continue
+        if query is not None and not term_is_negated_in_query(term, query):
             continue
         seen.add(term)
         out.append(term)
@@ -418,6 +463,7 @@ def _to_parsed_query(
     sub_category = arguments.get("sub_category")
     if sub_category and sub_category not in taxonomy["sub_to_cat"]:
         sub_category = None
+    sub_category = _verify_sub_category(sub_category, query, arguments.get("brand_include"), taxonomy)
 
     # 优先用 sub_category 反查父类；没有 sub 时退回 LLM 给的 category。
     known_categories = {c for c in taxonomy["sub_to_cat"].values() if c}
@@ -438,7 +484,8 @@ def _to_parsed_query(
         out: list[str] = []
         for value in values:
             canonical = _VARIANT_TO_CANONICAL.get(value, value)
-            if canonical in known_brands and canonical not in seen:
+            # 用户没说出口的品牌不进硬过滤（见 brand_is_named_in）
+            if canonical in known_brands and canonical not in seen and brand_is_named_in(canonical, query):
                 seen.add(canonical)
                 out.append(canonical)
         return out
@@ -468,12 +515,14 @@ def _to_parsed_query(
         min_price=_coerce_float(arguments.get("min_price")),
         brand_include=_filter_brands(arguments.get("brand_include")),
         brand_exclude=_filter_brands(arguments.get("brand_exclude")),
-        negative_ingredients=_clean_negatives(arguments.get("negative_ingredients")),
+        negative_ingredients=_clean_negatives(arguments.get("negative_ingredients"), query),
         soft_terms=list(arguments.get("soft_terms") or []),
+        unavailable_terms=_clean_unavailable(arguments.get("unavailable_terms"), query, taxonomy),
         retrieval_query=query,  # LLM 路径下保留原 query；soft_terms 留给召回后重排使用
         # 只要识别到任意一个商品线索就强制放行检索，避免 LLM 过于保守把可召回的 query 误判为模糊。
         # clarify 的最终决策权交给 Agent 层的 IntentRouter（信息更全、有历史上下文）。
-        needs_clarification=bool(arguments.get("needs_clarification", False)) and not _has_any_signal(
+        # 库里确实有这个说法（「小黑瓶」）就不算模糊。
+        needs_clarification=bool(arguments.get("needs_clarification", False)) and not _named_in_catalog(query, taxonomy) and not _has_any_signal(
             category=category,
             sub_category=sub_category,
             max_price=arguments.get("max_price"),
@@ -482,6 +531,89 @@ def _to_parsed_query(
             soft_terms=arguments.get("soft_terms"),
         ),
     )
+
+
+def _verify_sub_category(
+    sub_category: str | None,
+    query: str,
+    brands: list[str] | None,
+    taxonomy: dict,
+) -> str | None:
+    """用商品事实校验 LLM 猜的子类目；猜错的硬过滤会挡掉正确商品，宁可不过滤。
+
+    - 这句话里出现了某款商品标题的片段（「神仙水」「雀巢1+2」），子类目必须和这些商品一致；
+    - 用户点名的品牌在这个子类目下没有商品时，子类目作废。
+    """
+    if not sub_category:
+        return None
+    compact = "".join((query or "").lower().split())
+    titles = taxonomy.get("titles") or []
+    anchored: set[str] = set()
+    for size in range(len(compact), 2, -1):
+        pieces = {
+            compact[i:i + size] for i in range(len(compact) - size + 1)
+            # 纯数字片段（「300」「100」）会撞上规格和价格，不算点名商品
+            if sum(not ch.isdigit() for ch in compact[i:i + size]) >= 2
+        }
+        anchored = {
+            sub for title, sub in titles
+            if any(piece in "".join(str(title).lower().split()) for piece in pieces)
+        }
+        if anchored:
+            break
+    if anchored and sub_category not in anchored:
+        return None
+    brand_subs = taxonomy.get("brand_subs") or {}
+    for brand in brands or []:
+        variants = {brand, *BRAND_ALIASES.get(_VARIANT_TO_CANONICAL.get(brand, brand), ())}
+        covered = {sub for variant in variants for sub in brand_subs.get(variant, ())}
+        if covered and sub_category not in covered:
+            return None
+    return sub_category
+
+
+def _clean_unavailable(values: list[str] | None, query: str, taxonomy: dict) -> list[str]:
+    """库外词必须是用户原话，且确实不出现在商品文本里；俗称（「小棕瓶」）因此不会被误判。
+
+    此外，用户提到的英文词在整个商品库都找不到时（「Dior」）也算库外，不依赖模型判断。
+    """
+    catalog_text = taxonomy.get("catalog_text") or ""
+    if not catalog_text:
+        return []
+    # 点名了库里的品牌，就是在问这个品牌的东西（「小米平板没 wifi 怎么上网」「iPad 能用二代笔吗」）。
+    if any(brand_is_named_in(brand, query) for brand in taxonomy["brands"]):
+        return []
+    known = [*taxonomy["sub_to_cat"].keys(), *taxonomy["brands"]]
+    out: list[str] = []
+    candidates = [(raw or "").strip() for raw in values or []]
+    candidates += re.findall(r"[A-Za-z][A-Za-z0-9]{2,}", query or "")
+    for term in candidates:
+        if not term or term not in query or term in out:
+            continue
+        if _term_known_to_catalog(term, known, catalog_text):
+            continue
+        out.append(term)
+    return out
+
+
+# 品类通用词：「三星手机」里说的是三星，「手机」本身不能证明库里有。
+_GENERIC_CATEGORY_WORDS = ("智能手机", "手机", "耳机", "平板", "电脑", "笔记本", "鞋", "衣服", "饮料", "零食")
+
+
+def _term_known_to_catalog(term: str, known: list[str], catalog_text: str) -> bool:
+    """这个词的任一有意义片段（「飞马41」的「飞马」）出现在商品文本里，就不算库外。"""
+    lowered = term.lower()
+    if lowered in catalog_text or any(k and k.lower() == lowered for k in known):
+        return True
+    for word in _GENERIC_CATEGORY_WORDS:
+        lowered = lowered.replace(word, " ")
+    fragments = re.findall(r"[\u4e00-\u9fff]{2,}|[a-z][a-z0-9]+", lowered)
+    return any(fragment in catalog_text for fragment in fragments)
+
+
+def _named_in_catalog(query: str, taxonomy: dict) -> bool:
+    compact = "".join((query or "").lower().split())
+    return len(compact) >= 3 and compact in (taxonomy.get("catalog_text") or "")
 
 
 def _has_any_signal(**fields: Any) -> bool:

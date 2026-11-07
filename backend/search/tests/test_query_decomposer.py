@@ -60,13 +60,33 @@ class TestDecomposeQuery:
             out = decompose_query("去三亚旅游推荐衣服和防晒")
         assert [s.label for s in out] == ["防晒", "衣服"]
 
-    def test_single_intent(self):
+    def test_single_intent_skips_llm(self):
+        """没有并列信号的 query 直接判单需求，不打 LLM（省一次往返）。"""
+        with patch("search.query_decomposer.get_client") as mock_client:
+            out = decompose_query("推荐油皮洗面奶")
+            mock_client.assert_not_called()
+        assert out == [SubRequest(label="推荐油皮洗面奶", query="推荐油皮洗面奶")]
+
+    def test_single_intent_with_marker_still_asks_llm(self):
         resp = _fake_response([{"label": "洗面奶", "query": "油皮 洗面奶"}])
         with patch("search.query_decomposer.get_client") as mock_client:
             mock_client.return_value.chat.completions.create.return_value = resp
-            out = decompose_query("推荐油皮洗面奶")
+            out = decompose_query("推荐油皮洗面奶，便宜点的")
         assert len(out) == 1
         assert out[0].label == "洗面奶"
+
+    def test_result_is_cached(self):
+        resp = _fake_response([
+            {"label": "防晒", "query": "海边 防晒霜"},
+            {"label": "衣服", "query": "夏季 速干衣"},
+        ])
+        with patch("search.query_decomposer.get_client") as mock_client:
+            mock_client.return_value.chat.completions.create.return_value = resp
+            first = decompose_query("推荐衣服和防晒")
+            second = decompose_query("推荐衣服和防晒")
+            assert mock_client.return_value.chat.completions.create.call_count == 1
+        assert first == second
+        assert [s.label for s in first] == ["防晒", "衣服"]
 
     def test_llm_failure_degrades_to_single(self):
         with patch("search.query_decomposer.get_client") as mock_client:

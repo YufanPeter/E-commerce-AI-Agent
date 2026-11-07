@@ -131,6 +131,14 @@ protocol PreferenceServicing {
     func fetchPreference(userID: String) async throws -> UserPreferencePayload
     func updatePreference(_ preference: UserPreferencePayload) async throws -> UserPreferencePayload
     func undoPreference(userID: String, undoToken: String) async throws -> UserPreferencePayload
+    func fetchMemory(userID: String) async throws -> MemoryViewPayload
+    func tellMemory(userID: String, text: String) async throws -> MemoryActionResult
+    func confirmMemory(userID: String, itemID: String) async throws -> MemoryActionResult
+    func rejectMemory(userID: String, itemID: String) async throws -> MemoryActionResult
+    func deleteMemory(userID: String, itemID: String) async throws -> MemoryActionResult
+    func undoMemory(userID: String, undoToken: String) async throws -> MemoryActionResult
+    func setPersonalization(userID: String, enabled: Bool) async throws -> MemoryViewPayload
+    func clearMemory(userID: String) async throws -> MemoryViewPayload
 }
 
 protocol MediaUploadServicing {
@@ -286,6 +294,14 @@ final class RESTProductService: ProductServicing {
         urlRequest.httpMethod = "POST"
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         var body: [String: Any] = ["product_ids": request.productIDs]
+        if let items = request.items, !items.isEmpty {
+            body["items"] = items.map { item -> [String: Any] in
+                var entry: [String: Any] = ["product_id": item.productID]
+                if let skuID = item.skuID { entry["sku_id"] = skuID }
+                return entry
+            }
+        }
+        if let budget = request.budgetMax { body["budget_max"] = budget }
         if let focus = request.focus, !focus.isEmpty { body["focus"] = focus }
         urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body)
 
@@ -563,6 +579,56 @@ final class RESTPreferenceService: PreferenceServicing {
         return try decoder.decode(PreferenceUndoResponse.self, from: data).preference
     }
 
+    func fetchMemory(userID: String) async throws -> MemoryViewPayload {
+        try await memoryRequest("memory/\(userID)", method: "GET")
+    }
+
+    func tellMemory(userID: String, text: String) async throws -> MemoryActionResult {
+        try await memoryRequest("memory/\(userID)/tell", method: "POST", body: ["text": text])
+    }
+
+    func confirmMemory(userID: String, itemID: String) async throws -> MemoryActionResult {
+        try await memoryRequest("memory/\(userID)/items/\(itemID)/confirm", method: "POST")
+    }
+
+    func rejectMemory(userID: String, itemID: String) async throws -> MemoryActionResult {
+        try await memoryRequest("memory/\(userID)/items/\(itemID)/reject", method: "POST")
+    }
+
+    func deleteMemory(userID: String, itemID: String) async throws -> MemoryActionResult {
+        try await memoryRequest("memory/\(userID)/items/\(itemID)", method: "DELETE")
+    }
+
+    func undoMemory(userID: String, undoToken: String) async throws -> MemoryActionResult {
+        try await memoryRequest("memory/\(userID)/undo", method: "POST", body: ["undo_token": undoToken])
+    }
+
+    func setPersonalization(userID: String, enabled: Bool) async throws -> MemoryViewPayload {
+        var request = URLRequest(url: baseURL.appendingPathComponent("memory/\(userID)/settings"))
+        request.httpMethod = "PUT"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["personalization_enabled": enabled])
+        let (data, response) = try await session.data(for: request)
+        try validate(response: response, data: data, fallback: "设置保存失败。")
+        return try decoder.decode(MemoryViewPayload.self, from: data)
+    }
+
+    func clearMemory(userID: String) async throws -> MemoryViewPayload {
+        try await memoryRequest("memory/\(userID)", method: "DELETE")
+    }
+
+    private func memoryRequest<T: Decodable>(_ path: String, method: String, body: [String: String]? = nil) async throws -> T {
+        var request = URLRequest(url: baseURL.appendingPathComponent(path))
+        request.httpMethod = method
+        if let body {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try encoder.encode(body)
+        }
+        let (data, response) = try await session.data(for: request)
+        try validate(response: response, data: data, fallback: "记忆服务请求失败。")
+        return try decoder.decode(T.self, from: data)
+    }
+
     private func validate(response: URLResponse, data: Data, fallback: String) throws {
         guard let http = response as? HTTPURLResponse else {
             throw RESTServiceError.invalidResponse
@@ -601,7 +667,9 @@ private actor SessionIDStore {
 ///   - `session`     → 记录 session_id（多轮上下文复用，不向 UI 透出）
 ///   - `status`      → 阶段提示（routing→understanding / tool→retrieving / compose→generating）
 ///   - `tool_result` → 取出商品 ID，调 `/products` 补全完整数据后以 `.products` 透出
-///   - `token`       → 文本增量（拼接为最终回答）
+///   - `narrative`   → 结构化流式片段：opening(逐字) / item(单款解说) / summary(结尾总结) / followup(单条追问)
+///                     → `.openingDelta` / `.itemDescription` / `.summary` / `.followup`
+///   - `token`       → 文本增量（纯文本回答逐 token；结构化回答末尾附带一份完整 JSON，兼容用）
 ///   - `done`        → 结束
 ///   - `error`       → 抛出 RESTServiceError
 final class RESTAgentService: AgentServicing {
@@ -744,9 +812,43 @@ final class RESTAgentService: AgentServicing {
             }
             let ids = Self.extractProductIDs(fromToolResult: bytes)
             guard !ids.isEmpty else { return }
+            let budgets = Self.extractBudgetHints(fromToolResult: bytes)
             // 补全：Agent 只给精简卡片，这里用商品 ID 取完整数据用于渲染。
             if let payloads = try? await productService.fetchProducts(productIDs: ids), !payloads.isEmpty {
-                continuation.yield(AgentStreamEventPayload(type: .products, products: payloads))
+                continuation.yield(AgentStreamEventPayload(type: .products, budgets: budgets, products: payloads))
+            }
+
+        case "narrative":
+            // 结构化流式片段：后端 composer 边生成边按"开场白 → 商品解说 → 追问"顺序下发。
+            guard let obj = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
+                  let part = obj["part"] as? String else { return }
+            switch part {
+            case "opening":
+                if let delta = obj["delta"] as? String, !delta.isEmpty {
+                    continuation.yield(AgentStreamEventPayload(type: .openingDelta, textDelta: delta))
+                }
+            case "item":
+                if let pid = obj["productId"] as? String, !pid.isEmpty {
+                    let description = obj["description"] as? String ?? ""
+                    continuation.yield(
+                        AgentStreamEventPayload(
+                            type: .itemDescription,
+                            textDelta: description,
+                            productID: pid,
+                            group: obj["group"] as? String
+                        )
+                    )
+                }
+            case "summary":
+                if let text = obj["text"] as? String, !text.isEmpty {
+                    continuation.yield(AgentStreamEventPayload(type: .summary, textDelta: text))
+                }
+            case "followup":
+                if let text = obj["text"] as? String, !text.isEmpty {
+                    continuation.yield(AgentStreamEventPayload(type: .followup, textDelta: text))
+                }
+            default:
+                break  // opening_end / group：分区信息已随 item 带上，这里不需要单独处理
             }
 
         case "token":
@@ -788,6 +890,38 @@ final class RESTAgentService: AgentServicing {
         case "done": return .done
         default: return .retrieving
         }
+    }
+
+    /// 从 tool_result 的 payload.products[].budget 里取预算匹配信息（用户给了预算时才有）。
+    private static func extractBudgetHints(fromToolResult bytes: Data) -> [String: ProductBudgetHint] {
+        guard
+            let obj = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
+            let payload = obj["payload"] as? [String: Any],
+            let products = payload["products"] as? [[String: Any]]
+        else {
+            return [:]
+        }
+        var hints: [String: ProductBudgetHint] = [:]
+        for product in products {
+            guard let pid = product["product_id"] as? String,
+                  let budget = product["budget"] as? [String: Any] else { continue }
+            hints[pid] = ProductBudgetHint(
+                maxPrice: doubleValue(budget["max_price"]),
+                minPrice: doubleValue(budget["min_price"]),
+                skusWithinBudget: (budget["skus_within_budget"] as? Int) ?? 0,
+                skuCount: (budget["sku_count"] as? Int) ?? 0,
+                cheapestSKUID: budget["cheapest_sku_id"] as? String,
+                cheapestPrice: doubleValue(budget["cheapest_price"])
+            )
+        }
+        return hints
+    }
+
+    private static func doubleValue(_ value: Any?) -> Double? {
+        if let d = value as? Double { return d }
+        if let i = value as? Int { return Double(i) }
+        if let n = value as? NSNumber { return n.doubleValue }
+        return nil
     }
 
     /// 从 tool_result 的 payload.products[] 中按顺序抽取 product_id。

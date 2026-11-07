@@ -5,10 +5,20 @@ from __future__ import annotations
 产出一个干净、可直接渲染成对比表格的结构：
     {
       "title": "对比：A vs B",
-      "products": [{product_id,title,brand,price,image_url}, ...],
+      "products": [{product_id,title,brand,price,image_url,
+                    sku:{sku_id,label,options,price,price_display}, skus:[...可切换规格], price_range}, ...],
       "rows": [{"label": "价格", "values": ["¥8999","¥5999"], "highlight": 1}, ...],
       "recommendation": "什么人选哪个的一句话建议"
     }
+
+【SKU 级对比】对比的是两件商品各自的【一个确定规格】，而不是整个价格区间：
+- 规格怎么定：显式 sku_id → 用户话里点到的规格（「256G 的」）→ 预算内最便宜 → 最便宜。
+  两边用同一套规则，口径一致。
+- 价格行用选中规格的确定价格；再给一行「价格区间」看全貌。
+- 规格差异按维度拆成独立行（存储 / 颜色 / 尺码…），值取自选中规格；
+  两边都一样的维度折叠不显示。
+- 表头带 skus 列表，前端可点列切换规格；对话里说「换成 512G 的」走 compare 的
+  规格切换路径，只换那一列重算。
 
 【设计：离线预抽取 + 运行时纯查表，运行时零 LLM】
 - 维度值（续航/性能/成分/材质…）藏在商品的非结构化文本里（marketing_description /
@@ -29,6 +39,7 @@ from pathlib import Path
 from typing import Any
 
 from store.product_store import ProductDetail, price_display
+from store.sku_select import all_dims, select_sku, sku_label, sku_to_dict
 
 
 logger = logging.getLogger(__name__)
@@ -173,41 +184,154 @@ def get_compare_index() -> CompareIndex:
 # 运行时构建（纯查表，零 LLM）
 # ---------------------------------------------------------------------------
 
-def _price_row(details: list[ProductDetail]) -> dict[str, Any]:
-    """确定性价格行：值用真实价格区间，highlight=最便宜者。"""
-    values = [price_display(d.price_range) for d in details]
-    min_idx = min(range(len(details)), key=lambda i: details[i].price_range.min_price)
+def _price_row(
+    details: list[ProductDetail],
+    selected: list[dict[str, Any] | None] | None = None,
+) -> dict[str, Any]:
+    """确定性价格行：有选中规格时用该规格的确定价格，否则退回价格区间；highlight=最便宜者。"""
+    values: list[str] = []
+    numeric: list[float] = []
+    for i, d in enumerate(details):
+        sku = selected[i] if selected and i < len(selected) else None
+        if sku is not None:
+            price = float(sku.get("price", 0) or 0)
+            values.append(f"¥{price:g}")
+            numeric.append(price)
+        else:
+            values.append(price_display(d.price_range))
+            numeric.append(float(d.price_range.min_price))
+    min_idx = min(range(len(details)), key=lambda i: numeric[i])
     return {"label": "价格", "values": values, "highlight": min_idx}
 
 
-def _product_header(detail: ProductDetail) -> dict[str, Any]:
+def _range_row(details: list[ProductDetail]) -> dict[str, Any] | None:
+    """价格区间行：只有某件商品是多规格、区间和确定价不同时才有必要显示。"""
+    if all(d.price_range.min_price == d.price_range.max_price for d in details):
+        return None
+    return {"label": "价格区间", "values": [price_display(d.price_range) for d in details], "highlight": None}
+
+
+def _sku_dimension_rows(selected: list[dict[str, Any] | None]) -> list[dict[str, Any]]:
+    """把选中规格的各维度拆成独立行（存储 / 颜色 / 尺码…），值取自选中规格。
+
+    两边取值相同也照样显示：SKU 级对比首先要让用户看清"现在比的是哪两个规格"。"""
+    if not any(selected):
+        return []
+    dims: list[str] = []
+    for sku in selected:
+        for dim in (sku or {}).get("options") or {}:
+            if dim not in dims:
+                dims.append(dim)
+    return [
+        {
+            "label": dim,
+            "values": [str(((sku or {}).get("options") or {}).get(dim) or _EMPTY) for sku in selected],
+            "highlight": None,
+        }
+        for dim in dims
+    ]
+
+
+# 这些类目维度是离线 LLM 对所有规格的一句话概括（"8/12GB+256/512GB 多版本可选"）。
+# 有了逐维度的 SKU 行之后它们就重复了，SKU 行存在时不再显示。
+_SKU_COVERED_DIMENSIONS = {"存储规格", "容量规格", "尺码颜色", "规格分量"}
+
+
+def _sku_entry(sku: dict[str, Any] | None, reason: str = "") -> dict[str, Any] | None:
+    if sku is None:
+        return None
+    price = float(sku.get("price", 0) or 0)
     return {
+        "sku_id": sku.get("sku_id"),
+        "label": sku_label(sku),
+        "options": dict(sku.get("options") or {}),
+        "price": price,
+        "price_display": f"¥{price:g}",
+        "reason": reason,
+    }
+
+
+def _product_header(
+    detail: ProductDetail,
+    selected: dict[str, Any] | None = None,
+    reason: str = "",
+    all_skus: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    header: dict[str, Any] = {
         "product_id": detail.product_id,
         "title": detail.title,
         "brand": detail.brand,
-        "price": detail.price_range.min_price,
+        "price": float(selected.get("price", 0) or 0) if selected else detail.price_range.min_price,
         "image_url": _IMAGE_MANIFEST.get(detail.product_id) or detail.image_url,
+        "price_range": {
+            "min": detail.price_range.min_price,
+            "max": detail.price_range.max_price,
+            "sku_count": detail.price_range.sku_count,
+        },
+        "sku": _sku_entry(selected, reason),
     }
+    if all_skus:
+        header["skus"] = [_sku_entry(s) for s in all_skus]
+    return header
+
+
+def select_skus_for(
+    details: list[ProductDetail],
+    *,
+    selections: dict[str, str] | None = None,
+    query: str = "",
+    budget_max: float | None = None,
+    budget_min: float | None = None,
+) -> list[tuple[dict[str, Any] | None, str, list[dict[str, Any]]]]:
+    """给每件商品选一个确定规格：返回 [(selected_sku, reason, all_skus)]。"""
+    out = []
+    for d in details:
+        skus = [sku_to_dict(s) for s in (d.skus or []) if str(getattr(s, "status", "active")) == "active"]
+        sku, reason = select_sku(
+            skus,
+            query=query,
+            sku_id=(selections or {}).get(d.product_id),
+            budget_max=budget_max,
+            budget_min=budget_min,
+        )
+        out.append((sku, reason, skus))
+    return out
 
 
 def build_comparison(
     details: list[ProductDetail],
     focus: str = "",
     timeout: float | None = None,
+    *,
+    selections: dict[str, str] | None = None,
+    query: str = "",
+    budget_max: float | None = None,
+    budget_min: float | None = None,
 ) -> dict[str, Any]:
-    """构建完整对比结构：价格行确定性 + 其余维度从离线索引查表。
+    """构建完整对比结构：SKU 级价格 / 规格行确定性生成 + 其余维度从离线索引查表。
 
-    至少 2 个商品。运行时不调用任何 LLM。``focus``/``timeout`` 仅为向后兼容保留，
-    当前实现不使用（维度已离线预抽取）。
+    至少 2 个商品。运行时不调用任何 LLM。``focus``/``timeout`` 仅为向后兼容保留。
+    selections: {product_id: sku_id} 显式指定规格；query / budget 用于自动选规格。
     """
     if len(details) < 2:
         raise ValueError("对比至少需要 2 个商品")
 
     index = get_compare_index()
     dimensions = _dimensions_for(details)
+    picked = select_skus_for(
+        details, selections=selections, query=query, budget_max=budget_max, budget_min=budget_min,
+    )
+    selected = [p[0] for p in picked]
 
-    rows: list[dict[str, Any]] = [_price_row(details)]
+    rows: list[dict[str, Any]] = [_price_row(details, selected)]
+    range_row = _range_row(details)
+    if range_row is not None:
+        rows.append(range_row)
+    sku_rows = _sku_dimension_rows(selected)
+    rows.extend(sku_rows)
     for dim in dimensions:
+        if sku_rows and dim in _SKU_COVERED_DIMENSIONS:
+            continue
         values = [index.value(d.product_id, dim) for d in details]
         # 文本型维度不强行判优，把判断交给用户；价格行才高亮（确定性）。
         rows.append({"label": dim, "values": values, "highlight": None})
@@ -215,7 +339,10 @@ def build_comparison(
     titles = " vs ".join(d.title[:16] for d in details)
     return {
         "title": f"对比：{titles}",
-        "products": [_product_header(d) for d in details],
+        "products": [
+            _product_header(d, sku, reason, all_skus)
+            for d, (sku, reason, all_skus) in zip(details, picked)
+        ],
         "rows": rows,
         # 选购建议暂不提供：只给客观维度表，让用户自己判断。保留空字段做向后兼容。
         "recommendation": "",

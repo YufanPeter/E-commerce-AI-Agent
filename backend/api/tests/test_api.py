@@ -277,6 +277,90 @@ class TestPreferences:
         assert undo.json()["preference"]["preference_keywords"] == ["通勤"]
 
 
+class TestMemoryEndpoints:
+    def _client(self, client, tmp_path):
+        c, m = client
+        from store.user_memory_store import UserMemoryStore
+
+        db = tmp_path / "memory.sqlite3"
+        sqlite3.connect(db).close()
+        m._user_memory = UserMemoryStore(db_path=db)
+        return c, m
+
+    def test_tell_then_delete_then_undo(self, client, tmp_path):
+        c, _ = self._client(client, tmp_path)
+
+        told = c.post("/memory/u1/tell", json={"text": "我一直不买华为"}).json()
+        assert told["view"]["count"] == 1
+        item = told["view"]["groups"][0]["items"][0]
+        assert item["label"] == "不买 华为"
+
+        deleted = c.delete(f"/memory/u1/items/{item['id']}")
+        assert deleted.status_code == 200
+        assert deleted.json()["view"]["count"] == 0
+        assert c.get("/preferences/u1").json()["brand_exclude"] == []
+
+        undone = c.post("/memory/u1/undo", json={"undo_token": deleted.json()["undo_token"]})
+        assert undone.json()["view"]["count"] == 1
+        assert c.get("/preferences/u1").json()["brand_exclude"] == ["华为"]
+
+    def test_sensitive_statement_needs_confirmation(self, client, tmp_path):
+        c, _ = self._client(client, tmp_path)
+
+        view = c.post("/memory/u1/tell", json={"text": "我对酒精过敏"}).json()["view"]
+        assert view["count"] == 0
+        suggestion = view["suggestions"][0]
+
+        confirmed = c.post(f"/memory/u1/items/{suggestion['id']}/confirm")
+        assert confirmed.status_code == 200
+        assert c.get("/preferences/u1").json()["avoid_terms"] == ["酒精"]
+
+    def test_reject_suggestion_and_unknown_item(self, client, tmp_path):
+        c, _ = self._client(client, tmp_path)
+
+        view = c.post("/memory/u1/tell", json={"text": "我对酒精过敏"}).json()["view"]
+        rejected = c.post(f"/memory/u1/items/{view['suggestions'][0]['id']}/reject")
+        assert rejected.json()["view"]["suggestions"] == []
+        assert c.post("/memory/u1/items/nope/confirm").status_code == 404
+        assert c.delete("/memory/u1/items/nope").status_code == 404
+
+    def test_other_user_cannot_touch_item(self, client, tmp_path):
+        c, _ = self._client(client, tmp_path)
+
+        item = c.post("/memory/u1/tell", json={"text": "我一直不买华为"}).json()["view"]["groups"][0]["items"][0]
+        assert c.delete(f"/memory/u2/items/{item['id']}").status_code == 404
+        assert c.get("/memory/u1").json()["count"] == 1
+
+    def test_settings_and_clear(self, client, tmp_path):
+        c, _ = self._client(client, tmp_path)
+
+        c.post("/memory/u1/tell", json={"text": "我是油皮"})
+        off = c.put("/memory/u1/settings", json={"personalization_enabled": False}).json()
+        assert off["personalization_enabled"] is False
+        assert off["count"] == 1
+        cleared = c.delete("/memory/u1").json()
+        assert cleared["count"] == 0
+        assert cleared["personalization_enabled"] is True
+
+    def test_old_client_put_keeps_confirmed_avoid_terms(self, client, tmp_path):
+        c, _ = self._client(client, tmp_path)
+
+        view = c.post("/memory/u1/tell", json={"text": "我对酒精过敏"}).json()["view"]
+        c.post(f"/memory/u1/items/{view['suggestions'][0]['id']}/confirm")
+        c.put("/preferences/u1", json={"preference_keywords": ["通勤"]})
+        assert c.get("/preferences/u1").json()["avoid_terms"] == ["酒精"]
+
+    def test_chat_records_behaviour_events(self, client, tmp_path):
+        c, m = self._client(client, tmp_path)
+        m._agent = _FakeAgent()
+
+        with patch.object(m.memory_service, "record_turn") as record:
+            assert c.post("/chat", json={"query": "推荐手机", "user_id": "u1"}).status_code == 200
+        args = record.call_args.args
+        assert args[1] == "u1"
+        assert args[4] == "推荐手机"
+
+
 class TestCartReset:
     def test_reset_clears_cart(self, client):
         c, m = client

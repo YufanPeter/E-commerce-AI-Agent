@@ -102,7 +102,7 @@ struct RootView: View {
             AppTheme.background.ignoresSafeArea()
 
             ZStack {
-                GuideView(cartItems: $cartItems, preferenceStore: preferenceStore)
+                GuideView(cartItems: $cartItems, preferenceStore: preferenceStore, isActiveTab: selectedTab == .guide)
                     .opacity(selectedTab == .guide ? 1 : 0)
                     .allowsHitTesting(selectedTab == .guide)
                     .zIndex(selectedTab == .guide ? 1 : 0)
@@ -112,7 +112,7 @@ struct RootView: View {
                     .allowsHitTesting(selectedTab == .cart)
                     .zIndex(selectedTab == .cart ? 1 : 0)
 
-                PreferenceView(preferenceStore: preferenceStore)
+                PreferenceView(preferenceStore: preferenceStore, isVisible: selectedTab == .preference)
                     .opacity(selectedTab == .preference ? 1 : 0)
                     .allowsHitTesting(selectedTab == .preference)
                     .zIndex(selectedTab == .preference ? 1 : 0)

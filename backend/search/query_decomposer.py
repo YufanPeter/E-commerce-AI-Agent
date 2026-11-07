@@ -32,6 +32,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
+from llm.cache import Deduper, TTLCache
 from llm.client import get_client, get_model_id
 # 复用 llm_parser 里已经打磨过的容错 JSON 解析（豆包 function calling 偶发畸形输出）。
 from search.llm_parser import _loads_arguments
@@ -131,6 +132,43 @@ SYSTEM_PROMPT = """你是电商导购的"需求拆解器"。唯一职责：判�
 """
 
 
+# 多需求的字面信号：并列连词 / 顿号 / "一套"类场景词。没有任何信号的 query
+# （绝大多数：“推荐油皮洗面奶”）直接判为单需求，省掉一次 LLM 往返——这是
+# 首字延迟里最容易白省的一段。
+_MULTI_INTENT_MARKERS: tuple[str, ...] = (
+    "和", "跟", "与", "及", "以及", "还有", "还要", "再来", "再加", "另外", "顺便",
+    "一套", "搭配", "全套", "装备", "、", "，", ",", "+", "加上", "外加", "以及",
+)
+
+
+def might_be_multi_intent(query: str) -> bool:
+    """确定性预判：没有任何并列信号的 query 不值得为拆解再打一次 LLM。"""
+    text = (query or "").strip()
+    if len(text) < 4:
+        return False
+    return any(marker in text for marker in _MULTI_INTENT_MARKERS)
+
+
+_DECOMPOSE_CACHE: TTLCache[list[SubRequest]] = TTLCache(maxsize=512)
+_DEDUPER = Deduper(max_workers=2, name="decompose")
+
+
+def _cache_key(query: str) -> str:
+    return " ".join((query or "").split())
+
+
+def prefetch_decompose(query: str) -> None:
+    """后台预取：orchestrator 在 router 跑的同时发起，tool 阶段直接命中。"""
+    key = _cache_key(query)
+    if not key or not might_be_multi_intent(key) or _DECOMPOSE_CACHE.get(key) is not None:
+        return
+    _DEDUPER.prefetch(("decompose", key), lambda: _decompose_uncached(key))
+
+
+def clear_decompose_cache() -> None:
+    _DECOMPOSE_CACHE.clear()
+
+
 def decompose_query(query: str, timeout: float = 6.0) -> list[SubRequest]:
     """把 query 拆成子需求列表。
 
@@ -143,10 +181,21 @@ def decompose_query(query: str, timeout: float = 6.0) -> list[SubRequest]:
     保证 recommend 主链路永不因 decompose 失败而中断。
     """
     fallback = [SubRequest(label=query, query=query)]
+    key = _cache_key(query)
+    if not might_be_multi_intent(key):
+        return fallback
+    cached = _DECOMPOSE_CACHE.get(key)
+    if cached is not None:
+        return list(cached)
+    return _DEDUPER.run(("decompose", key), lambda: _decompose_uncached(key, timeout))
+
+
+def _decompose_uncached(query: str, timeout: float = 6.0) -> list[SubRequest]:
+    fallback = [SubRequest(label=query, query=query)]
     try:
         client = get_client()
         response = client.chat.completions.create(
-            model=get_model_id(),
+            model=get_model_id(role="fast"),
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": query},
@@ -161,8 +210,9 @@ def decompose_query(query: str, timeout: float = 6.0) -> list[SubRequest]:
         logger.warning("decompose_query failed, fallback to single request", exc_info=True)
         return fallback
 
-    subs = _normalize(requests, original_query=query)
-    return subs or fallback
+    subs = _normalize(requests, original_query=query) or fallback
+    _DECOMPOSE_CACHE.set(_cache_key(query), list(subs))
+    return subs
 
 
 def _extract_requests(response: Any) -> list[dict[str, Any]]:

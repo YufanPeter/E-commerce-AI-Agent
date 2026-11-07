@@ -10,31 +10,45 @@ from dotenv import load_dotenv
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-# 必须在读取下面的 ARK_EMBEDDING_MODEL 之前加载 .env：模块级 os.getenv 在导入时
+# 必须在读取下面的 DASHSCOPE_EMBEDDING_MODEL 之前加载 .env：模块级 os.getenv 在导入时
 # 立即求值，若此时 .env 还没加载，就会退回默认占位模型名，导致建库 / 检索 404。
 load_dotenv(PROJECT_ROOT / ".env", override=False)
 
 DEFAULT_DATA_DIR = PROJECT_ROOT / "data"
 DEFAULT_PERSIST_DIR = PROJECT_ROOT / "backend" / "storage" / "chroma"
-DEFAULT_COLLECTION = "product_knowledge"
-# 默认走豆包 Ark embedding API（云端推理），不再本地加载 torch / sentence-transformers。
-# 具体 endpoint id / 模型名通过 .env 的 ARK_EMBEDDING_MODEL 覆盖。
-DEFAULT_EMBEDDING_MODEL = os.getenv("ARK_EMBEDDING_MODEL", "doubao-embedding-text-240715")
+DEFAULT_COLLECTION = "product_knowledge_dashscope"
+FALLBACK_COLLECTION = "product_knowledge"
+# 默认走阿里云百炼多模态 embedding API（云端推理），不再本地加载
+# torch / sentence-transformers。文本和图片使用同一个模型与向量空间。
+DEFAULT_EMBEDDING_MODEL = os.getenv(
+    "DASHSCOPE_EMBEDDING_MODEL", "qwen3-vl-embedding"
+)
+FALLBACK_EMBEDDING_MODEL = os.getenv("ARK_EMBEDDING_MODEL", "")
 
-# 豆包 embedding 单次请求的最大文本条数。超过会自动分批，避免触发服务端上限。
-_EMBEDDING_BATCH_SIZE = int(os.getenv("ARK_EMBEDDING_BATCH_SIZE", "64"))
+# qwen3-vl-embedding 单次最多接受 20 个 content 元素。
+_EMBEDDING_BATCH_SIZE = min(
+    20, max(1, int(os.getenv("DASHSCOPE_EMBEDDING_BATCH_SIZE", "20")))
+)
 
 
-class DoubaoEmbeddingFunction:
-    """通过豆包 Ark 多模态 embedding API 计算向量的 Chroma EmbeddingFunction。
+def _make_query_cache():
+    from llm.cache import TTLCache
+
+    return TTLCache(maxsize=1024)
+
+
+_QUERY_EMBEDDING_CACHE = _make_query_cache()
+
+
+class DashScopeEmbeddingFunction:
+    """通过阿里云百炼多模态 embedding API 计算 Chroma 向量。
 
     相比本地 ``SentenceTransformerEmbeddingFunction``，这里把 embedding 推理
     放到云端，因此进程无需 import torch / sentence-transformers，冷启动从
     分钟级降到秒级。离线建库和在线检索共用同一个 model，保证向量空间一致。
 
-    使用的是 vision 系多模态接入点，调用 ``/embeddings/multimodal``：
-    - 每次请求只接受单条 input，返回 ``data`` 为单个对象（非数组），因此逐条循环；
-    - 输出维度与本地 bge 不同（如 2048），更换模型后必须用本函数重建向量库。
+    qwen3-vl-embedding 支持批量文本，并与图片向量共享同一语义空间。更换
+    模型或维度后必须重建向量库。
     """
 
     def __init__(
@@ -43,45 +57,64 @@ class DoubaoEmbeddingFunction:
         batch_size: int = _EMBEDDING_BATCH_SIZE,
     ) -> None:
         self._model = model
-        self._batch_size = max(1, batch_size)
-        # embedding 接入点的鉴权与聊天模型不同（独立 API Key / 可能独立 base_url），
-        # 因此用专属客户端而非复用聊天单例。未配置独立 key 时回退到聊天 key。
-        from llm.client import get_embedding_client
-
-        self._client = get_embedding_client()
-
-    def _embed_one(self, text: str) -> list[float]:
-        """调用 multimodal 接口为单条文本取向量。"""
-        response = self._client.post(
-            "/embeddings/multimodal",
-            body={
-                "model": self._model,
-                "input": [{"type": "text", "text": text}],
-            },
-            cast_to=object,
-        )
-        embedding = response["data"]["embedding"]
-        return list(embedding)
+        self._batch_size = min(20, max(1, batch_size))
 
     # 参数名必须是 input：chromadb 会校验 EmbeddingFunction.__call__ 的签名。
     def __call__(self, input: Sequence[str]) -> list[list[float]]:
+        from llm.client import embed_multimodal_primary
+
         texts = [text if isinstance(text, str) else str(text) for text in input]
         if not texts:
             return []
-        if len(texts) == 1:
-            return [self._embed_one(texts[0])]
-        # multimodal 接口单请求只接受一条文本，离线建库有上千个 chunk，串行会很慢。
-        # 用线程池并发发请求（受 IO 限制，线程足够），并按原始顺序回填结果，
-        # 保证 ids / documents / embeddings 三者一一对应。
-        from concurrent.futures import ThreadPoolExecutor
-
-        max_workers = min(self._batch_size, len(texts))
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            return list(executor.map(self._embed_one, texts))
+        vectors: list[list[float]] = []
+        for start in range(0, len(texts), self._batch_size):
+            batch = texts[start : start + self._batch_size]
+            vectors.extend(
+                embed_multimodal_primary(
+                    [{"text": text} for text in batch],
+                    model=self._model,
+                )
+            )
+        return vectors
 
     # chromadb 1.x 检索时调用 embed_query(input=...)；
     # 离线建库仍走 __call__（即 embed_documents）。两条路径输入输出形状一致，
     # 这里统一委托给 __call__，从而同时兼容 0.6.x 与 1.x。
+    def embed_query(self, input: Sequence[str]) -> list[list[float]]:
+        # 在线查询向量带 TTL 缓存：同一句检索词（热词 / 重试 / refine 承接）不必
+        # 再打一次 embedding API，省下 ~300-800ms。
+        texts = [t if isinstance(t, str) else str(t) for t in input]
+        if len(texts) != 1:
+            return self.__call__(texts)
+        key = (self._model, texts[0])
+        cached = _QUERY_EMBEDDING_CACHE.get(key)
+        if cached is not None:
+            return [cached]
+        vectors = self.__call__(texts)
+        if vectors:
+            _QUERY_EMBEDDING_CACHE.set(key, vectors[0])
+        return vectors
+
+    def embed_documents(self, input: Sequence[str]) -> list[list[float]]:
+        return self.__call__(input)
+
+    def name(self) -> str:
+        """供 Chroma 持久化 collection 配置时标识 embedding 来源。"""
+        return "dashscope_qwen3_vl"
+
+
+class ArkEmbeddingFunction:
+    """原豆包向量函数，只用于查询保留的豆包备用索引。"""
+
+    def __init__(self, model: str = FALLBACK_EMBEDDING_MODEL) -> None:
+        self._model = model
+
+    def __call__(self, input: Sequence[str]) -> list[list[float]]:
+        from llm.client import embed_multimodal_ark
+
+        texts = [text if isinstance(text, str) else str(text) for text in input]
+        return embed_multimodal_ark([{"text": text} for text in texts])
+
     def embed_query(self, input: Sequence[str]) -> list[list[float]]:
         return self.__call__(input)
 
@@ -89,7 +122,6 @@ class DoubaoEmbeddingFunction:
         return self.__call__(input)
 
     def name(self) -> str:
-        """供 Chroma 持久化 collection 配置时标识 embedding 来源。"""
         return "doubao_ark"
 
 
@@ -98,6 +130,7 @@ def create_collection(
     collection_name: str = DEFAULT_COLLECTION,
     embedding_model: str = DEFAULT_EMBEDDING_MODEL,
     reset: bool = False,
+    provider: str = "dashscope",
 ):
     """打开配置好的 Chroma collection，必要时先清空旧索引。
 
@@ -124,7 +157,12 @@ def create_collection(
             pass
 
     # Chroma 会用这个函数计算离线 chunk 向量和在线 query 向量。
-    embedding_function = DoubaoEmbeddingFunction(model=embedding_model)
+    if provider == "dashscope":
+        embedding_function = DashScopeEmbeddingFunction(model=embedding_model)
+    elif provider == "ark":
+        embedding_function = ArkEmbeddingFunction(model=embedding_model)
+    else:
+        raise ValueError(f"不支持的 embedding provider：{provider}")
     return client.get_or_create_collection(
         name=collection_name,
         embedding_function=embedding_function,

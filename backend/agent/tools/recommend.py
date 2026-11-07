@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import os
+from dataclasses import replace
 from typing import Any, Callable
 
 from agent.contextual_search import ContextualSearchPlan, detect_contextual_plan
@@ -55,6 +56,9 @@ _MAX_PER_SUBCATEGORY = 2
 # 做品牌多样性时多召回的倍数：先取 top_k * 该倍数的候选池，再按每品牌/子类目配额筛出 top_k。
 # 取较大的池，是为了让大类目浏览能召回到足够多的不同子类目（手机/笔电/平板/耳机）再铺开。
 _DIVERSITY_POOL_MULTIPLIER = 5
+
+# 预算匹配加成权重：相关性归一到 [0,1] 后，预算内规格占比最多再加这么多。
+_BUDGET_FIT_WEIGHT = float(os.getenv("BUDGET_FIT_WEIGHT", "0.15"))
 
 # 品牌别名归一：库里同一品牌存在中英文/简称多种写法（Apple 苹果 vs 苹果、Nike vs 耐克），
 # 做品牌配额时若不归一，别名会被当成不同品牌而绕过配额（典型："只有苹果"）。
@@ -151,12 +155,20 @@ class RecommendTool:
                 pass
         return service.search(query, **kwargs)
 
-    def _attach_price_displays(self, cards: list[dict[str, Any]]) -> None:
-        """给商品卡补上预格式化的价格展示「price_display」（多规格→¥X 起）。
+    def _attach_price_displays(
+        self,
+        cards: list[dict[str, Any]],
+        parsed: ParsedQuery | None = None,
+    ) -> None:
+        """给商品卡补上价格区间与预算匹配信息。
 
-        composer 拿着裸数字 base_price 容易把多规格商品报成单一价（甚至说成某个
-        偏高的 SKU 价）；这里用真实价格区间统一生成「起价」字符串，让价格语义由
-        代码确定。取价失败时退回单价显示，不中断推荐。"""
+        - ``price_display``：单价「¥450」或区间「¥450 – ¥900」，由真实 SKU 区间生成，
+          避免 composer 把多规格商品报成某个偏高/偏低的单价。
+        - ``price_range``：{min, max, sku_count}。
+        - ``budget``（用户说了预算时）：{max_price, min_price, skus_within_budget,
+          cheapest_sku_id, cheapest_price}——卡片据此提示「预算内 N 个规格」，
+          详情页默认选中预算内最便宜的规格。
+        取价失败时退回单价显示，不中断推荐。"""
         if not cards:
             return
         from store.product_store import price_display
@@ -168,12 +180,86 @@ class RecommendTool:
         except Exception as exc:  # noqa: BLE001 - 价格展示是增强项，失败不应中断推荐
             logger.warning("取价格区间失败，价格展示退回单价：%r", exc)
             by_id = {}
+        budget_max = getattr(parsed, "max_price", None) if parsed is not None else None
+        budget_min = getattr(parsed, "min_price", None) if parsed is not None else None
         for card in cards:
             cand = by_id.get(card.get("product_id"))
-            if cand is not None:
-                card["price_display"] = price_display(cand.price_range)
-            else:
+            if cand is None:
                 card["price_display"] = f"¥{card.get('price', 0):g}"
+                continue
+            rng = cand.price_range
+            card["price_display"] = price_display(rng)
+            card["price_range"] = {
+                "min": rng.min_price,
+                "max": rng.max_price,
+                "sku_count": rng.sku_count,
+            }
+            if budget_max is None and budget_min is None:
+                continue
+            card["budget"] = self._budget_fit(card["product_id"], budget_min, budget_max)
+
+    def _budget_fit(
+        self,
+        product_id: str,
+        budget_min: float | None,
+        budget_max: float | None,
+    ) -> dict[str, Any]:
+        """统计预算内的 SKU：数量 + 最便宜那个（给详情页 / 加购做默认规格）。"""
+        try:
+            skus = self._get_products().get_skus(product_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("取 SKU 失败，预算匹配信息跳过：%r", exc)
+            skus = []
+        within = [
+            sku for sku in skus
+            if (budget_max is None or sku.price <= budget_max)
+            and (budget_min is None or sku.price >= budget_min)
+        ]
+        cheapest = min(within, key=lambda s: s.price) if within else None
+        return {
+            "max_price": budget_max,
+            "min_price": budget_min,
+            "skus_within_budget": len(within),
+            "sku_count": len(skus),
+            "cheapest_sku_id": cheapest.sku_id if cheapest else None,
+            "cheapest_price": cheapest.price if cheapest else None,
+        }
+
+    @staticmethod
+    def _apply_budget_fit_bonus(hits: list[ProductHit], parsed: ParsedQuery | None) -> list[ProductHit]:
+        """有预算时给「预算内规格占比高」的商品一点排序加成。
+
+        只靠 min_price ≤ 预算召回，会让"只有一个最低配刚好卡线"的商品和"全系都在预算内"
+        的商品并列。这里把分数 min-max 归一后加 ``_BUDGET_FIT_WEIGHT * 占比``，
+        相关性仍是主项，占比只做次级排序。"""
+        if not hits or parsed is None:
+            return hits
+        hi_budget = getattr(parsed, "max_price", None)
+        lo_budget = getattr(parsed, "min_price", None)
+        if hi_budget is None and lo_budget is None:
+            return hits
+        scores = [float(getattr(h, "score", 0.0) or 0.0) for h in hits]
+        lo, hi = min(scores), max(scores)
+        span = (hi - lo) or 1.0
+
+        def _fraction(h: ProductHit) -> float:
+            base = float(getattr(h, "base_price", 0.0) or 0.0)
+            lo_p = getattr(h, "min_price", None)
+            hi_p = getattr(h, "max_price", None)
+            lo_p = base if lo_p is None else float(lo_p)
+            hi_p = base if hi_p is None else float(hi_p)
+            if hi_p <= lo_p:
+                inside = (hi_budget is None or lo_p <= hi_budget) and (lo_budget is None or lo_p >= lo_budget)
+                return 1.0 if inside else 0.0
+            # 没有逐 SKU 数据时，用价格区间与预算区间的重叠比例近似
+            upper = min(hi_p, hi_budget) if hi_budget is not None else hi_p
+            lower = max(lo_p, lo_budget) if lo_budget is not None else lo_p
+            return max(0.0, min(1.0, (upper - lower) / (hi_p - lo_p)))
+
+        def _key(h: ProductHit) -> float:
+            return (float(getattr(h, "score", 0.0) or 0.0) - lo) / span + _BUDGET_FIT_WEIGHT * _fraction(h)
+
+        return sorted(hits, key=_key, reverse=True)
 
     def run(
         self,
@@ -185,6 +271,10 @@ class RecommendTool:
         # base_parsed 由 RefineTool 注入：表示这是一次"细化"，需把本轮解析叠加到
         # 上一轮结构化意图上（见 SearchService.search / ParsedQuery.merge_base）。
         base = slots.get("base_parsed")
+
+        more_label = slots.get("more_label")
+        if more_label is not None:
+            return self._run_more(query, more_label, session, top_k, base)
 
         # complement / pivot：本轮目标已经变成“搭配上衣/看看运动鞋”等新目标，
         # 上一轮品类只能当语境，不能进入检索词或硬过滤。
@@ -224,22 +314,32 @@ class RecommendTool:
         image: str,
         session: AgentSession,
         top_k: int = DEFAULT_TOP_K,
+        image_embedding: Any | None = None,
+        parsed: ParsedQuery | None = None,
     ) -> ToolResult:
         """图搜：``query`` 是 VLM 从图里抽出的检索词，``image`` 是原图（URL/base64）。
 
         流程：文本 RAG 多召回一池候选 → 用图片向量对候选算视觉相似度 →
         融合（文本相关性 + 视觉相似度）重排 → 取 top_k → 复用商品卡片契约。
         视觉索引缺失或编码失败时，自动退化为纯文本顺序（不报错）。
+
+        ``image_embedding``：orchestrator 在看图（VLM）的同时已经后台算好的
+        ``(provider, vector)``，或一个 ``concurrent.futures.Future``；传了就不再
+        重复调用 embedding 接口。
         """
         pool = max(top_k, _VISUAL_POOL_SIZE)
+        search_kwargs: dict[str, Any] = {"top_k_products": pool}
+        if parsed is not None:
+            # 调用方已给出结构化意图（图搜：由 VLM 短语确定性构造）：跳过 LLM query 解析
+            search_kwargs["parsed"] = parsed
         result = self._search(
             self._get_service(),
             query,
             session,
-            top_k_products=pool,
+            **search_kwargs,
         )
 
-        hits = self._visual_rerank(result.hits, image, top_k)
+        hits = self._visual_rerank(result.hits, image, top_k, image_embedding=image_embedding)
 
         session.remember_search(
             result.parsed.to_dict(),
@@ -276,7 +376,11 @@ class RecommendTool:
         return ToolResult(tool_name=self.name, payload=payload, composer_hint=hint)
 
     def _visual_rerank(
-        self, hits: list[ProductHit], image: str, top_k: int
+        self,
+        hits: list[ProductHit],
+        image: str,
+        top_k: int,
+        image_embedding: Any | None = None,
     ) -> list[ProductHit]:
         """用图片视觉相似度对文本召回的候选重排，取 top_k。
 
@@ -294,11 +398,16 @@ class RecommendTool:
         # 2) 视觉相似度（拿不到则整体退化为纯文本）。
         visual: dict[str, float] = {}
         try:
-            from llm.vision import embed_image
+            from llm.vision import embed_image_with_provider
             from search.visual_index import get_visual_index
 
-            query_vec = embed_image(image)
-            visual = get_visual_index().score_many(
+            if image_embedding is not None and hasattr(image_embedding, "result"):
+                provider, query_vec = image_embedding.result()
+            elif image_embedding is not None:
+                provider, query_vec = image_embedding
+            else:
+                provider, query_vec = embed_image_with_provider(image)
+            visual = get_visual_index(provider).score_many(
                 query_vec, [h.product_id for h in hits]
             )
         except Exception as exc:  # noqa: BLE001 - 视觉重排是增强项，失败不应中断图搜
@@ -336,7 +445,7 @@ class RecommendTool:
         )
 
         hits: list[ProductHit] = []
-        for h in result.hits:
+        for h in self._apply_budget_fit_bonus(result.hits, result.parsed):
             if h.sub_category in plan.exclude_sub_categories:
                 continue
             if plan.target_sub_categories and h.sub_category not in plan.target_sub_categories:
@@ -351,7 +460,7 @@ class RecommendTool:
         )
 
         products = [_to_product_card(h) for h in hits]
-        self._attach_price_displays(products)
+        self._attach_price_displays(products, result.parsed)
 
         summary = {
             "hit_count": len(hits),
@@ -398,24 +507,66 @@ class RecommendTool:
 
         return ToolResult(tool_name=self.name, payload=payload, composer_hint=hint)
 
+    def _run_more(
+        self,
+        query: str,
+        label: str,
+        session: AgentSession,
+        top_k: int,
+        base: Any,
+    ) -> ToolResult:
+        """"看更多"：沿用上一轮的搜索条件，排除已经展示过的商品。
+
+        分区名是模型写的小标题，再过一遍 query 解析可能被误判成新约束，所以直接并入
+        上一轮的结构化意图，也省一次 LLM。多需求检索的基线只记了第一个需求，分区名
+        可能属于别的需求，这时按分区名重新检索。"""
+        if isinstance(base, ParsedQuery) and not session.get("last_search_multi"):
+            parsed = base
+            if label:
+                parsed = replace(
+                    base,
+                    soft_terms=list(dict.fromkeys([*base.soft_terms, label])),
+                    retrieval_query=f"{label} {base.retrieval_query}".strip(),
+                )
+            return self._run_single(
+                parsed.retrieval_query or parsed.original_query or query,
+                session,
+                top_k=top_k,
+                base=None,
+                parsed=parsed,
+                exclude_seen=True,
+            )
+        return self._run_single(label or query, session, top_k=top_k, base=None, exclude_seen=True)
+
     def _run_single(
         self,
         query: str,
         session: AgentSession,
         top_k: int,
         base: Any,
+        parsed: ParsedQuery | None = None,
+        exclude_seen: bool = False,
     ) -> ToolResult:
         # 宽泛浏览（首轮、未承接 refine）时多召回一个候选池，便于做多样性筛选；
         # refine（base 非空）是聚焦的承接式追问，保持原样不打散。
-        want_diversity = base is None
+        want_diversity = base is None and parsed is None
         pool_k = top_k * _DIVERSITY_POOL_MULTIPLIER if want_diversity else top_k
+        search_kwargs: dict[str, Any] = {"top_k_products": pool_k, "base": base}
+        if parsed is not None:
+            search_kwargs["parsed"] = parsed
+        seen = set(session.recall_seen()) if exclude_seen else set()
+        if seen:
+            # 已展示的商品会占掉召回名额，按数量放大，保证去重后还有新商品可选
+            search_kwargs["top_k_products"] = pool_k + len(seen)
+            search_kwargs["top_k_chunks"] = _MORE_BASE_CHUNKS + _MORE_CHUNKS_PER_SEEN * len(seen)
         result = self._search(
             self._get_service(),
             query,
             session,
-            top_k_products=pool_k,
-            base=base,
+            **search_kwargs,
         )
+        if seen:
+            result = replace(result, hits=[h for h in result.hits if h.product_id not in seen])
 
         # 仅当用户没点名品牌时才做多样性筛选；点名了（brand_include 非空）就尊重其意图。
         if want_diversity and not getattr(result.parsed, "brand_include", None):
@@ -426,31 +577,36 @@ class RecommendTool:
             # 让结果跨子类目铺开；"推荐手机"这类有子类目意图的查询不加此约束。
             if not getattr(result.parsed, "sub_category", None):
                 caps.append((lambda h: h.sub_category or "", _MAX_PER_SUBCATEGORY))
-            hits = _diversify(result.hits, top_k, caps)
+            hits = _diversify(self._apply_budget_fit_bonus(result.hits, result.parsed), top_k, caps)
         else:
-            hits = result.hits[:top_k]
+            hits = self._apply_budget_fit_bonus(result.hits, result.parsed)[:top_k]
 
         # 工作记忆（WorkingMemory 契约）：refine/compare/detail 后续会读这俩字段。
         # 存的是【结构化】ParsedQuery（dict），下一轮才能做无损约束叠加。
-        session.remember_search(
-            result.parsed.to_dict(),
-            [{"product_id": h.product_id, "title": h.title} for h in hits],
-        )
+        # "看更多"没有新商品时不覆盖：用户说"第一个"指的还是屏幕上那批。
+        if hits or not exclude_seen:
+            session.remember_search(
+                result.parsed.to_dict(),
+                [{"product_id": h.product_id, "title": h.title} for h in hits],
+                keep_seen=exclude_seen,
+            )
 
         products = [_to_product_card(h) for h in hits]
-        self._attach_price_displays(products)
+        self._attach_price_displays(products, result.parsed)
 
         summary = {
             "hit_count": len(hits),
             "needs_clarification": result.parsed.needs_clarification,
             "category": result.parsed.category,
             "max_price": result.parsed.max_price,
+            "unavailable_terms": list(getattr(result.parsed, "unavailable_terms", None) or []),
         }
 
         payload = {
             "query": query,
             "products": products,
             "summary": summary,
+            "personalization": list(getattr(result, "personalization", None) or []),
             # debug 块给开发者排查用，前端可忽略
             "debug": {
                 "parsed": result.parsed.to_dict(),
@@ -461,12 +617,25 @@ class RecommendTool:
         }
 
         # 给 composer 一点 hint，让它对零命中、需澄清做不同应答
-        if result.parsed.needs_clarification:
+        unavailable = "、".join(getattr(result.parsed, "unavailable_terms", None) or [])
+        if exclude_seen and not hits:
+            hint = "符合条件的商品都已经给用户看过了，没有新的可推荐。请坦诚说明，不要重复推荐，追问给放宽条件的方向。"
+        elif exclude_seen:
+            hint = (
+                f"用户想看更多，这 {len(hits)} 款都是之前没展示过的。开场白要点明和刚才的不重复，"
+                "每款写约 40 字的总结，说清核心卖点并补上适用人群或场景。"
+            )
+        elif result.parsed.needs_clarification:
             hint = "检索系统认为 query 过于模糊，请引导用户补充关键信息（品类、预算、用途）。"
+        elif unavailable:
+            hint = f"商品库里没有用户点名的「{unavailable}」。请坦诚说明没有，不要假装有，追问里给相近品类或品牌的方向。"
         elif not hits:
             hint = "本次未命中任何商品，请坦诚告知用户并给出可能放宽的方向建议。"
         else:
-            hint = f"已为用户找到 {len(hits)} 款商品，请为每款写一句约 30 字的总结，说清核心卖点并补上适用人群或场景，不要只写一个短语。"
+            hint = f"已为用户找到 {len(hits)} 款商品，请为每款写一句约 40 字的总结，说清核心卖点并补上适用人群或场景，不要只写一个短语。"
+            memory_hint = _personalization_hint(payload["personalization"], session)
+            if memory_hint:
+                hint = f"{hint}{memory_hint}"
 
         return ToolResult(
             tool_name=self.name,
@@ -526,6 +695,7 @@ class RecommendTool:
         # last_parsed_query 退而存第一个子需求的解析——多组结果对 refine 本就语义模糊，
         # 这里给一个合理基线即可，不追求无损。
         session.remember_search(first_parsed or {}, flat_hit_refs)
+        session.set("last_search_multi", True)
 
         # 价格展示：flat_products 与各 group 的 card 是同一批 dict 对象，补一次即可全覆盖。
         self._attach_price_displays(flat_products)
@@ -568,6 +738,44 @@ class RecommendTool:
         )
 
 
+# "看更多"的召回量：基础量 + 每个已展示商品再多召回这么多 chunk（一个商品有多个 chunk）。
+_MORE_BASE_CHUNKS = 50
+_MORE_CHUNKS_PER_SEEN = 10
+
+
+def _personalization_hint(signals: list[dict[str, Any]], session: AgentSession) -> str:
+    """告诉 composer 这次用到了哪些长期偏好，让回答能说清「为什么这样推荐」。"""
+    labels = {
+        "brand_avoid": "已避开用户不买的品牌",
+        "avoid_term": "已避开用户忌讳的成分",
+        "brand_like": "优先了用户喜欢的品牌",
+        "brand_like_inferred": "参考了用户常看的品牌",
+        "budget": "参考了用户的常用预算",
+        "price_tier": "参考了用户的价格倾向",
+    }
+    parts = []
+    for signal in signals:
+        label = labels.get(signal.get("kind"))
+        if not label:
+            continue
+        value = signal.get("value")
+        parts.append(f"{label}（{value}）" if signal["kind"] in {"brand_avoid", "avoid_term", "brand_like"} else label)
+    profile = session.user_profile or {}
+    context = []
+    for scope, attrs in (profile.get("category_specific") or {}).items():
+        if isinstance(attrs, dict):
+            context.extend(str(v) for k, v in attrs.items() if k not in {"budget_min", "budget_max"} and v)
+    note = profile.get("preference_note") or profile.get("notes")
+    if note:
+        context.append(str(note))
+    text = ""
+    if parts:
+        text += "本次" + "，".join(dict.fromkeys(parts)) + "，可在开场白里自然带一句。"
+    if context:
+        text += "用户的长期情况：" + "；".join(dict.fromkeys(context)) + "，解说时可以结合，但不要编造商品没有的信息。"
+    return text
+
+
 def _to_product_card(h: ProductHit) -> dict[str, Any]:
     """给前端的精简商品卡片：只保留渲染需要的字段。"""
     return {
@@ -576,5 +784,18 @@ def _to_product_card(h: ProductHit) -> dict[str, Any]:
         "brand": h.brand,
         "category": h.category,
         "sub_category": h.sub_category,
-        "price": h.base_price,
+        # price 保持为最低价（旧契约），区间在 price_range 里
+        "price": _hit_price(h, "min_price"),
+        "price_range": {
+            "min": _hit_price(h, "min_price"),
+            "max": _hit_price(h, "max_price"),
+            "sku_count": int(getattr(h, "sku_count", 0) or 0),
+        },
     }
+
+
+def _hit_price(h: Any, field: str) -> float:
+    value = getattr(h, field, None)
+    if value is None:
+        return float(getattr(h, "base_price", 0.0) or 0.0)
+    return float(value)

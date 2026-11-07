@@ -58,6 +58,8 @@ class WorkingMemory(TypedDict, total=False):
 
     last_parsed_query: dict[str, Any]
     last_hits: list[HitRef]
+    seen_product_ids: list[str]
+    last_search_multi: bool
     session_summary: str
     summary_updated_at_turn: int
 
@@ -102,6 +104,17 @@ class AgentSession:
             self._update_session_summary(overflow)
             self.history = self.history[-self.history_window:]
 
+    def history_for_router(self) -> list["Message"]:
+        """路由器可见的上下文：除本轮刚 add_user 的那条之外的历史消息。
+
+        orchestrator 在路由前已经 add_user(query)，所以"只有一条且是本轮 user"
+        等价于首轮——这时路由结果只取决于 query，可安全缓存。"""
+        if self.working_memory.get("session_summary"):
+            return list(self.history) or [Message(role="system", content="summary")]
+        if len(self.history) == 1 and self.history[0].role == "user":
+            return []
+        return list(self.history)
+
     def recent_text(self, n: int = 4) -> str:
         """取最近 n 轮文本，给 router / composer 当上下文用。"""
         recent = self.history[-n:]
@@ -139,11 +152,29 @@ class AgentSession:
 
     # ---- 工作记忆的类型化读写（围绕 WorkingMemory 契约，避免裸键名手滑）----
 
-    def remember_search(self, parsed_dict: dict[str, Any], hits: list[HitRef]) -> None:
+    def remember_search(
+        self,
+        parsed_dict: dict[str, Any],
+        hits: list[HitRef],
+        keep_seen: bool = False,
+    ) -> None:
         """recommend 每次成功检索后调用：把本轮结构化意图 + 命中写进工作记忆，
-        供下一轮 refine/compare/product_detail 复用。"""
+        供下一轮 refine/compare/product_detail 复用。
+
+        keep_seen: "看更多"传 True，在同一批搜索里累计已展示商品；其他检索都算新的一批。"""
         self.working_memory["last_parsed_query"] = parsed_dict
         self.working_memory["last_hits"] = hits
+        self.working_memory.pop("last_search_multi", None)
+        seen = list(self.recall_seen()) if keep_seen else []
+        for hit in hits:
+            product_id = hit.get("product_id")
+            if product_id and product_id not in seen:
+                seen.append(product_id)
+        self.working_memory["seen_product_ids"] = seen
+
+    def recall_seen(self) -> list[str]:
+        """当前这批搜索里已经展示过的商品 ID，"看更多"靠它去重。"""
+        return self.working_memory.get("seen_product_ids") or []
 
     def recall_parsed(self) -> dict[str, Any] | None:
         """取上一轮结构化检索意图（ParsedQuery.to_dict()），没有则 None。"""

@@ -68,7 +68,7 @@ if [ "${BACKEND_RUNTIME}" = "docker" ]; then
     exit 1
   fi
   if [ ! -f "${REPO_ROOT}/.env" ]; then
-    warn "未找到 .env；compose 会继续启动，但豆包/embedding 密钥缺失时对话会失败。"
+    warn "未找到 .env；compose 会继续启动，但 DEEPSEEK_API_KEY（对话）与 DASHSCOPE_API_KEY（向量）缺失时对话会失败。"
   fi
 
   log "Docker Compose 启动后端：http://${HOST}:${PORT}"

@@ -14,6 +14,8 @@ struct ComparisonView: View {
     /// 左/右两个对比槽位选中的商品 id；nil 表示未选。默认预选前两件。
     @State private var leftID: String?
     @State private var rightID: String?
+    /// 各商品当前选中的规格（点表头切换）；没选过的由后端按最便宜 / 预算自动定。
+    @State private var selectedSKUs: [String: String] = [:]
     @State private var comparison: ProductComparisonPayload?
     @State private var isLoading = false
     @State private var errorText: String?
@@ -38,7 +40,10 @@ struct ComparisonView: View {
                 if isLoading {
                     loadingState
                 } else if let comparison {
-                    ComparisonTable(comparison: comparison)
+                    ComparisonTable(comparison: comparison) { productID, skuID in
+                        selectedSKUs[productID] = skuID
+                        Task { await loadComparison() }
+                    }
                     if !comparison.recommendation.isEmpty {
                         recommendationCard(comparison.recommendation)
                     }
@@ -171,7 +176,8 @@ struct ComparisonView: View {
         errorText = nil
         defer { isLoading = false }
         do {
-            let request = ProductComparisonRequest(productIDs: [l, r], focus: nil)
+            var request = ProductComparisonRequest(productIDs: [l, r], focus: nil)
+            request.items = [l, r].map { ComparisonItemRequest(productID: $0, skuID: selectedSKUs[$0]) }
             comparison = try await productService.compareProducts(request)
         } catch {
             comparison = nil
@@ -184,8 +190,15 @@ struct ComparisonView: View {
 /// 对话流里的对比卡片与对比页都用它，保证渲染一致。
 struct ComparisonTable: View {
     let comparison: ProductComparisonPayload
+    /// 点表头规格切换；对话流里的静态卡片传 nil（只展示选中的规格）。
+    var onSelectSKU: ((String, String) -> Void)? = nil
 
     private let labelWidth: CGFloat = 60
+
+    init(comparison: ProductComparisonPayload, onSelectSKU: ((String, String) -> Void)? = nil) {
+        self.comparison = comparison
+        self.onSelectSKU = onSelectSKU
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -209,6 +222,7 @@ struct ComparisonTable: View {
                         .foregroundStyle(AppTheme.textPrimary)
                         .lineLimit(2)
                         .multilineTextAlignment(.center)
+                    skuBadge(for: product)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(8)
@@ -216,6 +230,48 @@ struct ComparisonTable: View {
         }
         .padding(.top, 10)
         .background(AppTheme.secondary.opacity(0.65))
+    }
+
+    /// 表头下的规格标签：「12GB+256GB · 星芒黑」。可切换时是一个下拉菜单，列出全部规格与价格。
+    @ViewBuilder
+    private func skuBadge(for product: ComparisonProductPayload) -> some View {
+        if let sku = product.sku, !sku.label.isEmpty {
+            let label = HStack(spacing: 3) {
+                Text(sku.label)
+                    .font(.caption2)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
+                if onSelectSKU != nil, (product.skus?.count ?? 0) > 1 {
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 8, weight: .semibold))
+                }
+            }
+            .foregroundStyle(AppTheme.primary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(AppTheme.surface, in: Capsule())
+            .overlay(Capsule().stroke(AppTheme.border, lineWidth: 1))
+
+            if let onSelectSKU, let skus = product.skus, skus.count > 1 {
+                Menu {
+                    ForEach(skus) { option in
+                        Button {
+                            onSelectSKU(product.productID, option.skuID)
+                        } label: {
+                            if option.skuID == sku.skuID {
+                                Label("\(option.label)  \(option.priceDisplay)", systemImage: "checkmark")
+                            } else {
+                                Text("\(option.label)  \(option.priceDisplay)")
+                            }
+                        }
+                    }
+                } label: {
+                    label
+                }
+            } else {
+                label
+            }
+        }
     }
 
     private func rowView(_ row: ComparisonRowPayload, zebra: Bool) -> some View {

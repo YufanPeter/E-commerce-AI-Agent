@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-"""API reranker（智谱 Rerank）。
+"""API reranker（百炼 qwen3-rerank 主用，智谱 Rerank 兜底）。
 
 精排原本用本地 ``sentence-transformers`` CrossEncoder，会在 Docker 镜像里拉
-torch / CUDA 等超大依赖。这里改为云端 rerank API：调用智谱
-``/paas/v4/rerank``，通过 ``ZHIPU_API_KEY`` 鉴权。后端镜像
-因此更轻，云部署也不再需要本地模型缓存。
+torch / CUDA 等超大依赖。这里使用云端 rerank API，客户端层负责百炼到
+智谱的自动 fallback，因此后端镜像无需本地模型缓存。
 
 智谱 rerank 的响应是按相关性降序排好的 ``results``，每项带 ``document`` 文本和
 ``relevance_score``，但**不带原始 index**。因此分数要按 document 文本回填到输入
@@ -38,7 +37,7 @@ class RerankedChunk:
 
 
 class ApiReranker:
-    """调用智谱 rerank：输入 query + documents，返回与输入同序对齐的相关性分数。"""
+    """调用云端 rerank，返回与输入同序对齐的相关性分数。"""
 
     def __init__(
         self,
@@ -69,7 +68,7 @@ class ApiReranker:
         if not chunk_list:
             return []
 
-        # 智谱 rerank 单次请求不宜过大；上游召回通常 ≤50，这里做保护性截断。
+        # 上游召回通常 ≤50，这里做保护性截断，也兼容 fallback 服务限制。
         limited_chunks = chunk_list[:50]
         documents = [chunk.document for chunk in limited_chunks]
         payload = {
@@ -93,7 +92,7 @@ class ApiReranker:
 
 
 def _parse_rerank_scores(response: Any, documents: list[str]) -> list[float]:
-    """从智谱 rerank 响应取出与输入 ``documents`` 同序对齐的分数列表。
+    """从 rerank 响应取出与输入 ``documents`` 同序对齐的分数列表。
 
     兼容三种返回形态：
     - results[].index + relevance_score（按 index 回填，最稳）

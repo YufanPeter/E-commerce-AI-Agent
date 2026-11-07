@@ -34,3 +34,13 @@ def test_temporary_or_question_does_not_write():
 
 def test_high_risk_does_not_write():
     assert extract_preference_updates("我对酒精过敏", "u1", "s1") == []
+
+
+def test_one_off_brand_exclusion_is_not_persisted():
+    # 单说一次「不要苹果」只是本轮检索约束，不能写进跨会话记忆
+    assert extract_preference_updates("推荐手机，不要苹果", "u1", "s1") == []
+    assert extract_preference_updates("不要苹果的", "u1", "s1") == []
+    # 带长期语气才记住
+    durable = extract_preference_updates("我一直不买苹果", "u1", "s1")
+    assert [u.field for u in durable] == ["brand_exclude"]
+    assert durable[0].value == "Apple"

@@ -11,7 +11,7 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from rag.reranker import ApiReranker, _parse_rerank_scores
-from rag.retriever import RetrievedChunk
+from rag.retriever import ChromaRetriever, RetrievedChunk
 
 
 def _chunk(pid: str, document: str, distance: float) -> RetrievedChunk:
@@ -107,3 +107,35 @@ def test_parse_rerank_scores_rejects_empty():
 def test_reranker_module_does_not_import_sentence_transformers():
     assert "sentence_transformers" not in sys.modules
     assert "torch" not in sys.modules
+
+
+class _FakeCollection:
+    def __init__(self, payload=None, error: Exception | None = None):
+        self.payload = payload
+        self.error = error
+        self.calls = []
+
+    def query(self, **kwargs):
+        self.calls.append(kwargs)
+        if self.error is not None:
+            raise self.error
+        return self.payload
+
+
+def test_chroma_retriever_uses_matching_ark_collection_on_primary_failure():
+    payload = {
+        "ids": [["chunk-a"]],
+        "documents": [["豆包备用索引命中"]],
+        "metadatas": [[{"product_id": "a", "chunk_type": "profile"}]],
+        "distances": [[0.1]],
+    }
+    retriever = ChromaRetriever.__new__(ChromaRetriever)
+    retriever.collection = _FakeCollection(
+        error=ConnectionError("dashscope embedding unavailable")
+    )
+    retriever.fallback_collection = _FakeCollection(payload=payload)
+
+    chunks = retriever.search("防晒", top_k=5)
+
+    assert [chunk.product_id for chunk in chunks] == ["a"]
+    assert retriever.fallback_collection.calls[0]["query_texts"] == ["防晒"]

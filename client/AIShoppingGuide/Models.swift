@@ -13,6 +13,25 @@ enum MessageState: String, Codable {
     case failed
 }
 
+/// 导购给出预算时，后端随 tool_result 下发的「预算匹配」信息：预算内有几个规格、最便宜的是哪个。
+struct ProductBudgetHint: Hashable, Codable {
+    let maxPrice: Double?
+    let minPrice: Double?
+    let skusWithinBudget: Int
+    let skuCount: Int
+    let cheapestSKUID: String?
+    let cheapestPrice: Double?
+
+    /// 卡片上的一句提示：「预算内 2 个规格」/「全部规格都在预算内」/「仅基础款在预算内」。
+    var caption: String? {
+        guard maxPrice != nil || minPrice != nil else { return nil }
+        if skusWithinBudget <= 0 { return "暂无预算内规格" }
+        if skuCount > 1 && skusWithinBudget == skuCount { return "全部规格都在预算内" }
+        if skuCount > 1 { return "预算内 \(skusWithinBudget) 个规格" }
+        return nil
+    }
+}
+
 struct Product: Identifiable, Hashable, Codable {
     let id: String
     let title: String
@@ -24,6 +43,8 @@ struct Product: Identifiable, Hashable, Codable {
     let imageURL: URL?
     let skus: [ProductSKU]
     let reviews: [ProductReview]
+    /// 本轮推荐的预算匹配信息；非预算类检索为 nil。
+    var budgetHint: ProductBudgetHint? = nil
 
     init(
         id: String = UUID().uuidString,
@@ -50,8 +71,8 @@ struct Product: Identifiable, Hashable, Codable {
     }
 
     var defaultSpecificationSelection: [String: String] {
-        if let lowestSKU {
-            return lowestSKU.selectedOptions
+        if let sku = budgetDefaultSKU {
+            return sku.selectedOptions
         }
         return specifications.reduce(into: [:]) { result, specification in
             if let firstOption = specification.options.first {
@@ -62,6 +83,26 @@ struct Product: Identifiable, Hashable, Codable {
 
     var lowestSKU: ProductSKU? {
         skus.min { $0.price < $1.price }
+    }
+
+    var highestSKU: ProductSKU? {
+        skus.max { $0.price < $1.price }
+    }
+
+    /// 多规格商品给完整区间「¥450 – ¥900」，单规格给单价；没有 SKU 数据时退回后端 price 文案。
+    var priceRangeDisplay: String {
+        guard let low = lowestSKU, let high = highestSKU, high.price > low.price else {
+            return lowestSKU?.priceDisplay ?? price
+        }
+        return "\(low.priceDisplay) – \(high.priceDisplay)"
+    }
+
+    /// 预算内最便宜的规格（有预算提示时），否则最低价规格。
+    var budgetDefaultSKU: ProductSKU? {
+        if let id = budgetHint?.cheapestSKUID, let sku = skus.first(where: { $0.id == id }) {
+            return sku
+        }
+        return lowestSKU
     }
 
     func matchingSKU(for selectedOptions: [String: String]) -> ProductSKU? {
@@ -237,6 +278,12 @@ struct ChatMessage: Identifiable, Codable {
     var isGeneratingFollowups: Bool = false
     /// 只影响追问 Prompt 的失败信息；商品卡片与正文保持可用。
     var followupError: String? = nil
+    /// 流式进行中显示在消息底部的「生成中」文案（正在介绍商品 / 生成追问中）；nil 不显示。
+    var streamingStatusText: String? = nil
+    /// 用户中途点了停止，保留的是半截回答。必须是可选类型，否则旧对话记录解码会失败。
+    var wasStopped: Bool? = nil
+    /// 回答开始前展示的思考步骤，最后一条是正在进行的。回答一开始就不再显示。
+    var thinkingSteps: [String]? = nil
 }
 
 struct StructuredContent: Codable {
@@ -244,15 +291,18 @@ struct StructuredContent: Codable {
     let items: [StructuredItem]
     /// 可直接填入输入框的追问 Prompt，点击后不自动发送。
     let followup: [String]
+    /// 所有商品之后的结尾总结：谁该选哪款，再问用户一句。旧数据和单款推荐没有。
+    let summary: String?
 
     enum CodingKeys: String, CodingKey {
-        case opening, items, followup, questions
+        case opening, items, followup, questions, summary
     }
 
-    init(opening: String, items: [StructuredItem], followup: [String] = []) {
+    init(opening: String, items: [StructuredItem], followup: [String] = [], summary: String? = nil) {
         self.opening = opening
         self.items = items
         self.followup = followup
+        self.summary = summary
     }
 
     init(from decoder: Decoder) throws {
@@ -264,6 +314,7 @@ struct StructuredContent: Codable {
         } else {
             self.followup = try container.decodeIfPresent([String].self, forKey: .questions) ?? []
         }
+        summary = try container.decodeIfPresent(String.self, forKey: .summary)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -271,16 +322,20 @@ struct StructuredContent: Codable {
         try container.encode(opening, forKey: .opening)
         try container.encode(items, forKey: .items)
         try container.encode(followup, forKey: .followup)
+        try container.encodeIfPresent(summary, forKey: .summary)
     }
 }
 
 struct StructuredItem: Codable {
     let productId: String
     let description: String
+    /// 所属分区的小标题；没有分区时为 nil。
+    var group: String? = nil
     
     enum CodingKeys: String, CodingKey {
         case productId
         case description
+        case group
     }
 }
 

@@ -1,0 +1,129 @@
+{"id": "q001", "group": "structured", "query": "推荐智能手机", "gold_filter": {"sub_category": "智能手机"}, "expect": {"sub_category": "智能手机"}}
+{"id": "q002", "group": "structured", "query": "有哪些平板电脑", "gold_filter": {"sub_category": "平板电脑"}, "expect": {"sub_category": "平板电脑"}}
+{"id": "q003", "group": "structured", "query": "看看笔记本电脑", "gold_filter": {"sub_category": "笔记本电脑"}, "expect": {"sub_category": "笔记本电脑"}}
+{"id": "q004", "group": "structured", "query": "3500以内的平板", "gold_filter": {"sub_category": "平板电脑", "max_price": 3500}, "expect": {"sub_category": "平板电脑", "max_price": 3500}}
+{"id": "q005", "group": "structured", "query": "7000以内的笔记本", "gold_filter": {"sub_category": "笔记本电脑", "max_price": 7000}, "expect": {"sub_category": "笔记本电脑", "max_price": 7000}}
+{"id": "q006", "group": "structured", "query": "2000以内的蓝牙耳机", "gold_filter": {"sub_category": "真无线耳机", "max_price": 2000}, "expect": {"sub_category": "真无线耳机", "max_price": 2000}}
+{"id": "q007", "group": "structured", "query": "100块以内的洗面奶", "gold_filter": {"sub_category": "洁面", "max_price": 100}, "expect": {"sub_category": "洁面", "max_price": 100}}
+{"id": "q008", "group": "structured", "query": "300元以内的防晒", "gold_filter": {"sub_category": "防晒", "max_price": 300}, "expect": {"sub_category": "防晒", "max_price": 300}}
+{"id": "q009", "group": "structured", "query": "1000到1200的跑鞋", "gold_filter": {"sub_category": "跑步鞋", "min_price": 1000, "max_price": 1200}, "expect": {"sub_category": "跑步鞋", "min_price": 1000, "max_price": 1200}}
+{"id": "q010", "group": "structured", "query": "50块以内的方便面", "gold_filter": {"sub_category": "方便食品", "max_price": 50}, "expect": {"sub_category": "方便食品", "max_price": 50}}
+{"id": "q011", "group": "structured", "query": "苹果的平板", "gold_filter": {"sub_category": "平板电脑", "brand_include": ["Apple 苹果", "苹果"]}, "expect": {"sub_category": "平板电脑", "brand_include": ["Apple 苹果", "苹果"]}}
+{"id": "q012", "group": "structured", "query": "华为手机推荐", "gold_filter": {"sub_category": "智能手机", "brand_include": ["华为"]}, "expect": {"sub_category": "智能手机", "brand_include": ["华为"]}}
+{"id": "q013", "group": "structured", "query": "小米手机有哪些", "gold_filter": {"sub_category": "智能手机", "brand_include": ["小米"]}, "expect": {"sub_category": "智能手机", "brand_include": ["小米"]}}
+{"id": "q014", "group": "structured", "query": "耐克的跑鞋", "gold_filter": {"sub_category": "跑步鞋", "brand_include": ["耐克", "Nike"]}, "expect": {"sub_category": "跑步鞋", "brand_include": ["耐克", "Nike"]}}
+{"id": "q015", "group": "structured", "query": "OPPO手机", "gold_filter": {"sub_category": "智能手机", "brand_include": ["OPPO"]}, "expect": {"sub_category": "智能手机", "brand_include": ["OPPO"]}}
+{"id": "q016", "group": "structured", "query": "推荐点吃的", "gold_filter": {"category": "食品饮料"}, "expect": {"category": "食品饮料"}}
+{"id": "q017", "group": "structured", "query": "有什么美妆产品", "gold_filter": {"category": "美妆护肤"}, "expect": {"category": "美妆护肤"}}
+{"id": "q018", "group": "structured", "query": "想买点零食", "gold_filter": {"sub_category": "坚果/零食"}, "expect": {"sub_category": "坚果/零食"}}
+{"id": "q019", "group": "semantic", "query": "适合油皮的洗面奶", "relevant": ["p_beauty_011"]}
+{"id": "q020", "group": "semantic", "query": "敏感肌修护屏障的面霜", "relevant": ["p_beauty_007", "p_beauty_012"]}
+{"id": "q021", "group": "semantic", "query": "想淡化脸上的斑，有什么精华", "relevant": ["p_beauty_005"]}
+{"id": "q022", "group": "semantic", "query": "25岁开始抗初老用什么精华", "relevant": ["p_beauty_001", "p_beauty_002", "p_beauty_009", "p_beauty_024"]}
+{"id": "q023", "group": "semantic", "query": "控油定妆的散粉", "relevant": ["p_beauty_013", "p_beauty_014"]}
+{"id": "q024", "group": "semantic", "query": "夏天去海边玩水用的防水防晒", "relevant": ["p_beauty_010"]}
+{"id": "q025", "group": "semantic", "query": "敏感肌能用的防晒", "relevant": ["p_beauty_023"]}
+{"id": "q026", "group": "semantic", "query": "油皮夏天不脱妆的粉底液", "relevant": ["p_beauty_020"]}
+{"id": "q027", "group": "semantic", "query": "干皮秋冬用的保湿爽肤水", "relevant": ["p_beauty_019"]}
+{"id": "q028", "group": "semantic", "query": "温和不刺激的卸妆产品", "relevant": ["p_beauty_017"]}
+{"id": "q029", "group": "semantic", "query": "眼周干纹用什么眼霜", "relevant": ["p_beauty_021", "p_beauty_016"]}
+{"id": "q030", "group": "semantic", "query": "地铁通勤隔绝噪音的耳机", "relevant": ["p_digital_007", "p_digital_018"]}
+{"id": "q031", "group": "semantic", "query": "运动的时候能测心率的耳机", "relevant": ["p_digital_018"]}
+{"id": "q032", "group": "semantic", "query": "夜景拍照厉害的手机", "relevant": ["p_digital_002", "p_digital_008", "p_digital_015", "p_digital_017"]}
+{"id": "q033", "group": "semantic", "query": "打游戏续航长的大屏手机", "relevant": ["p_digital_009"]}
+{"id": "q034", "group": "semantic", "query": "能折叠的手机，主要用来办公", "relevant": ["p_digital_010", "p_digital_014"]}
+{"id": "q035", "group": "semantic", "query": "轻薄好看适合拍人像的手机", "relevant": ["p_digital_016"]}
+{"id": "q036", "group": "semantic", "query": "专业视频剪辑用什么笔记本", "relevant": ["p_digital_006", "p_digital_012"]}
+{"id": "q037", "group": "semantic", "query": "经常出差要带的轻薄商务本", "relevant": ["p_digital_022", "p_digital_004", "p_digital_020", "p_digital_023"]}
+{"id": "q038", "group": "semantic", "query": "学生上网课记笔记的平板", "relevant": ["p_digital_025", "p_digital_019", "p_digital_011"]}
+{"id": "q039", "group": "semantic", "query": "画画用的平板", "relevant": ["p_digital_024", "p_digital_013"]}
+{"id": "q040", "group": "semantic", "query": "跑全马比赛穿的鞋", "relevant": ["p_clothes_010"]}
+{"id": "q041", "group": "semantic", "query": "长距离慢跑缓震好的跑鞋", "relevant": ["p_clothes_009", "p_clothes_008", "p_clothes_007"]}
+{"id": "q042", "group": "semantic", "query": "外场打球的实战篮球鞋", "relevant": ["p_clothes_011", "p_clothes_012", "p_clothes_013"]}
+{"id": "q043", "group": "semantic", "query": "下雨天爬山穿的防水鞋", "relevant": ["p_clothes_014", "p_clothes_015"]}
+{"id": "q044", "group": "semantic", "query": "穿着没感觉的高腰瑜伽裤", "relevant": ["p_clothes_016"]}
+{"id": "q045", "group": "semantic", "query": "夏天夜跑穿的速干T恤", "relevant": ["p_clothes_020", "p_clothes_021", "p_clothes_002", "p_clothes_003"]}
+{"id": "q046", "group": "semantic", "query": "能放16寸电脑还防泼水的通勤包", "relevant": ["p_clothes_018"]}
+{"id": "q047", "group": "semantic", "query": "徒步用的轻量双肩包", "relevant": ["p_clothes_025", "p_clothes_018"]}
+{"id": "q048", "group": "semantic", "query": "熬夜赶工提神喝什么饮料", "relevant": ["p_food_005", "p_food_006"]}
+{"id": "q049", "group": "semantic", "query": "控糖期能喝的无糖茶", "relevant": ["p_food_003", "p_food_014"]}
+{"id": "q050", "group": "semantic", "query": "减脂期想喝点有气泡的", "relevant": ["p_food_004", "p_food_024", "p_food_015"]}
+{"id": "q051", "group": "semantic", "query": "不加糖不加奶的纯黑咖啡", "relevant": ["p_food_022", "p_food_023"]}
+{"id": "q052", "group": "semantic", "query": "送长辈的坚果礼盒", "relevant": ["p_food_009", "p_food_019"]}
+{"id": "q053", "group": "semantic", "query": "宿舍半夜吃的泡面", "relevant": ["p_food_011", "p_food_012", "p_food_020", "p_food_021"]}
+{"id": "q054", "group": "semantic", "query": "家里早餐喝的高蛋白纯牛奶", "relevant": ["p_food_007", "p_food_016"]}
+{"id": "q055", "group": "semantic", "query": "做红烧肉上色用的酱油", "relevant": ["p_food_018"]}
+{"id": "q056", "group": "semantic", "query": "蘸饺子拌凉菜的生抽", "relevant": ["p_food_013"]}
+{"id": "q057", "group": "semantic", "query": "不用放冰箱的高蛋白酸奶", "relevant": ["p_food_017"]}
+{"id": "q058", "group": "alias", "query": "小棕瓶", "relevant": ["p_beauty_001"]}
+{"id": "q059", "group": "alias", "query": "小黑瓶", "relevant": ["p_beauty_002"]}
+{"id": "q060", "group": "alias", "query": "神仙水", "relevant": ["p_beauty_003"]}
+{"id": "q061", "group": "alias", "query": "红腰子精华", "relevant": ["p_beauty_004"]}
+{"id": "q062", "group": "alias", "query": "大红瓶面霜", "relevant": ["p_beauty_008"]}
+{"id": "q063", "group": "alias", "query": "大粉水", "relevant": ["p_beauty_019"]}
+{"id": "q064", "group": "alias", "query": "金瓶防晒", "relevant": ["p_beauty_010"]}
+{"id": "q065", "group": "alias", "query": "飞马41", "relevant": ["p_clothes_007"]}
+{"id": "q066", "group": "alias", "query": "北面的双肩包", "relevant": ["p_clothes_018"]}
+{"id": "q067", "group": "alias", "query": "北面的帽子", "relevant": ["p_clothes_024"]}
+{"id": "q068", "group": "alias", "query": "lululemon的裤子", "relevant": ["p_clothes_016"]}
+{"id": "q069", "group": "alias", "query": "老坛酸菜面", "relevant": ["p_food_012"]}
+{"id": "q070", "group": "alias", "query": "零度可乐", "relevant": ["p_food_015"]}
+{"id": "q071", "group": "alias", "query": "苹果最轻的笔记本", "relevant": ["p_digital_020"]}
+{"id": "q072", "group": "negation", "query": "推荐手机，不要苹果", "gold_filter": {"sub_category": "智能手机"}, "forbid": {"brand": ["Apple 苹果", "苹果"]}, "expect": {"sub_category": "智能手机"}}
+{"id": "q073", "group": "negation", "query": "非华为非苹果的平板", "relevant": ["p_digital_011", "p_digital_019"], "forbid": {"brand": ["华为", "Apple 苹果", "苹果"]}}
+{"id": "q074", "group": "negation", "query": "跑鞋不要耐克的", "relevant": ["p_clothes_008", "p_clothes_009", "p_clothes_010"], "forbid": {"brand": ["耐克", "Nike"]}}
+{"id": "q075", "group": "negation", "query": "想喝饮料，不要功能饮料", "forbid": {"sub_category": ["功能饮料"]}}
+{"id": "q076", "group": "negation", "query": "不要碳酸的无糖饮料", "relevant": ["p_food_003", "p_food_014"], "forbid": {"sub_category": ["碳酸饮料"]}}
+{"id": "q077", "group": "negation", "query": "无糖的茶饮", "relevant": ["p_food_003", "p_food_014"]}
+{"id": "q078", "group": "negation", "query": "无酒精的卸妆油", "relevant": ["p_beauty_017"]}
+{"id": "q079", "group": "negation", "query": "不含香精的酸奶", "relevant": ["p_food_008", "p_food_017"]}
+{"id": "q080", "group": "negation", "query": "没有防腐剂的牛奶", "relevant": ["p_food_007", "p_food_016"]}
+{"id": "q081", "group": "negation", "query": "不要太贵的精华", "relevant": ["p_beauty_018", "p_beauty_009", "p_beauty_024"]}
+{"id": "q082", "group": "out_of_catalog", "query": "500以内的蓝牙耳机", "expect_empty": true, "why": "耳机最低 1499"}
+{"id": "q083", "group": "out_of_catalog", "query": "3000以内的平板", "expect_empty": true, "why": "平板最低 3299"}
+{"id": "q084", "group": "out_of_catalog", "query": "1000元以内的手机", "expect_empty": true, "why": "手机最低 3299"}
+{"id": "q085", "group": "out_of_catalog", "query": "100元以内的跑鞋", "expect_empty": true, "why": "跑鞋最低 899"}
+{"id": "q086", "group": "out_of_catalog", "query": "扫地机器人", "expect_empty": true, "why": "库里没有这个品类"}
+{"id": "q087", "group": "out_of_catalog", "query": "婴儿奶粉", "expect_empty": true, "why": "库里没有这个品类"}
+{"id": "q088", "group": "out_of_catalog", "query": "双开门冰箱", "expect_empty": true, "why": "库里没有这个品类"}
+{"id": "q089", "group": "out_of_catalog", "query": "机械键盘", "expect_empty": true, "why": "库里没有这个品类"}
+{"id": "q090", "group": "out_of_catalog", "query": "三星手机", "expect_empty": true, "why": "库里没有这个品牌"}
+{"id": "q091", "group": "out_of_catalog", "query": "Dior 口红", "expect_empty": true, "why": "库里没有这个品牌"}
+{"id": "q092", "group": "evidence", "query": "小棕瓶买多大容量合适", "product_id": "p_beauty_001", "chunk_id": "p_beauty_001:faq:1", "kind": "faq"}
+{"id": "q093", "group": "evidence", "query": "神仙水拆开能放多久", "product_id": "p_beauty_003", "chunk_id": "p_beauty_003:faq:4", "kind": "faq"}
+{"id": "q094", "group": "evidence", "query": "欧莱雅这个隔离含不含酒精", "product_id": "p_beauty_006", "chunk_id": "p_beauty_006:faq:3", "kind": "faq"}
+{"id": "q095", "group": "evidence", "query": "安热沙在户外要隔多久再涂一次", "product_id": "p_beauty_010", "chunk_id": "p_beauty_010:faq:5", "kind": "faq"}
+{"id": "q096", "group": "evidence", "query": "安热沙用完要不要卸妆", "product_id": "p_beauty_010", "chunk_id": "p_beauty_010:faq:3", "kind": "faq"}
+{"id": "q097", "group": "evidence", "query": "薇诺娜特护霜做完医美什么时候能抹", "product_id": "p_beauty_007", "chunk_id": "p_beauty_007:faq:4", "kind": "faq"}
+{"id": "q098", "group": "evidence", "query": "薇诺娜特护霜能不能当面膜厚敷", "product_id": "p_beauty_007", "chunk_id": "p_beauty_007:faq:2", "kind": "faq"}
+{"id": "q099", "group": "evidence", "query": "雅诗兰黛持妆粉底还要额外涂防晒吗", "product_id": "p_beauty_020", "chunk_id": "p_beauty_020:faq:4", "kind": "faq"}
+{"id": "q100", "group": "evidence", "query": "牛油果眼霜夏天放久了会不会化", "product_id": "p_beauty_021", "chunk_id": "p_beauty_021:faq:4", "kind": "faq"}
+{"id": "q101", "group": "evidence", "query": "Ultraboost 5 平时穿42码选哪个码", "product_id": "p_clothes_008", "chunk_id": "p_clothes_008:faq:2", "kind": "faq"}
+{"id": "q102", "group": "evidence", "query": "特步160X新鞋要磨合多久才能比赛", "product_id": "p_clothes_010", "chunk_id": "p_clothes_010:faq:5", "kind": "faq"}
+{"id": "q103", "group": "evidence", "query": "全城12鞋底能打多少场", "product_id": "p_clothes_013", "chunk_id": "p_clothes_013:faq:3", "kind": "faq"}
+{"id": "q104", "group": "evidence", "query": "迈乐MOAB脚宽的人怎么选码", "product_id": "p_clothes_015", "chunk_id": "p_clothes_015:faq:1", "kind": "faq"}
+{"id": "q105", "group": "evidence", "query": "Align瑜伽裤怎么洗", "product_id": "p_clothes_016", "chunk_id": "p_clothes_016:faq:4", "kind": "faq"}
+{"id": "q106", "group": "evidence", "query": "Nike那个棒球帽头大能戴吗", "product_id": "p_clothes_019", "chunk_id": "p_clothes_019:faq:2", "kind": "faq"}
+{"id": "q107", "group": "evidence", "query": "Osprey日光包能折起来收纳吗", "product_id": "p_clothes_025", "chunk_id": "p_clothes_025:faq:3", "kind": "faq"}
+{"id": "q108", "group": "evidence", "query": "MateBook 14实际能用多久不插电", "product_id": "p_digital_004", "chunk_id": "p_digital_004:faq:3", "kind": "faq"}
+{"id": "q109", "group": "evidence", "query": "小米平板8 Pro出门没wifi怎么上网", "product_id": "p_digital_011", "chunk_id": "p_digital_011:faq:4", "kind": "faq"}
+{"id": "q110", "group": "evidence", "query": "MacBook Pro 14 M5能接两台显示器吗", "product_id": "p_digital_006", "chunk_id": "p_digital_006:faq:3", "kind": "faq"}
+{"id": "q111", "group": "evidence", "query": "Find N6屏幕折痕明显吗", "product_id": "p_digital_014", "chunk_id": "p_digital_014:faq:0", "kind": "faq"}
+{"id": "q112", "group": "evidence", "query": "小米17 Max玩原神怎么样", "product_id": "p_digital_009", "chunk_id": "p_digital_009:faq:1", "kind": "faq"}
+{"id": "q113", "group": "evidence", "query": "新款iPad Air能用二代笔吗", "product_id": "p_digital_025", "chunk_id": "p_digital_025:faq:3", "kind": "faq"}
+{"id": "q114", "group": "evidence", "query": "雀巢1+2孕妇能喝吗", "product_id": "p_food_002", "chunk_id": "p_food_002:faq:4", "kind": "faq"}
+{"id": "q115", "group": "evidence", "query": "红牛可以天天喝吗", "product_id": "p_food_006", "chunk_id": "p_food_006:faq:2", "kind": "faq"}
+{"id": "q116", "group": "evidence", "query": "纯甄没开封要冷藏吗", "product_id": "p_food_008", "chunk_id": "p_food_008:faq:2", "kind": "faq"}
+{"id": "q117", "group": "evidence", "query": "海天生抽小孩能吃吗", "product_id": "p_food_013", "chunk_id": "p_food_013:faq:4", "kind": "faq"}
+{"id": "q118", "group": "evidence", "query": "百草味每日坚果3岁小孩能吃吗", "product_id": "p_food_019", "chunk_id": "p_food_019:faq:3", "kind": "faq"}
+{"id": "q119", "group": "evidence", "query": "合味道能放微波炉吗", "product_id": "p_food_020", "chunk_id": "p_food_020:faq:4", "kind": "faq"}
+{"id": "q120", "group": "evidence", "query": "MateBook 14有屏幕漏光的问题吗", "product_id": "p_digital_004", "chunk_id": "p_digital_004:review:5", "kind": "review"}
+{"id": "q121", "group": "evidence", "query": "Pura 90 Pro曲面屏容易误触吗", "product_id": "p_digital_002", "chunk_id": "p_digital_002:review:2", "kind": "review"}
+{"id": "q122", "group": "evidence", "query": "小米平板8 Pro有人吐槽只有wifi版吗", "product_id": "p_digital_011", "chunk_id": "p_digital_011:review:2", "kind": "review"}
+{"id": "q123", "group": "evidence", "query": "全城12大体重穿着怎么样", "product_id": "p_clothes_013", "chunk_id": "p_clothes_013:review:4", "kind": "review"}
+{"id": "q124", "group": "evidence", "query": "特步160X尺码准吗", "product_id": "p_clothes_010", "chunk_id": "p_clothes_010:review:2", "kind": "review"}
+{"id": "q125", "group": "evidence", "query": "理肤泉修复霜有人用了脸红吗", "product_id": "p_beauty_012", "chunk_id": "p_beauty_012:review:0", "kind": "review"}
+{"id": "q126", "group": "evidence", "query": "理肤泉防晒有人过敏吗", "product_id": "p_beauty_023", "chunk_id": "p_beauty_023:review:0", "kind": "review"}
+{"id": "q127", "group": "evidence", "query": "花西子眉笔笔芯容易断吗", "product_id": "p_beauty_025", "chunk_id": "p_beauty_025:review:3", "kind": "review"}
+{"id": "q128", "group": "evidence", "query": "康师傅桶面面饼会碎吗", "product_id": "p_food_011", "chunk_id": "p_food_011:review:3", "kind": "review"}
+{"id": "q129", "group": "evidence", "query": "东鹏特饮买整箱会少发吗", "product_id": "p_food_005", "chunk_id": "p_food_005:review:3", "kind": "review"}

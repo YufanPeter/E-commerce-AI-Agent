@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import threading
+from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
 # 必须在 import chromadb / sentence_transformers 之前完成环境设置
@@ -25,11 +26,13 @@ os.environ.setdefault("CHROMA_TELEMETRY_IMPL", "none")
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
+import anyio
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.concurrency import iterate_in_threadpool
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from agent.memory_extractor import extract_preference_updates
+from agent import memory_service
 from api import products as products_router
 from store.cart_store import CartStore
 from store.session_store import SqliteSessionStore
@@ -37,6 +40,13 @@ from store.user_memory_store import UserMemoryStore, UserPreference
 
 
 logger = logging.getLogger(__name__)
+
+# uvicorn 只给自己的 logger 配 handler，应用层 INFO（各阶段耗时、缓存命中、fallback）默认看不到。
+# 这里给 root 配一个最简 handler；LOG_LEVEL=WARNING 可以关掉。
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -64,9 +74,17 @@ class ChatResponse(BaseModel):
     trace: dict[str, Any]
 
 
+class CompareItem(BaseModel):
+    product_id: str
+    sku_id: str | None = Field(None, description="指定对比的规格；不传则按预算 / 最便宜自动选")
+
+
 class CompareRequest(BaseModel):
-    product_ids: list[str] = Field(..., description="要对比的商品 id（2-3 个）")
+    product_ids: list[str] = Field(default_factory=list, description="要对比的商品 id（2 个）；也可用 items 带规格")
+    items: list[CompareItem] = Field(default_factory=list, description="商品 + 可选规格，优先于 product_ids")
     focus: str | None = Field(None, description="对比侧重点，如『续航』『适合敏感肌』")
+    budget_max: float | None = Field(None, description="预算上限：自动选规格时取预算内最便宜的")
+    budget_min: float | None = None
 
 
 class TitleRequest(BaseModel):
@@ -97,10 +115,19 @@ class PreferenceRequest(BaseModel):
     category_specific: dict[str, dict[str, Any]] = Field(default_factory=dict)
     preference_note: str | None = None
     notes: str | None = None
+    avoid_terms: list[str] | None = None  # 不传表示保持不变：只有确认过的忌讳才会进来
 
 
 class PreferenceUndoRequest(BaseModel):
     undo_token: str = Field(..., description="memory_update 事件返回的撤销 token")
+
+
+class MemoryTellRequest(BaseModel):
+    text: str = Field(..., description="用户在记忆页直接说的一句话")
+
+
+class MemorySettingsRequest(BaseModel):
+    personalization_enabled: bool
 
 
 # ---------------------------------------------------------------------------
@@ -150,6 +177,57 @@ def _get_agent() -> Any:
     return _agent
 
 
+class _SessionTurnGate:
+    """同一会话同时只跑一个流式回合。
+
+    用户点停止后马上发新消息时，旧回合可能还在等工具返回。会话是整段读写的，
+    不等旧回合保存完就加载，两边会互相覆盖。等待有上限，异常遗留的回合不会卡死新请求。
+    只在进程内生效，多 Worker 部署需要换成 Redis 锁。
+    """
+
+    def __init__(self, wait_seconds: float = 6.0) -> None:
+        self._wait_seconds = wait_seconds
+        self._lock = threading.Lock()
+        self._active: dict[str, threading.Event] = {}
+
+    def begin(self, session_id: str | None) -> threading.Event | None:
+        if not session_id:
+            return None
+        with self._lock:
+            prior = self._active.get(session_id)
+        if prior is not None and not prior.wait(self._wait_seconds):
+            logger.warning("session %s: previous turn still running, starting anyway", session_id)
+        turn = threading.Event()
+        with self._lock:
+            self._active[session_id] = turn
+        return turn
+
+    def finish(self, session_id: str | None, turn: threading.Event | None) -> None:
+        if not session_id or turn is None:
+            return
+        turn.set()
+        with self._lock:
+            if self._active.get(session_id) is turn:
+                del self._active[session_id]
+
+
+_turn_gate = _SessionTurnGate()
+
+
+async def _close_when_finished(generator: Iterator[str]) -> AsyncIterator[str]:
+    """在线程池里迭代 SSE 生成器，并保证断连后立刻关闭它。
+
+    不显式关闭的话，收尾要等垃圾回收，上游 LLM 流和会话保存的时机都不确定。
+    取消信号要等当前这次 next() 返回才生效，所以关闭时生成器不会正在执行。
+    """
+    try:
+        async for chunk in iterate_in_threadpool(generator):
+            yield chunk
+    finally:
+        with anyio.CancelScope(shield=True):
+            await anyio.to_thread.run_sync(generator.close)
+
+
 def _attach_user_memory(session: Any, user_id: str | None) -> None:
     """Attach long-lived user preference to this request-scoped session object."""
     if not user_id:
@@ -160,18 +238,18 @@ def _attach_user_memory(session: Any, user_id: str | None) -> None:
     preference = _user_memory.get_preference(clean_user_id)
     session.user_id = clean_user_id
     session.user_profile = preference.to_dict()
+    inferred = memory_service.inferred_signals(_user_memory, clean_user_id)
+    if inferred:
+        session.user_profile["_inferred"] = inferred
 
 
 def _apply_realtime_preference_updates(query: str, session: Any) -> list[dict[str, Any]]:
     user_id = getattr(session, "user_id", None)
     if not user_id:
         return []
-    updates = extract_preference_updates(query, user_id, getattr(session, "session_id", None))
-    events: list[dict[str, Any]] = []
-    for update in updates:
-        event = _user_memory.apply_update(user_id, update)
-        if event is not None:
-            events.append(event)
+    session_id = getattr(session, "session_id", None)
+    events = memory_service.process_utterance(_user_memory, user_id, query, session_id)
+    memory_service.extract_in_background(_user_memory, user_id, query, session_id, events)
     if events:
         session.user_profile = _user_memory.get_preference(user_id).to_dict()
     return events
@@ -207,6 +285,13 @@ def _warmup() -> None:
             svc = get_search_service()
             # 跑一次真实检索，强制 embedding + API rerank HTTP client 完成初始化
             svc.search("预热查询", top_k_products=1)
+            # 拍照找货的视觉索引（百炼主索引）也提前读进内存，否则首次图搜多等 1-2s
+            try:
+                from search.visual_index import get_visual_index
+
+                get_visual_index("dashscope")
+            except Exception as exc:  # noqa: BLE001 - 没建视觉索引时图搜会自行退化为纯文本
+                logger.warning("视觉索引预热跳过：%r", exc)
             _warmup_status.update(status="ready", message="Agent/SearchService warmup completed.")
             logger.info("Warmup done: models are hot.")
         except Exception as exc:  # noqa: BLE001 - 预热失败不应阻止服务运行
@@ -230,6 +315,18 @@ def warmup_status() -> dict[str, str]:
     return dict(_warmup_status)
 
 
+@app.get("/llm/status")
+def llm_status() -> dict[str, Any]:
+    """当前 Chat provider 链与熔断状态（排查"首字慢 / 走了 fallback"用）。"""
+    from llm.client import get_provider_name, provider_status
+
+    try:
+        primary = get_provider_name()
+    except Exception as exc:  # noqa: BLE001
+        return {"primary": None, "error": str(exc), "backends": []}
+    return {"primary": primary, "backends": provider_status()}
+
+
 @app.get("/preferences/{user_id}")
 def get_preferences(user_id: str) -> dict[str, Any]:
     """Read cross-session core preference memory for a user."""
@@ -245,6 +342,8 @@ def put_preferences(user_id: str, req: PreferenceRequest) -> dict[str, Any]:
     if not clean_user_id:
         raise HTTPException(status_code=400, detail="user_id 不能为空")
     data = req.model_dump() if hasattr(req, "model_dump") else req.dict()
+    if data.get("avoid_terms") is None:
+        data["avoid_terms"] = _user_memory.get_preference(clean_user_id).avoid_terms
     preference = UserPreference.from_dict(clean_user_id, data)
     return _user_memory.put_preference(preference).to_dict()
 
@@ -261,6 +360,79 @@ def undo_preference(user_id: str, req: PreferenceUndoRequest) -> dict[str, Any]:
     return result
 
 
+def _memory_user(user_id: str) -> str:
+    clean_user_id = user_id.strip()
+    if not clean_user_id:
+        raise HTTPException(status_code=400, detail="user_id 不能为空")
+    return clean_user_id
+
+
+@app.get("/memory/{user_id}")
+def get_memory(user_id: str) -> dict[str, Any]:
+    """记忆页：生效的记忆（带来源和影响）、待确认建议、最近活动。"""
+    return memory_service.build_view(_user_memory, _memory_user(user_id))
+
+
+@app.post("/memory/{user_id}/tell")
+def tell_memory(user_id: str, req: MemoryTellRequest) -> dict[str, Any]:
+    """用户直接说一句话，能听出结构的进结构化记忆，其余记成备注。"""
+    clean_user_id = _memory_user(user_id)
+    result = memory_service.tell(_user_memory, clean_user_id, req.text)
+    return {**result, "view": memory_service.build_view(_user_memory, clean_user_id)}
+
+
+@app.post("/memory/{user_id}/items/{item_id}/confirm")
+def confirm_memory(user_id: str, item_id: str) -> dict[str, Any]:
+    clean_user_id = _memory_user(user_id)
+    event = memory_service.confirm_suggestion(_user_memory, clean_user_id, item_id)
+    if event is None:
+        raise HTTPException(status_code=404, detail="这条建议不存在")
+    return {"message": event["message"], "undo_token": event.get("undo_token"), "view": memory_service.build_view(_user_memory, clean_user_id)}
+
+
+@app.post("/memory/{user_id}/items/{item_id}/reject")
+def reject_memory(user_id: str, item_id: str) -> dict[str, Any]:
+    clean_user_id = _memory_user(user_id)
+    if not memory_service.reject_suggestion(_user_memory, clean_user_id, item_id):
+        raise HTTPException(status_code=404, detail="这条建议不存在")
+    return {"message": "好的，不再提这条", "view": memory_service.build_view(_user_memory, clean_user_id)}
+
+
+@app.delete("/memory/{user_id}/items/{item_id}")
+def delete_memory_item(user_id: str, item_id: str) -> dict[str, Any]:
+    clean_user_id = _memory_user(user_id)
+    result = _user_memory.remove_item(clean_user_id, item_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="这条记忆不存在")
+    return {"message": "已忘掉这条", "undo_token": result["undo_token"], "view": memory_service.build_view(_user_memory, clean_user_id)}
+
+
+@app.put("/memory/{user_id}/settings")
+def update_memory_settings(user_id: str, req: MemorySettingsRequest) -> dict[str, Any]:
+    clean_user_id = _memory_user(user_id)
+    preference = _user_memory.get_preference(clean_user_id)
+    preference.personalization_enabled = req.personalization_enabled
+    _user_memory.put_preference(preference)
+    return memory_service.build_view(_user_memory, clean_user_id)
+
+
+@app.post("/memory/{user_id}/undo")
+def undo_memory(user_id: str, req: PreferenceUndoRequest) -> dict[str, Any]:
+    clean_user_id = _memory_user(user_id)
+    result = _user_memory.undo_update(clean_user_id, req.undo_token.strip())
+    if result is None:
+        raise HTTPException(status_code=404, detail="撤销 token 不存在或已使用")
+    return {"message": "已恢复", "view": memory_service.build_view(_user_memory, clean_user_id)}
+
+
+@app.delete("/memory/{user_id}")
+def clear_memory(user_id: str) -> dict[str, Any]:
+    """彻底忘掉这个用户：偏好、记忆、行为记录全部删除，不可恢复。"""
+    clean_user_id = _memory_user(user_id)
+    _user_memory.clear_user(clean_user_id)
+    return memory_service.build_view(_user_memory, clean_user_id)
+
+
 @app.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest) -> ChatResponse:
     if not req.query or not req.query.strip():
@@ -268,6 +440,7 @@ def chat(req: ChatRequest) -> ChatResponse:
     session = _sessions.get_or_create(req.session_id)
     _attach_user_memory(session, req.user_id)
     resp = _get_agent().handle_turn(req.query, session)
+    memory_service.record_turn(_user_memory, session.user_id, session.session_id, resp.tool_result.to_dict(), req.query)
     memory_updates = _apply_realtime_preference_updates(req.query, session)
     if memory_updates:
         resp.trace["memory_updates"] = memory_updates
@@ -282,7 +455,7 @@ def chat(req: ChatRequest) -> ChatResponse:
 
 
 def _resolve_image(req: ChatRequest) -> str | None:
-    """把请求里的图片归一成 Ark image_url 字段能直接吃的形态。
+    """把请求里的图片归一成 OpenAI 兼容 image_url 能直接使用的形态。
 
     优先用远程 URL；否则用 base64（裸 base64 自动补 data URI 前缀）。
     都没有则返回 None（走普通文本链路）。
@@ -298,7 +471,7 @@ def _resolve_image(req: ChatRequest) -> str | None:
 
 
 @app.post("/chat/stream")
-def chat_stream(req: ChatRequest) -> StreamingResponse:
+def chat_stream(req: ChatRequest, request: Request) -> StreamingResponse:
     """SSE 流式端点。
 
     输出格式（每条事件以 `\\n\\n` 结束）：
@@ -307,17 +480,27 @@ def chat_stream(req: ChatRequest) -> StreamingResponse:
 
     事件顺序：
         session → status(routing) → meta → status(tool) → tool_result
-                → status(compose)? → token* → done
+                → status(compose)? → narrative* | token* → token(完整 JSON，兼容) → done
+
+    `narrative.data.part` ∈ opening(逐字 delta) / opening_end / group(分区标题)
+    / item(一款商品的解说，带所属分区) / summary(结尾总结) / followup(一条追问)；
+    前端按到达顺序弹出：先开场白、再逐张卡片、最后总结和追问。
 
     `status.data.message` 是给用户看的"识别中…/检索中…/生成中…"提示，
     前端可显示成 loading 胶囊；`meta`/`tool_result` 是结构化数据。
 
     客户端用 `EventSource` 或 `requests.get(stream=True)` 消费。
     """
-    session = _sessions.get_or_create(req.session_id)
-    _attach_user_memory(session, req.user_id)
-    agent = _get_agent()
-    image = _resolve_image(req)
+    turn = _turn_gate.begin(req.session_id)
+    try:
+        session = _sessions.get_or_create(req.session_id)
+        _attach_user_memory(session, req.user_id)
+        agent = _get_agent()
+        image = _resolve_image(req)
+        image_base = products_router.image_base_url(request)
+    except BaseException:
+        _turn_gate.finish(req.session_id, turn)
+        raise
 
     def _format_sse(event: str, payload: Any) -> str:
         data = json.dumps(payload, ensure_ascii=False)
@@ -325,8 +508,9 @@ def chat_stream(req: ChatRequest) -> StreamingResponse:
 
     def _generator():
         # 首条：先把 session_id 告诉客户端（便于客户端持久化）
-        yield _format_sse("session", {"session_id": session.session_id})
+        stream = None
         try:
+            yield _format_sse("session", {"session_id": session.session_id})
             # 有图 → 走图搜（拍照找货）；query 作为随图附带文字（可空）
             if image:
                 stream = agent.handle_image_turn_stream(
@@ -339,14 +523,27 @@ def chat_stream(req: ChatRequest) -> StreamingResponse:
                 if ev["type"] == "done":
                     for memory_event in _apply_realtime_preference_updates(req.query, session):
                         yield _format_sse("memory_update", memory_event)
+                if ev["type"] == "tool_result":
+                    memory_service.record_turn(
+                        _user_memory, session.user_id, session.session_id, ev["data"] or {}, req.query
+                    )
+                    # 对比表等 Agent 层产物里的商品图改成后端自己的 /images/{id}
+                    products_router.absolutize_image_urls(
+                        (ev["data"] or {}).get("payload"), image_base
+                    )
                 yield _format_sse(ev["type"], ev["data"])
         except Exception as exc:  # noqa: BLE001 - 流式中任何异常都要给前端
             logger.exception("Stream pipeline crashed")
             yield _format_sse("error", {"message": f"{type(exc).__name__}: {exc}"})
         finally:
-            # 流结束（含正常/异常）后持久化会话，history + working_memory 都已在
-            # 生成器内部更新完毕，此时落盘保证重启可恢复。
-            _sessions.save(session)
+            # 先关闭 Agent 流：客户端中断时半截回合在这一步写入 session。
+            # 之后再持久化，history + working_memory 才是完整的，重启可恢复。
+            try:
+                if stream is not None:
+                    stream.close()
+                _sessions.save(session)
+            finally:
+                _turn_gate.finish(req.session_id, turn)
 
     headers = {
         "Cache-Control": "no-cache, no-transform",
@@ -354,7 +551,11 @@ def chat_stream(req: ChatRequest) -> StreamingResponse:
         "X-Accel-Buffering": "no",
         "Connection": "keep-alive",
     }
-    return StreamingResponse(_generator(), media_type="text/event-stream", headers=headers)
+    return StreamingResponse(
+        _close_when_finished(_generator()),
+        media_type="text/event-stream",
+        headers=headers,
+    )
 
 
 @app.post("/sessions/{session_id}/reset")
@@ -445,7 +646,7 @@ def get_cart() -> dict[str, Any]:
 
 
 @app.post("/compare")
-def compare(req: CompareRequest) -> dict[str, Any]:
+def compare(req: CompareRequest, request: Request) -> dict[str, Any]:
     """商品对比：给定 2 个商品 id，返回结构化对比表 + 购买建议。
 
     对话路径走 compare 工具（SSE），这个 REST 端点供「对比页」直接调用，
@@ -454,7 +655,12 @@ def compare(req: CompareRequest) -> dict[str, Any]:
     from agent.comparison import build_comparison
     from store.product_store import ProductStore
 
-    ids = [pid.strip() for pid in req.product_ids if pid and pid.strip()]
+    selections: dict[str, str] = {}
+    if req.items:
+        ids = [it.product_id.strip() for it in req.items if it.product_id and it.product_id.strip()]
+        selections = {it.product_id.strip(): it.sku_id for it in req.items if it.sku_id}
+    else:
+        ids = [pid.strip() for pid in req.product_ids if pid and pid.strip()]
     if len(ids) < 2:
         raise HTTPException(status_code=400, detail="对比至少需要 2 个商品 id")
     ids = ids[:2]  # 固定对比 2 件
@@ -468,7 +674,17 @@ def compare(req: CompareRequest) -> dict[str, Any]:
     if len(details) < 2:
         raise HTTPException(status_code=404, detail="有效商品不足 2 个，无法对比")
 
-    return build_comparison(details, focus=(req.focus or ""))
+    comparison = build_comparison(
+        details,
+        focus=(req.focus or ""),
+        selections=selections or None,
+        budget_max=req.budget_max,
+        budget_min=req.budget_min,
+    )
+    products_router.absolutize_image_urls(
+        {"comparison": comparison}, products_router.image_base_url(request)
+    )
+    return comparison
 
 
 @app.post("/title")
@@ -504,7 +720,7 @@ def generate_title(req: TitleRequest) -> dict[str, str]:
             ],
             temperature=0.3,
             max_tokens=20,
-            timeout=float(os.getenv("ARK_TITLE_TIMEOUT", "8")),
+            timeout=float(os.getenv("LLM_TITLE_TIMEOUT", os.getenv("DASHSCOPE_TITLE_TIMEOUT", "8"))),
         )
         title = (resp.choices[0].message.content or "").strip()
         title = title.strip("「」\"'。.，、 \n\t")[:12]

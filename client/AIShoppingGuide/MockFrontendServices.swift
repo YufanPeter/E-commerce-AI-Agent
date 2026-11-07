@@ -386,6 +386,34 @@ final class MockPreferenceService: PreferenceServicing {
     func undoPreference(userID: String, undoToken: String) async throws -> UserPreferencePayload {
         preference
     }
+
+    private var memory = MemoryViewPayload.preview
+
+    func fetchMemory(userID: String) async throws -> MemoryViewPayload { memory }
+
+    func tellMemory(userID: String, text: String) async throws -> MemoryActionResult {
+        MemoryActionResult(message: "记下了，解说时会参考", undoToken: nil, view: memory)
+    }
+
+    func confirmMemory(userID: String, itemID: String) async throws -> MemoryActionResult {
+        MemoryActionResult(message: "已记住", undoToken: nil, view: memory)
+    }
+
+    func rejectMemory(userID: String, itemID: String) async throws -> MemoryActionResult {
+        MemoryActionResult(message: "好的，不再提这条", undoToken: nil, view: memory)
+    }
+
+    func deleteMemory(userID: String, itemID: String) async throws -> MemoryActionResult {
+        MemoryActionResult(message: "已忘掉这条", undoToken: "undo_preview", view: memory)
+    }
+
+    func undoMemory(userID: String, undoToken: String) async throws -> MemoryActionResult {
+        MemoryActionResult(message: "已恢复", undoToken: nil, view: memory)
+    }
+
+    func setPersonalization(userID: String, enabled: Bool) async throws -> MemoryViewPayload { memory }
+
+    func clearMemory(userID: String) async throws -> MemoryViewPayload { .empty(userID: userID) }
 }
 
 final class MockMediaUploadService: MediaUploadServicing {

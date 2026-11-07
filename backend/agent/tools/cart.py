@@ -28,9 +28,10 @@ from typing import Any
 from agent.llm_actions import ActionSpec, dispatch_action
 from agent.session import AgentSession
 from agent.tools.base import ToolResult
-from agent.tools.resolve import resolve_one
-from agent.tools.reference import resolve_indices, resolve_by_name, extract_name_query
+from agent.tools.resolve import enrich_candidates, focus_index_in, resolve_one
+from agent.tools.reference import attribute_matches, resolve_indices, resolve_by_name, extract_name_query
 from store.cart_store import CartNotFoundError, CartStore, DEFAULT_ADDRESS
+from store import sku_select
 from store.product_store import ProductStore
 
 
@@ -175,7 +176,7 @@ class CartTool:
         # dispatch_action 的 args.index 可能来自 router/LLM 对上下文的猜测；
         # 用户只说"帮我加入购物车"时若上一轮刚聚焦了小米，不能让这个猜测
         # 覆盖 last_focus_product_id，错加成列表第一个 iPad。
-        parsed = resolve_indices(query, len(last_hits))
+        parsed = resolve_indices(query, len(last_hits), focus_index=focus_index_in(last_hits, session))
         idx = (parsed[0] + 1) if parsed else None
         if idx is not None:
             i = int(idx) - 1
@@ -186,18 +187,29 @@ class CartTool:
                 if not brand_ids or target_id in brand_ids:
                     return self._begin_add(target_id, qty, session, query, source="explicit_index")
 
-        # 2) 当前推荐列表里名称/品牌命中（快路径：屏幕上就有，直接定位）
-        named = resolve_by_name(query, last_hits)
+        # 2) 当前推荐列表里名称/品牌/规格值命中（快路径：屏幕上就有，直接定位）。
+        #    候选先补上 SKU 规格值，「黑色那个加购物车」才能靠「黑色」定位到商品，
+        #    之后 _begin_add 会再用同一句话把黑色这个规格也选上。
+        enriched_hits = self._enrich_candidates(last_hits)
+        named = resolve_by_name(query, enriched_hits)
         if len(named) == 1:
             return self._begin_add(last_hits[named[0]]["product_id"], qty, session, query, source="context_name")
         if len(named) > 1:
             # 同品牌多品类（「华为耳机」命中华为耳机+华为手机）→ 先让 LLM 按子品类
             # 语义挑唯一一款，挑不出再列候选反问，避免反复追问。
-            subset = [last_hits[i] for i in named]
-            picked = resolve_one(query, self._enrich_candidates(subset))
+            subset = [enriched_hits[i] for i in named]
+            picked = resolve_one(query, subset)
             if picked is not None:
                 return self._begin_add(subset[picked]["product_id"], qty, session, query, source="semantic_context_match")
             return self._ask_which_product(subset, session)
+
+        # 2.5) 没点名、只说了个规格值（「42 码的加进来」「黑色的来一件」）：
+        #      指向刚聚焦（详情介绍过 / 刚加购过）的那一款，规格交给 _begin_add 用同一句话选。
+        focus = session.get("last_focus_product_id")
+        if focus and not brand_ids:
+            focus_hit = next((h for h in enriched_hits if str(h.get("product_id")) == str(focus)), None)
+            if focus_hit is not None and attribute_matches(query, focus_hit):
+                return self._begin_add(str(focus), qty, session, query, source="focus_with_spec")
 
         # 3) 全库点名检索（text2sql 思路）：先拿原句直接和库里品牌名做子串匹配，
         #    "请你把小米加入购物车"这种带语气前缀也能稳稳命中"小米"；品牌没命中
@@ -266,20 +278,7 @@ class CartTool:
         """给候选补上 brand/category/sub_category，供 LLM 语义消歧用依据。
 
         富化失败（取详情异常）不影响主流程——LLM 仍可只凭 title 消歧。"""
-        enriched: list[dict[str, Any]] = []
-        for cand in candidates:
-            item = dict(cand)
-            try:
-                detail = self._products.get_product_detail(cand["product_id"])
-            except Exception:  # noqa: BLE001
-                detail = None
-            if detail is not None:
-                item.setdefault("title", detail.title)
-                item["brand"] = detail.brand
-                item["category"] = detail.category
-                item["sub_category"] = detail.sub_category
-            enriched.append(item)
-        return enriched
+        return enrich_candidates(candidates, self._products)
 
     def _resolve_pending_add(
         self, query: str, session: AgentSession, pending_add: dict[str, Any]
@@ -491,137 +490,25 @@ class CartTool:
 
     @staticmethod
     def _varying_dims(skus: list[dict[str, Any]]) -> "OrderedDict[str, list[str]]":
-        """提取在给定 SKU 集合里取值多于一个的维度（颜色/尺码/容量…）。
-
-        纯数字型维度（尺码/容量）按数值升序排列，便于阅读；其它维度保持出现顺序。"""
-        dim_values: "OrderedDict[str, list[str]]" = OrderedDict()
-        for sku in skus:
-            for key, val in sku["options"].items():
-                dim_values.setdefault(key, [])
-                if val not in dim_values[key]:
-                    dim_values[key].append(val)
-        return OrderedDict(
-            (k, CartTool._sort_values(vs)) for k, vs in dim_values.items() if len(vs) > 1
-        )
+        return sku_select.varying_dims(skus)
 
     @staticmethod
     def _sort_values(values: list[str]) -> list[str]:
-        """若每个取值都含数字（尺码/容量），按数字升序；否则保持原顺序。"""
-        keyed: list[tuple[int, str]] = []
-        for v in values:
-            match = re.search(r"\d+", v)
-            if not match:
-                return values
-            keyed.append((int(match.group()), v))
-        return [v for _, v in sorted(keyed, key=lambda x: x[0])]
+        return sku_select.sort_values(values)
 
     def _filter_skus(
         self, query: str, skus: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
-        """按用户这句话里能识别到的规格值过滤 SKU（覆盖所有品类）。
-
-        没识别到任何规格 → 原样返回（触发反问）；识别到几个维度 →
-        取交集，返回满足全部约束的 SKU。
-
-        两段式匹配，确定性优先：
-        ① 精确整值匹配（主路径）：用户这句里**原样包含**某个规格取值的完整字符串
-           即采纳。前端规格卡发的就是库里的 canonical 值（如 '12GB+512GB'/'M码'/
-           '幻影紫'），所以点选场景永远走这条、零歧义、永不死循环。同维度多个值都
-           整串命中时取**最长**的那个（'12GB+512GB' 胜过假想子串），杜绝共享前缀误配。
-        ② 模糊打分回退（仅当某维度精确匹配没命中）：用户打字/语音的近似说法
-           （如只说 '512' 或 '深灰'）才退回 token 打分，取唯一最高分；并列则不约束。
-        """
-        dims = self._varying_dims(skus)
-        constraints: dict[str, str] = {}
-        for dim, values in dims.items():
-            chosen = self._pick_dim_value(values, query)
-            if chosen is not None:
-                constraints[dim] = chosen
-        if not constraints:
-            return list(skus)
-        return [
-            sku for sku in skus
-            if all(sku["options"].get(d) == v for d, v in constraints.items())
-        ]
+        """按用户这句话里能识别到的规格值过滤 SKU（实现见 store.sku_select）。"""
+        return sku_select.filter_skus(query, skus)
 
     @staticmethod
     def _pick_dim_value(values: list[str], query: str) -> str | None:
-        """在某维度的候选取值里，选出用户这句话指定的那个；选不出返回 None。"""
-        q = query or ""
-        q_lower = q.lower()
-        # ① 精确整值命中（取最长，避免子串型误配）。大小写不敏感。
-        exact = [
-            v for v in values
-            if v and (v in q or v.lower() in q_lower)
-        ]
-        if exact:
-            exact.sort(key=len, reverse=True)
-            # 最长唯一 → 采纳；若并列最长（理论上 canonical 值不会，稳妥起见）则不约束
-            if len(exact) == 1 or len(exact[0]) > len(exact[1]):
-                return exact[0]
-            return None
-        # ② 模糊打分回退：取唯一最高分，并列视为歧义不约束。
-        best_val: str | None = None
-        best_score = 0
-        tie = False
-        for val in values:
-            score = CartTool._value_match_score(val, q)
-            if score > best_score:
-                best_score, best_val, tie = score, val, False
-            elif score == best_score and score > 0:
-                tie = True
-        if best_val is not None and best_score > 0 and not tie:
-            return best_val
-        return None
+        return sku_select.pick_dim_value(values, query)
 
     @staticmethod
     def _value_match_score(value: str, query: str) -> int:
-        """用户话里命中了该规格取值的多少个 token（数字/中文片段/英文整词）。
-
-        分数越高代表匹配越完整，用于同维度多取值的消歧。
-
-        匹配按"整 token"进行，避免松散的片段误配（例如规格值
-        '灰色 Asphalt Grey' 里的 'sp' 撞上商品名 'Osprey' 的 'sp'）：
-        - 数字型（尺码/容量，如 '42码'/'256GB'/'20L'）：作为独立数字整段命中。
-        - 中文片段（如 '灰色'/'暗夜黑实战色'）：整段中文子串命中；
-          较长（≥3 字）的中文值额外允许 ≥2 字连续片段命中。
-        - 英文单词（如 'Black'）：作为完整单词（≥3 字母）命中，
-          不做任意 2 字母片段匹配。"""
-        value = (value or "").strip()
-        if not value:
-            return 0
-        q = query.lower()
-        score = 0
-        # 0) 字母尺码（M码/L码/XL码/S/XXL 等）：字母前缀 ≤3，整段带左右边界命中。
-        #    左边界 (?<![a-z]) 关键——否则 'L码' 会命中 'XL码'、'S' 命中 'XS'。
-        #    右边界：带'码'时'码'即右锚；裸字母要求右侧非字母。尺码识别成功记 1 分。
-        size_match = re.fullmatch(r"([A-Za-z]{1,3})(码)?", value)
-        if size_match:
-            token = value.lower()
-            right_guard = "" if size_match.group(2) else r"(?![a-z])"
-            if re.search(rf"(?<![a-z]){re.escape(token)}{right_guard}", q):
-                score += 1
-            return score
-        # 1) 数字 token：要求是独立数字（前后非数字），避免 28 命中 280
-        for num in re.findall(r"\d+", value):
-            if re.search(rf"(?<!\d){re.escape(num)}(?!\d)", query):
-                score += 1
-        # 2) 中文连续片段：≥2 字才整段命中（避免 "码"/"色" 这类单字单位误配）；
-        #    ≥3 字的长值额外允许 ≥2 字连续片段命中（如 "暗夜黑" 命中 "暗夜黑实战色"）
-        for run in re.findall(r"[\u4e00-\u9fff]+", value):
-            if len(run) >= 2 and run in query:
-                score += 1
-            elif len(run) >= 3:
-                for i in range(len(run) - 1):
-                    if run[i:i + 2] in query:
-                        score += 1
-                        break
-        # 3) 英文整词（≥3 字母）
-        for word in re.findall(r"[a-zA-Z]{3,}", value):
-            if word.lower() in q:
-                score += 1
-        return score
-
+        return sku_select.value_match_score(value, query)
 
     @staticmethod
     def _match_ordinal(

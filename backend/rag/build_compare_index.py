@@ -115,7 +115,7 @@ def build_index(
 
     existing = {} if force else _load_existing(out_path)
     todo = [pid for pid in product_ids if pid not in existing]
-    timeout = float(os.getenv("ARK_TIMEOUT", "30"))
+    timeout = float(os.getenv("DASHSCOPE_TIMEOUT", "30"))
     logger.info(
         "对比索引：共 %d 个商品，已存在 %d，本次需抽取 %d",
         len(product_ids), len(existing), len(todo),

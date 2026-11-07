@@ -226,12 +226,14 @@ class TestComparisonBuilder:
 
         labels = [r["label"] for r in result["rows"]]
         assert labels[0] == "价格"
-        assert labels[1:] == comparison._CATEGORY_DIMENSIONS["数码电子"]
+        # 多规格商品多一行「价格区间」；没有 SKU 数据时类目维度全部保留
+        assert labels[1] == "价格区间"
+        assert labels[2:] == comparison._CATEGORY_DIMENSIONS["数码电子"]
         # 价格行高亮最便宜者；文本维度不判优（highlight=None）
         assert result["rows"][0]["highlight"] == 1  # p2(7499) < p1(8999)
         assert all(r["highlight"] is None for r in result["rows"][1:])
         # 维度值来自索引
-        assert result["rows"][1]["values"] == ["A19 强", "澎湃"]
+        assert result["rows"][2]["values"] == ["A19 强", "澎湃"]
         # 选购建议已下线：recommendation 恒为空
         assert result["recommendation"] == ""
 
@@ -244,6 +246,8 @@ class TestComparisonBuilder:
         # 仍有维度行（占位），但值都是「—」
         assert result["rows"][0]["label"] == "价格"
         for row in result["rows"][1:]:
+            if row["label"] == "价格区间":
+                continue
             assert row["values"] == ["—", "—"]
         assert result["recommendation"] == ""
 
@@ -306,3 +310,109 @@ def test_run_asks_when_llm_also_fails(monkeypatch):
     assert res.payload["comparison"] is None
     assert "哪几款" in (res.narrative_override or "")
     assert sess.get("pending_compare") is not None
+
+
+class TestSkuLevelComparison:
+    """SKU 级对比：两边各选一个确定规格，价格行用确定价，规格差异按维度拆行。"""
+
+    @staticmethod
+    def _with_skus():
+        from store.product_store import ProductSku
+
+        def sku(pid, i, price, **props):
+            return ProductSku(sku_id=f"{pid}_s{i}", product_id=pid, properties=props, price=price, stock_qty=9, status="active")
+
+        a = _detail("p1", "Apple iPhone 17 Pro", "Apple 苹果", "数码电子", 8999, 10999)
+        b = _detail("p2", "小米 17 Ultra", "小米", "数码电子", 7499, 8499)
+        a = a.__class__(**{**a.__dict__, "skus": [
+            sku("p1", 1, 8999, 存储="256GB", 颜色="深空黑"), sku("p1", 2, 10999, 存储="512GB", 颜色="深空黑"),
+        ]})
+        b = b.__class__(**{**b.__dict__, "skus": [
+            sku("p2", 1, 7499, 存储="12GB+256GB", 颜色="星芒黑"), sku("p2", 2, 8499, 存储="16GB+512GB", 颜色="雪域白"),
+        ]})
+        return [a, b]
+
+    def test_defaults_to_cheapest_sku_and_splits_dimensions(self):
+        from agent import comparison
+
+        with patch.object(comparison, "get_compare_index", return_value=comparison.CompareIndex({})):
+            result = comparison.build_comparison(self._with_skus())
+        products = result["products"]
+        assert products[0]["sku"]["sku_id"] == "p1_s1" and products[0]["sku"]["reason"] == "cheapest"
+        assert products[1]["sku"]["label"] == "12GB+256GB · 星芒黑"
+        assert [s["sku_id"] for s in products[0]["skus"]] == ["p1_s1", "p1_s2"]
+        rows = {r["label"]: r for r in result["rows"]}
+        assert rows["价格"]["values"] == ["¥8999", "¥7499"] and rows["价格"]["highlight"] == 1
+        assert rows["价格区间"]["values"] == ["¥8999 – ¥10999", "¥7499 – ¥8499"]
+        assert rows["存储"]["values"] == ["256GB", "12GB+256GB"]
+        assert rows["颜色"]["values"] == ["深空黑", "星芒黑"]
+        # 有逐维度 SKU 行后，离线概括的「存储规格」不再重复出现
+        assert "存储规格" not in rows
+
+    def test_query_and_explicit_selection_pick_skus(self):
+        from agent import comparison
+
+        details = self._with_skus()
+        with patch.object(comparison, "get_compare_index", return_value=comparison.CompareIndex({})):
+            by_query = comparison.build_comparison(details, query="对比 512G 的")
+            explicit = comparison.build_comparison(details, selections={"p2": "p2_s2"})
+            by_budget = comparison.build_comparison(details, budget_max=9000)
+        assert [p["sku"]["sku_id"] for p in by_query["products"]] == ["p1_s2", "p2_s2"]
+        assert [p["sku"]["reason"] for p in by_query["products"]] == ["query", "query"]
+        assert [p["sku"]["sku_id"] for p in explicit["products"]] == ["p1_s1", "p2_s2"]
+        assert explicit["products"][1]["sku"]["reason"] == "explicit"
+        assert [p["sku"]["reason"] for p in by_budget["products"]] == ["budget", "budget"]
+        rows = {r["label"]: r for r in by_query["rows"]}
+        assert rows["存储"]["values"] == ["512GB", "16GB+512GB"]
+        # 取值相同的维度也显示，让用户看清现在比的是哪两个规格
+        assert rows["颜色"]["values"] == ["深空黑", "雪域白"]
+
+
+def test_spec_switch_reply_detection():
+    from agent.tools.compare import is_spec_switch_reply
+
+    last = {
+        "product_ids": ["a", "b"],
+        "selections": {},
+        "options": {
+            "a": {"存储": ["12GB+256GB", "16GB+512GB"], "颜色": ["星芒黑"]},
+            "b": {"存储": ["12GB+256GB", "12GB+512GB"], "颜色": ["雪域白", "深空黑"]},
+        },
+    }
+    assert is_spec_switch_reply("换成512G的", last) is True
+    assert is_spec_switch_reply("看看白色的呢", last) is True
+    assert is_spec_switch_reply("推荐几款平板", last) is False      # 开新检索
+    assert is_spec_switch_reply("对比第一个和第三个", last) is False  # 重新点名两款
+    assert is_spec_switch_reply("加入购物车", last) is False
+    assert is_spec_switch_reply("换成512G的", None) is False
+
+
+def test_spec_switch_keeps_other_dimensions():
+    """「换成 512G」之后再说「高配版呢」：存储沿用 512G，只换版本。"""
+    from store.product_store import ProductSku
+
+    def sku(pid, i, price, **props):
+        return ProductSku(sku_id=f"{pid}_s{i}", product_id=pid, properties=props, price=price, stock_qty=9, status="active")
+
+    a = _detail("p1", "OPPO Find X9", "OPPO", "数码电子", 6999, 7799)
+    b = _detail("p2", "OPPO Reno 16", "OPPO", "数码电子", 3299, 3699)
+    a = a.__class__(**{**a.__dict__, "skus": [
+        sku("p1", 1, 6999, 存储="12GB+256GB", 版本="标准版"), sku("p1", 2, 7599, 存储="16GB+512GB", 版本="标准版"),
+        sku("p1", 3, 7399, 存储="12GB+256GB", 版本="高配版"), sku("p1", 4, 7799, 存储="16GB+512GB", 版本="高配版"),
+    ]})
+    b = b.__class__(**{**b.__dict__, "skus": [
+        sku("p2", 1, 3299, 存储="12GB+256GB", 版本="标准版"), sku("p2", 2, 3549, 存储="12GB+512GB", 版本="标准版"),
+        sku("p2", 3, 3449, 存储="12GB+256GB", 版本="高配版"), sku("p2", 4, 3699, 存储="12GB+512GB", 版本="高配版"),
+    ]})
+    tool = CompareTool(product_store=_FakeStore([a, b]))
+    sess = _session_with_hits([{"product_id": "p1", "title": a.title}, {"product_id": "p2", "title": b.title}])
+    from agent import comparison
+    with patch.object(comparison, "get_compare_index", return_value=comparison.CompareIndex({})):
+        first = tool.run("对比前两个", sess, {})
+        assert [p["sku"]["sku_id"] for p in first.payload["comparison"]["products"]] == ["p1_s1", "p2_s1"]
+        second = tool.run("换成512G的", sess, {})
+        assert [p["sku"]["sku_id"] for p in second.payload["comparison"]["products"]] == ["p1_s2", "p2_s2"]
+        third = tool.run("高配版呢", sess, {})
+        assert [p["sku"]["sku_id"] for p in third.payload["comparison"]["products"]] == ["p1_s4", "p2_s4"]
+        rows = {r["label"]: r for r in third.payload["comparison"]["rows"]}
+        assert rows["价格"]["values"] == ["¥7799", "¥3699"]

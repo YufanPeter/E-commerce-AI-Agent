@@ -1,0 +1,20 @@
+{"id": "mh001", "text": "我是混油皮", "expect": [{"kind": "attribute", "value": "混油皮", "status": "active"}]}
+{"id": "mh002", "text": "我鞋码43", "expect": [{"kind": "attribute", "value": "43码", "status": "active"}]}
+{"id": "mh003", "text": "平时都穿XL码", "expect": [{"kind": "attribute", "value": "XL码", "status": "active"}]}
+{"id": "mh004", "text": "以后别再推荐OPPO了", "expect": [{"kind": "brand_avoid", "value": "OPPO", "status": "active"}]}
+{"id": "mh005", "text": "我一直用兰蔻的护肤品", "expect": [{"kind": "brand_like", "value": "兰蔻", "status": "active"}]}
+{"id": "mh006", "text": "我一般买东西预算不超过500左右", "expect": [{"kind": "budget", "value": "-500", "status": "active"}]}
+{"id": "mh007", "text": "我对海鲜过敏", "expect": [{"kind": "avoid_term", "value": "海鲜", "status": "suggested"}]}
+{"id": "mh008", "text": "我乳糖不耐受，牛奶喝不了", "expect": [{"kind": "avoid_term", "value": "*", "status": "suggested"}]}
+{"id": "mh009", "text": "耐克的鞋我穿着一直不舒服，以后不考虑了", "expect": [{"kind": "brand_avoid", "value": "Nike", "status": "suggested"}]}
+{"id": "mh010", "text": "我属于那种特别怕晒的敏感肌", "expect": [{"kind": "attribute", "value": "敏感肌", "status": "active"}]}
+{"id": "mh011", "text": "推荐一款大容量的背包", "expect": []}
+{"id": "mh012", "text": "来双42码的跑鞋", "expect": []}
+{"id": "mh013", "text": "华为耳机续航怎么样", "expect": []}
+{"id": "mh014", "text": "帮我爸挑个手机，他喜欢华为", "expect": []}
+{"id": "mh015", "text": "再来几款不要苹果的", "expect": []}
+{"id": "mh016", "text": "今天预算2000以内", "expect": []}
+{"id": "mh017", "text": "这个颜色不错", "expect": []}
+{"id": "mh018", "text": "我朋友是干皮，推荐个面霜", "expect": []}
+{"id": "mh019", "text": "加入购物车", "expect": []}
+{"id": "mh020", "text": "有便宜点的吗", "expect": []}

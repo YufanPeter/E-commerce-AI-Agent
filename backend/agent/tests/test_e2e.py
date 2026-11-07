@@ -1,4 +1,4 @@
-"""E2E 测试：真实调 Ark + Chroma，验证 happy path（含流式）。
+"""E2E 测试：真实调百炼 + Chroma，验证 happy path（含流式）。
 
 仅在 RUN_E2E=1 时执行；CI 默认 skip。
 """
@@ -14,7 +14,9 @@ from agent.session import AgentSession
 
 
 _RUN = os.environ.get("RUN_E2E") == "1"
-pytestmark = pytest.mark.skipif(not _RUN, reason="需要 RUN_E2E=1 与 ARK_API_KEY")
+pytestmark = pytest.mark.skipif(
+    not _RUN, reason="需要 RUN_E2E=1 与 DASHSCOPE_API_KEY"
+)
 
 
 @pytest.fixture(scope="module")

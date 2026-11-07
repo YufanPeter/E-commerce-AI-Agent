@@ -34,6 +34,8 @@ _SYSTEM_PROMPT = """你是电商导购里的「商品指向判定器」。下面
    - 「耳机」「蓝牙耳机」→ 子品类是「真无线耳机」的那款；
    - 「手机」→ 子品类「智能手机」；「平板」→「平板电脑」；
    - 「面膜」「防晒」→ 对应美妆子品类；只报品牌名就按品牌匹配。
+   - 「黑色那个」「42 码的」「大容量的」这类按规格说的，看候选的「可选规格」里谁有这个取值；
+     多款都有就无法区分，返回空数组。
 2. 用户可能一次点名多款（如「华为和小米这两款」「第一个和第三个」）——把所有命中的编号都返回。
 3. 能明确锁定就返回对应编号（数组）。如果完全无法区分、或这句跟所有候选都不沾边，返回空数组（表示无法确定，需要继续追问）。
 只调用 pick_products 函数返回结果，不要输出多余文字。"""
@@ -77,6 +79,13 @@ def _format_candidates(candidates: list[dict[str, Any]]) -> str:
             parts.append(f"品类：{category}")
         if sub_category:
             parts.append(f"子品类：{sub_category}")
+        options = cand.get("options") or {}
+        if isinstance(options, dict) and options:
+            spec = "；".join(
+                f"{dim}={'/'.join(str(v) for v in values)}" for dim, values in options.items() if values
+            )
+            if spec:
+                parts.append(f"可选规格：{spec}")
         lines.append("｜".join(parts))
     return "\n".join(lines)
 
@@ -104,7 +113,7 @@ def _llm_pick(
             f"请判断用户指向哪一款或哪几款（无法确定就返回空数组）。"
         )
         response = client.chat.completions.create(
-            model=get_model_id(),
+            model=get_model_id(role="fast"),
             messages=[
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user", "content": user_content},

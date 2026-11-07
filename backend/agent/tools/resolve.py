@@ -29,21 +29,84 @@ from agent.tools.reference import resolve_by_name, resolve_indices
 logger = logging.getLogger(__name__)
 
 
+def focus_index_in(hits: list[dict[str, Any]], session: Any) -> int | None:
+    """当前聚焦商品（``last_focus_product_id``）在 hits 里的下标；没有则 None。
+
+    「上一个 / 下一个」这类相对指代以它为锚点。"""
+    focus_id = session.get("last_focus_product_id") if session is not None else None
+    if not focus_id:
+        return None
+    for i, hit in enumerate(hits):
+        if str(hit.get("product_id")) == str(focus_id):
+            return i
+    return None
+
+
+def enrich_candidates(
+    candidates: list[dict[str, Any]],
+    store: Any,
+) -> list[dict[str, Any]]:
+    """给候选补齐 brand / category / sub_category / options（SKU 规格值），三个工具共用。
+
+    options 形如 {"颜色": ["黑色", "白色"], "尺码": ["41", "42"]}，只保留取值多于一个
+    的维度——这些才是「黑色那个」「42 码的」能用来区分的属性；规则匹配
+    （resolve_by_name）和 LLM 消歧（llm_match）都会读它。
+    富化失败（取详情异常）不影响主流程——仍可只凭 title 消歧。"""
+    enriched: list[dict[str, Any]] = []
+    for cand in candidates:
+        item = dict(cand)
+        if "options" not in item and store is not None:
+            try:
+                detail = store.get_product_detail(item["product_id"])
+            except Exception:  # noqa: BLE001
+                detail = None
+            if detail is not None:
+                item.setdefault("title", detail.title)
+                item["brand"] = detail.brand
+                item["category"] = detail.category
+                item["sub_category"] = detail.sub_category
+                item["options"] = _sku_options(getattr(detail, "skus", None) or [])
+        enriched.append(item)
+    return enriched
+
+
+def _sku_options(skus: list[Any]) -> dict[str, list[str]]:
+    values: dict[str, list[str]] = {}
+    for sku in skus:
+        props = getattr(sku, "properties", None)
+        if props is None and isinstance(sku, dict):
+            props = sku.get("properties") or sku.get("options")
+        if not isinstance(props, dict):
+            continue
+        for key, value in props.items():
+            text = str(value).strip()
+            if not text:
+                continue
+            bucket = values.setdefault(str(key), [])
+            if text not in bucket:
+                bucket.append(text)
+    # 单值维度也要留着：一款手机只有「星芒黑」一个颜色，但正是它把这款和别的区分开；
+    # 「是否在候选之间有区分度」由 resolve_by_name 在候选集合层面判断。
+    return values
+
+
 def resolve_one(
     query: str,
     candidates: list[dict[str, Any]],
     *,
     use_llm: bool = True,
+    focus_index: int | None = None,
 ) -> int | None:
     """在候选里定位用户指向的【唯一一款】，返回 0-based 索引；定不了返回 None。
 
-    分层：序号唯一 → 名称唯一 →（歧义时）LLM 消歧。candidates 每项建议带
-    title/brand/category/sub_category，LLM 消歧才有依据。
+    分层：序号唯一（含「上一个 / 下一个」相对指代，以 focus_index 为锚）→
+    名称 / 规格值唯一 →（歧义时）LLM 消歧。candidates 每项建议带
+    title/brand/category/sub_category/options，LLM 消歧才有依据。
     """
     if not candidates:
         return None
 
-    indices = resolve_indices(query, len(candidates))
+    indices = resolve_indices(query, len(candidates), focus_index=focus_index)
     if indices:
         i = indices[0]
         if 0 <= i < len(candidates):
@@ -68,6 +131,7 @@ def resolve_many(
     *,
     k: int = 2,
     use_llm: bool = True,
+    focus_index: int | None = None,
 ) -> list[int]:
     """在候选里定位用户指向的【最多 k 款】，返回 0-based 索引列表（保序去重）。
 
@@ -81,7 +145,7 @@ def resolve_many(
 
     # ① 序号永远可信，先收。
     picked: list[int] = []
-    for i in resolve_indices(query, len(candidates)):
+    for i in resolve_indices(query, len(candidates), focus_index=focus_index):
         if 0 <= i < len(candidates) and i not in picked:
             picked.append(i)
     if len(picked) >= k:

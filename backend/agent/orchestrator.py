@@ -31,7 +31,9 @@ from __future__ import annotations
       orchestrator 仍把已 yield 的片段拼起来记入 session 历史
 """
 
+import json
 import logging
+import os
 import re
 import time
 from collections.abc import Iterator
@@ -47,9 +49,9 @@ from agent.tools.clarify import ClarifyTool
 from agent.tools.compare import CompareTool, is_compare_selection_reply
 from agent.tools.fallback import FallbackTool
 from agent.tools.product_detail import ProductDetailTool, is_detail_selection_reply
-from agent.tools.reference import resolve_by_name, resolve_indices
+from agent.tools.reference import has_relative_reference, resolve_by_name, resolve_indices
 from agent.tools.recommend import RecommendTool
-from agent.tools.refine import RefineTool
+from agent.tools.refine import RefineTool, parse_more_request
 
 
 logger = logging.getLogger(__name__)
@@ -81,7 +83,9 @@ class AgentResponse:
 #   status:      阶段进度提示（人类可读，前端显示"识别中…"这类胶囊）
 #   meta:        路由决策 + trace 元信息（结构化，给开发者/调试）
 #   tool_result: 工具产出的结构化 payload（前端立刻渲染卡片）
-#   token:       一段文本片段（拼接即为 narrative）
+#   narrative:   composer 的结构化流式片段：{"part": "opening"|"opening_end"|"group"|"item"|"summary"|"followup", ...}
+#                开场白逐字到、商品解说一款一款到、总结和追问最后到——前端按到达顺序弹出
+#   token:       一段文本片段（纯文本工具逐 token；结构化工具在末尾再补一份完整 JSON 兼容旧客户端）
 #   done:        本轮结束，附最终 timings
 #   error:       致命错误（router / tool 阶段不可恢复时）
 #
@@ -110,9 +114,10 @@ _NEW_SEARCH_WORDS = (
 )
 _BRAND_OR_MODEL_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9]+|[\u4e00-\u9fff]{2,}")
 
-# 各工具对应的"正在工作中"提示文案
+# 各工具对应的"正在工作中"提示文案，前端显示成思考步骤
+_THINKING_STEP = "思考中…"
 _TOOL_WORKING_HINT = {
-    "recommend": "正在为你检索商品…",
+    "recommend": "正在搜索商品…",
     "refine": "正在重新筛选…",
     "compare": "正在对比商品…",
     "product_detail": "正在查看商品详情…",
@@ -120,6 +125,11 @@ _TOOL_WORKING_HINT = {
     "clarify": "正在整理追问…",
     "fallback": "正在生成回复…",
 }
+_STEP_QUERY_MAX_CHARS = 24
+# 口语开头对"正在搜索 XX"这句话没有信息量，去掉后只留要找的东西
+_STEP_QUERY_FILLER_RE = re.compile(
+    r"^(你好|您好|请|麻烦)?(帮我|给我|我想要|我想|我要|想要)?(推荐|找|搜索|搜|看看|买)?(一下|几款|一些|一款|几个)?"
+)
 
 # 各工具对应的"生成最终回复中"提示文案
 _TOOL_COMPOSE_HINT = {
@@ -171,6 +181,8 @@ class Agent:
 
         session.add_user(query)
 
+        if _should_prefetch(query, session):
+            self._prefetch_search_understanding(query)
         decision = self._safe_route(query, session, trace)
         tool_result = self._safe_run_tool(decision, session, trace, raw_query=query)
 
@@ -200,7 +212,14 @@ class Agent:
         query: str,
         session: AgentSession,
     ) -> Iterator[dict[str, Any]]:
-        """流式版：按顺序 yield meta/tool_result/token*/done。"""
+        """流式版：按顺序 yield meta/tool_result/token*/done。调用方提前关闭时记录半截回合。"""
+        return _capture_interrupt(self._turn_events(query, session), session)
+
+    def _turn_events(
+        self,
+        query: str,
+        session: AgentSession,
+    ) -> Iterator[dict[str, Any]]:
         trace: dict[str, Any] = {"timings": {}}
         query = (query or "").strip()
 
@@ -218,8 +237,10 @@ class Agent:
 
         session.add_user(query)
 
-        # ① 路由
-        yield {"type": "status", "data": {"phase": "routing", "message": "识别意图中…"}}
+        # ① 路由（同时后台预取 query 解析 / 多需求拆解，和 router 并行）
+        yield {"type": "status", "data": {"phase": "routing", "message": _THINKING_STEP}}
+        if _should_prefetch(query, session):
+            self._prefetch_search_understanding(query)
         decision = self._safe_route(query, session, trace)
         yield {"type": "meta", "data": {
             "decision": decision.to_dict(),
@@ -230,35 +251,17 @@ class Agent:
         yield {"type": "status", "data": {
             "phase": "tool",
             "tool": decision.tool,
-            "message": _TOOL_WORKING_HINT.get(decision.tool, "处理中…"),
+            "message": _tool_step_text(decision, query),
         }}
         tool_result = self._safe_run_tool(decision, session, trace, raw_query=query)
         yield {"type": "tool_result", "data": tool_result.to_dict()}
 
-        # ③ Composer：流式
+        # ③ Composer：流式（结构化事件）
         if tool_result.needs_composer:
-            compose_hint = _TOOL_COMPOSE_HINT.get(decision.tool) or "正在生成回复…"
-            yield {"type": "status", "data": {"phase": "compose", "message": compose_hint}}
+            yield {"type": "status", "data": {"phase": "compose", "message": _compose_step_text(tool_result)}}
         t2 = time.perf_counter()
-        narrative_parts: list[str] = []
-        try:
-            for piece in self._composer.compose_stream(tool_result, session):
-                narrative_parts.append(piece)
-                yield {"type": "token", "data": piece}
-        except Exception as exc:  # noqa: BLE001 - 兜底，理论 composer_stream 已经吞了
-            logger.exception("Streaming composer raised unexpectedly")
-            trace["composer_error"] = repr(exc)
-            fallback = self._fallback_narrative(tool_result)
-            if not narrative_parts:
-                narrative_parts.append(fallback)
-                yield {"type": "token", "data": fallback}
+        narrative = yield from self._stream_composer(tool_result, session, trace)
         trace["timings"]["composer_ms"] = int((time.perf_counter() - t2) * 1000)
-
-        narrative = "".join(narrative_parts).strip()
-        if not narrative:
-            # 极端情况下流没产出任何 token，给个兜底
-            narrative = self._fallback_narrative(tool_result)
-            yield {"type": "token", "data": narrative}
 
         session.add_assistant(narrative)
 
@@ -276,19 +279,30 @@ class Agent:
         session: AgentSession,
         hint_text: str = "",
     ) -> Iterator[dict[str, Any]]:
+        """图片输入的流式入口，提前关闭时的处理与文本链路一致。"""
+        return _capture_interrupt(self._image_turn_events(image, session, hint_text), session)
+
+    def _image_turn_events(
+        self,
+        image: str,
+        session: AgentSession,
+        hint_text: str = "",
+    ) -> Iterator[dict[str, Any]]:
         """图片输入的流式入口：看图 → 抽检索词 → 视觉重排检索 → composer 流式。
 
         模态已知（就是图搜），无需 router LLM 分类，直接走 recommend 的图搜路径。
         ``hint_text`` 是用户随图附带的文字（图+文场景，可空）。
         """
-        from llm.vision import UNRECOGNIZED, vision_extract_query
+        from llm.vision import UNRECOGNIZED, parsed_query_from_phrase, vision_extract_query
 
         trace: dict[str, Any] = {"timings": {}}
         image = (image or "").strip()
         hint_text = (hint_text or "").strip()
 
-        # ① 看图：把图片抽成中文检索词
+        # ① 看图：把图片抽成中文检索词。图片向量只依赖原图，和 VLM 看图并行算，
+        #    后面视觉重排直接用现成结果（省一次 embedding 往返）。
         yield {"type": "status", "data": {"phase": "vision", "message": "正在识别图片…"}}
+        embedding_future = _prefetch_image_embedding(image)
         t0 = time.perf_counter()
         try:
             extracted = vision_extract_query(image)
@@ -304,8 +318,16 @@ class Agent:
 
         # 图+文：把附带文字并入检索词，让"找便宜点的同款"这类约束也生效
         effective_query = extracted
+        # 纯图搜：检索意图由 VLM 短语确定性构造（品类按 taxonomy 匹配），跳过 2s 的
+        # 文本 query 解析。图+文：附带文字可能带价格 / 否定等约束，仍交给 query 解析。
+        prebuilt_parsed = None
         if extracted != UNRECOGNIZED and hint_text:
             effective_query = f"{extracted} {hint_text}"
+        elif extracted != UNRECOGNIZED:
+            try:
+                prebuilt_parsed = parsed_query_from_phrase(extracted)
+            except Exception as exc:  # noqa: BLE001 - 构造失败就走原来的 LLM 解析
+                logger.warning("parsed_query_from_phrase failed: %r", exc)
 
         decision = IntentDecision(
             tool="recommend",
@@ -315,7 +337,11 @@ class Agent:
         )
         yield {"type": "meta", "data": {
             "decision": decision.to_dict(),
-            "trace": {"timings": dict(trace["timings"]), "extracted_query": extracted},
+            "trace": {
+                "timings": dict(trace["timings"]),
+                "extracted_query": extracted,
+                "vision_parsed": prebuilt_parsed.to_dict() if prebuilt_parsed is not None else None,
+            },
         }}
 
         # 识别失败：不检索，友好澄清
@@ -337,7 +363,14 @@ class Agent:
         t1 = time.perf_counter()
         recommend = self._tools["recommend"]
         try:
-            tool_result = recommend.run_image(effective_query, image, session)
+            try:
+                tool_result = recommend.run_image(
+                    effective_query, image, session,
+                    image_embedding=embedding_future, parsed=prebuilt_parsed,
+                )
+            except TypeError:
+                # 测试 stub / 老实现不认识 image_embedding 参数
+                tool_result = recommend.run_image(effective_query, image, session)
         except Exception as exc:  # noqa: BLE001
             logger.exception("Visual search tool failed")
             trace["tool_error"] = repr(exc)
@@ -352,26 +385,10 @@ class Agent:
 
         # ③ composer 流式（与文本链路一致）
         if tool_result.needs_composer:
-            yield {"type": "status", "data": {"phase": "compose", "message": "正在生成推荐解说…"}}
+            yield {"type": "status", "data": {"phase": "compose", "message": _compose_step_text(tool_result)}}
         t2 = time.perf_counter()
-        narrative_parts: list[str] = []
-        try:
-            for piece in self._composer.compose_stream(tool_result, session):
-                narrative_parts.append(piece)
-                yield {"type": "token", "data": piece}
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("Streaming composer raised unexpectedly (image path)")
-            trace["composer_error"] = repr(exc)
-            fallback = self._fallback_narrative(tool_result)
-            if not narrative_parts:
-                narrative_parts.append(fallback)
-                yield {"type": "token", "data": fallback}
+        narrative = yield from self._stream_composer(tool_result, session, trace)
         trace["timings"]["composer_ms"] = int((time.perf_counter() - t2) * 1000)
-
-        narrative = "".join(narrative_parts).strip()
-        if not narrative:
-            narrative = self._fallback_narrative(tool_result)
-            yield {"type": "token", "data": narrative}
 
         session.add_assistant(narrative)
         yield {"type": "done", "data": {
@@ -382,6 +399,65 @@ class Agent:
 
     # ----------------------------- 内部 -----------------------------
 
+    def _stream_composer(
+        self,
+        tool_result: ToolResult,
+        session: AgentSession,
+        trace: dict[str, Any],
+    ) -> Iterator[dict[str, Any]]:
+        """把 composer 的结构化事件转成对外事件；返回最终 narrative（generator return）。
+
+        事件顺序：narrative*（开场白 delta → 商品解说逐款 → 追问逐条）/ token* →
+        末尾再发一次完整 narrative 的 token（结构化工具是 JSON），旧客户端据此渲染，
+        新客户端若已收到 narrative 片段可忽略它。"""
+        narrative = ""
+        structured_seen = False
+        events = None
+        try:
+            events = self._composer.compose_events(tool_result, session)
+            for ev in events:
+                kind = ev.get("type")
+                if kind == "final":
+                    narrative = (ev.get("data") or "").strip()
+                    break
+                if kind == "narrative":
+                    structured_seen = True
+                yield ev
+        except Exception as exc:  # noqa: BLE001 - 兜底，理论 compose_events 已经吞了
+            logger.exception("Streaming composer raised unexpectedly")
+            trace["composer_error"] = repr(exc)
+        finally:
+            close_events = getattr(events, "close", None)
+            if close_events is not None:
+                close_events()
+        if not narrative:
+            # 极端情况下流没产出任何内容，给个兜底
+            narrative = self._fallback_narrative(tool_result)
+            yield {"type": "token", "data": narrative}
+            return narrative
+        if structured_seen:
+            # 兼容：旧客户端只认 token 里的 JSON；新客户端收到 narrative 片段后会忽略这条。
+            yield {"type": "token", "data": narrative}
+        elif tool_result.narrative_override is None and tool_result.needs_composer:
+            # 纯文本工具（product_detail）已经逐 token 发过了，这里不再重复
+            pass
+        return narrative
+
+    @staticmethod
+    def _prefetch_search_understanding(query: str) -> None:
+        """在 router LLM 还在跑时，并行预取检索链路里的两次 LLM 调用。
+
+        首轮 / refine 的 rewritten_query 大多等于原句，预取结果直接命中缓存，
+        把"router → 解析 → 拆解"三段串行压成一段。猜错时只多花一次调用，不加延迟。"""
+        try:
+            from search.query_decomposer import prefetch_decompose
+            from search.query_understanding import prefetch_understand
+
+            prefetch_understand(query)
+            prefetch_decompose(query)
+        except Exception as exc:  # noqa: BLE001 - 预取只是加速，失败不影响主链路
+            logger.debug("prefetch skipped: %r", exc)
+
     def _safe_route(
         self, query: str, session: AgentSession, trace: dict[str, Any],
     ) -> IntentDecision:
@@ -390,8 +466,9 @@ class Agent:
         # 否则"暗夜黑 42码""第一个"这类回答会被路由误判为 refine/recommend。
         # 例外：用户明确改口开新检索（“推荐几款笔记本”“有没有便宜点的平板”），这类话
         # 带检索动词、不会是规格应答，应释放 pending 交回正常路由，而不是硬塞进 cart。
+        more_label = parse_more_request(query)
         if session.get("pending_cart") or session.get("pending_add"):
-            if _is_new_search_escape(query):
+            if _is_new_search_escape(query) or more_label is not None:
                 session.set("pending_cart", None)
                 session.set("pending_add", None)
                 logger.info("pending cart released: new-search escape detected")
@@ -438,6 +515,18 @@ class Agent:
                 logger.info("router skipped: pending compare clarification → tool=compare")
                 return decision
             session.set("pending_compare", None)
+        # "看更多"的意思是确定的，走 refine 沿用上一轮条件，不用再问 router。
+        if more_label is not None and session.recall_parsed():
+            decision = IntentDecision(
+                tool="refine",
+                rewritten_query=more_label or query,
+                confidence="high",
+                reasoning="see more of previous results",
+            )
+            trace["timings"]["router_ms"] = 0
+            trace["decision"] = decision.to_dict()
+            logger.info("router skipped: see more → tool=refine")
+            return decision
         t0 = time.perf_counter()
         try:
             decision = route(query, session)
@@ -473,6 +562,31 @@ class Agent:
     ) -> IntentDecision:
         """对少数高确定性意图做路由后保护，压住 LLM 抖动。"""
         raw_text = query or ""
+        # 「上一个 / 下一个呢」是相对当前聚焦商品的指代，不是让我重新推荐。
+        if (
+            decision.tool in {"recommend", "refine", "clarify"}
+            and has_relative_reference(raw_text)
+            and session.get("last_focus_product_id")
+            and session.recall_hits()
+        ):
+            return IntentDecision(
+                tool="product_detail",
+                rewritten_query=query,
+                confidence="high",
+                reasoning=f"post-route guard: relative reference to focused product; original={decision.tool}",
+            )
+        # 上一轮刚出对比表，这句只是换规格（「换成 512G 的」）→ 留在 compare 重算
+        last_cmp = session.get("last_comparison")
+        if last_cmp and decision.tool in {"recommend", "refine", "product_detail", "clarify"}:
+            from agent.tools.compare import is_spec_switch_reply
+
+            if is_spec_switch_reply(raw_text, last_cmp):
+                return IntentDecision(
+                    tool="compare",
+                    rewritten_query=query,
+                    confidence="high",
+                    reasoning=f"post-route guard: spec switch on last comparison; original={decision.tool}",
+                )
         compare_words = ("对比", "比较", "区别", "哪个好", "哪款好", "哪个更", "哪款更")
         if decision.tool == "recommend" and any(w in raw_text for w in compare_words):
             return IntentDecision(
@@ -517,7 +631,11 @@ class Agent:
             # 不能让 router 的 rewritten_query 改写掉用户原始指代；否则 LLM 一旦
             # 把“第一个”误补成错误商品名，工具就会对比错对象。
             tool_query = raw_query if decision.tool in {"compare", "product_detail"} else decision.rewritten_query
-            tool_result = tool.run(tool_query, session, slots={})
+            slots: dict[str, Any] = {}
+            more_label = parse_more_request(raw_query)
+            if decision.tool == "refine" and more_label is not None and session.recall_parsed():
+                slots["more_label"] = more_label
+            tool_result = tool.run(tool_query, session, slots=slots)
         except Exception as exc:  # noqa: BLE001
             logger.exception("Tool %s failed", decision.tool)
             trace["tool_error"] = repr(exc)
@@ -558,6 +676,198 @@ class Agent:
             titles = "、".join(h.get("title", "") for h in hits[:3])
             return f"为你找到 {len(hits)} 款商品，包括：{titles}。"
         return tool_result.narrative_override or "好的。"
+
+
+_IMAGE_EXECUTOR: Any | None = None
+
+
+def _tool_step_text(decision: IntentDecision, raw_query: str) -> str:
+    """工具开始前的步骤文案。此时结构化解析还没出来，用 router 改写后的查询说明在找什么。"""
+    if decision.tool not in {"recommend", "refine"}:
+        return _TOOL_WORKING_HINT.get(decision.tool, "处理中…")
+    more_label = parse_more_request(raw_query)
+    if more_label is not None:
+        return f"正在找更多{more_label}…" if more_label else "正在找更多商品…"
+    phrase = _STEP_QUERY_FILLER_RE.sub("", (decision.rewritten_query or "").strip(), count=1)
+    phrase = phrase.strip().rstrip("？?。.!！~～ 吧吗呢")
+    if not phrase:
+        return _TOOL_WORKING_HINT[decision.tool]
+    if len(phrase) > _STEP_QUERY_MAX_CHARS:
+        phrase = phrase[:_STEP_QUERY_MAX_CHARS] + "…"
+        return f"正在搜索{phrase}"
+    return f"正在搜索{phrase}…"
+
+
+def _filter_summary(parsed: dict[str, Any]) -> str:
+    """把解析出的硬条件拼成一句人能读的话，让用户看到系统是怎么理解需求的。"""
+    parts: list[str] = []
+    target = parsed.get("sub_category") or parsed.get("category")
+    if target:
+        parts.append(str(target))
+    brands = parsed.get("brand_include") or []
+    if brands:
+        parts.append("、".join(str(b) for b in brands))
+    low, high = parsed.get("min_price"), parsed.get("max_price")
+    if low is not None and high is not None:
+        parts.append(f"{low:g}-{high:g} 元")
+    elif high is not None:
+        parts.append(f"{high:g} 元以内")
+    elif low is not None:
+        parts.append(f"{low:g} 元以上")
+    avoid = [*(parsed.get("negative_ingredients") or []), *(parsed.get("brand_exclude") or [])]
+    if avoid:
+        parts.append("不要" + "、".join(str(a) for a in avoid))
+    return " · ".join(parts)
+
+
+def _compose_step_text(tool_result: ToolResult) -> str:
+    """工具结束后的步骤文案：说清实际找到了什么，只说发生过的事。"""
+    if tool_result.tool_name not in {"recommend", "refine"}:
+        return _TOOL_COMPOSE_HINT.get(tool_result.tool_name) or "正在生成回复…"
+    payload = tool_result.payload or {}
+    count = len(payload.get("products") or [])
+    if not count:
+        return "没有找到完全符合的，正在想替代方向…"
+    parsed = (payload.get("debug") or {}).get("parsed")
+    filters = _filter_summary(parsed) if isinstance(parsed, dict) else ""
+    found = f"按「{filters}」找到 {count} 款" if filters else f"找到 {count} 款"
+    return f"{found}，正在写推荐理由…"
+
+
+_INTERRUPTED_EMPTY_NOTE = "（用户中断了这轮回答，尚未给出结果）"
+_INTERRUPTED_TEXT_SUFFIX = "（回答被用户中断）"
+
+
+class _TurnProgress:
+    """记录本轮已经发给客户端的内容，中断时据此写入历史和工作记忆。"""
+
+    def __init__(self, prior_hits: list[Any]) -> None:
+        self._prior_hits = prior_hits
+        self._opening = ""
+        self._items: list[dict[str, str]] = []
+        self._summary = ""
+        self._tokens: list[str] = []
+        self._structured = False
+
+    def observe(self, event: dict[str, Any]) -> None:
+        kind = event.get("type")
+        data = event.get("data")
+        if kind == "token" and isinstance(data, str):
+            self._tokens.append(data)
+        if kind != "narrative" or not isinstance(data, dict):
+            return
+        self._structured = True
+        part = data.get("part")
+        if part == "opening":
+            self._opening += data.get("delta") or ""
+        elif part == "opening_end":
+            self._opening = data.get("text") or self._opening
+        elif part == "item" and data.get("productId"):
+            item = {"productId": data["productId"], "description": data.get("description") or ""}
+            if data.get("group"):
+                item["group"] = data["group"]
+            self._items.append(item)
+        elif part == "summary":
+            self._summary = data.get("text") or ""
+
+    def commit(self, session: AgentSession) -> None:
+        """用户消息还没有回答时才写入，已正常结束的回合不受影响。"""
+        if not session.history or session.history[-1].role != "user":
+            return
+        session.add_assistant(self._narrative())
+        self._align_last_hits(session)
+
+    def align_order_with_display(self, session: AgentSession) -> None:
+        """模型分组时会调整商品顺序，"第一个"要按屏幕上的顺序算。
+
+        没有解说的商品客户端会排在最后，这里保持一致。"""
+        hits = session.recall_hits()
+        by_id = {hit.get("product_id"): hit for hit in hits}
+        shown = [by_id[item["productId"]] for item in self._items if item["productId"] in by_id]
+        if not shown:
+            return
+        shown_ids = {hit.get("product_id") for hit in shown}
+        rest = [hit for hit in hits if hit.get("product_id") not in shown_ids]
+        session.working_memory["last_hits"] = shown + rest
+
+    def _narrative(self) -> str:
+        if self._structured:
+            structured: dict[str, Any] = {"opening": self._opening, "items": self._items, "followup": []}
+            if self._summary:
+                structured["summary"] = self._summary
+            structured["interrupted"] = True
+            return json.dumps(structured, ensure_ascii=False)
+        text = "".join(self._tokens).strip()
+        return f"{text}{_INTERRUPTED_TEXT_SUFFIX}" if text else _INTERRUPTED_EMPTY_NOTE
+
+    def _align_last_hits(self, session: AgentSession) -> None:
+        """让"第二个"指向用户实际看到的第二个：一张卡都没发就恢复上一轮的引用。
+        没展示出来的商品也不算看过，之后"看更多"还能出现。"""
+        by_id = {hit.get("product_id"): hit for hit in session.recall_hits()}
+        shown = [by_id[item["productId"]] for item in self._items if item["productId"] in by_id]
+        shown_ids = {hit.get("product_id") for hit in shown}
+        unshown_ids = {pid for pid in by_id if pid not in shown_ids}
+        if "seen_product_ids" in session.working_memory:
+            session.working_memory["seen_product_ids"] = [
+                pid for pid in session.recall_seen() if pid not in unshown_ids
+            ]
+        if not self._items:
+            session.working_memory["last_hits"] = self._prior_hits
+        elif shown:
+            session.working_memory["last_hits"] = shown
+
+
+def _capture_interrupt(
+    events: Iterator[dict[str, Any]],
+    session: AgentSession,
+) -> Iterator[dict[str, Any]]:
+    """转发回合事件。调用方提前关闭生成器时，把已发出的部分记入会话。"""
+    progress = _TurnProgress(prior_hits=list(session.recall_hits()))
+    try:
+        for event in events:
+            progress.observe(event)
+            if event.get("type") == "done":
+                progress.align_order_with_display(session)
+            yield event
+    except GeneratorExit:
+        progress.commit(session)
+        raise
+    finally:
+        events.close()
+
+
+def _prefetch_image_embedding(image: str) -> Any | None:
+    """后台计算图片向量；失败不抛（视觉重排会自行降级）。返回 Future 或 None。"""
+    global _IMAGE_EXECUTOR
+    if os.getenv("LLM_PREFETCH", "1").strip().lower() in {"0", "false", "no", "off"}:
+        return None
+    try:
+        from concurrent.futures import ThreadPoolExecutor
+        from llm.vision import embed_image_with_provider
+
+        if _IMAGE_EXECUTOR is None:
+            _IMAGE_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="img-embed")
+        return _IMAGE_EXECUTOR.submit(embed_image_with_provider, image)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("image embedding prefetch skipped: %r", exc)
+        return None
+
+
+def _should_prefetch(query: str, session: AgentSession) -> bool:
+    """只在大概率要走检索的回合预取：pending 态（选规格/选商品）和极短指代应答不预取。"""
+    if os.getenv("LLM_PREFETCH", "1").strip().lower() in {"0", "false", "no", "off"}:
+        return False
+    if session.get("pending_cart") or session.get("pending_add"):
+        return False
+    text = (query or "").strip()
+    if len(text) < 2:
+        return False
+    if any(word in text for word in _DETAIL_DEICTIC_WORDS):
+        return False
+    # "看更多"沿用上一轮的解析结果，不需要预取
+    if parse_more_request(text) is not None and session.recall_parsed():
+        return False
+    return True
 
 
 def _guard_attribute_followup(

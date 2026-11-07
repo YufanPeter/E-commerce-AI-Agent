@@ -10,7 +10,7 @@ from __future__ import annotations
 
     这一层用 LLM function calling 做"动作分发"：调用方声明一组 ActionSpec
     （动作名 + 描述 + 参数 schema），传入 query 和最近对话，LLM 返回选中的
-    动作和结构化参数。与 intent_router 同构（都用 Ark function calling + enum
+    动作和结构化参数。与 intent_router 同构（都用 OpenAI 兼容 function calling + enum
     锁定），但面向"工具内动作"这一层，可被任意多动作 tool 复用。
 
     纯分发，不执行——执行仍由各 tool 自己用确定性代码做（DB 写入等），
@@ -77,7 +77,7 @@ def dispatch_action(
 
     client = get_client()
     response = client.chat.completions.create(
-        model=get_model_id(),
+        model=get_model_id(role="fast"),
         messages=[
             {"role": "system", "content": system},
             {"role": "user", "content": user_content},

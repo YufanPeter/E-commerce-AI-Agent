@@ -7,6 +7,7 @@ FastAPI 等常驻服务应在启动时创建一个 ``ChromaRetriever``，之后�
 """
 
 from dataclasses import dataclass
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -14,8 +15,12 @@ from rag.chroma_store import (
     DEFAULT_COLLECTION,
     DEFAULT_EMBEDDING_MODEL,
     DEFAULT_PERSIST_DIR,
+    FALLBACK_COLLECTION,
+    FALLBACK_EMBEDDING_MODEL,
     create_collection,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -52,6 +57,18 @@ class ChromaRetriever:
             embedding_model=embedding_model,
             reset=False,
         )
+        self.fallback_collection = None
+        if (
+            collection_name == DEFAULT_COLLECTION
+            and FALLBACK_EMBEDDING_MODEL
+        ):
+            self.fallback_collection = create_collection(
+                persist_dir=persist_dir,
+                collection_name=FALLBACK_COLLECTION,
+                embedding_model=FALLBACK_EMBEDDING_MODEL,
+                reset=False,
+                provider="ark",
+            )
 
     def count(self) -> int:
         """返回当前 collection 中的 chunk 数量。"""
@@ -68,12 +85,28 @@ class ChromaRetriever:
         ``where`` 是 Chroma metadata 过滤器，适合做类目、product_id 等粗过滤。
         价格、SKU、品牌排除等硬业务约束后续应由 SQLite Product Store 兜底。
         """
-        result = self.collection.query(
-            query_texts=[query],
-            n_results=top_k,
-            where=where,
-            include=["documents", "metadatas", "distances"],
-        )
+        query_kwargs = {
+            "query_texts": [query],
+            "n_results": top_k,
+            "where": where,
+            "include": ["documents", "metadatas", "distances"],
+        }
+        try:
+            result = self.collection.query(**query_kwargs)
+        except Exception as primary_exc:
+            if self.fallback_collection is None:
+                raise
+            logger.warning(
+                "百炼向量检索失败，自动切换到豆包备用 Chroma 索引。"
+            )
+            try:
+                result = self.fallback_collection.query(**query_kwargs)
+            except Exception as fallback_exc:
+                raise fallback_exc from primary_exc
+            chunks = self._parse_result(result)
+            for chunk in chunks:
+                chunk.metadata["_index"] = "fallback"
+            return chunks
         return self._parse_result(result)
 
     def _parse_result(self, result: dict[str, Any]) -> list[RetrievedChunk]:
