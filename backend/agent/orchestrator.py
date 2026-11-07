@@ -44,7 +44,7 @@ from agent.composer import AnswerComposer
 from agent.intent_router import IntentDecision, KNOWN_TOOLS, route
 from agent.session import AgentSession
 from agent.tools.base import Tool, ToolResult
-from agent.tools.cart import CartTool
+from agent.tools.cart import CartTool, detect_order_intent
 from agent.tools.clarify import ClarifyTool
 from agent.tools.compare import CompareTool, is_compare_selection_reply
 from agent.tools.fallback import FallbackTool
@@ -562,6 +562,14 @@ class Agent:
     ) -> IntentDecision:
         """对少数高确定性意图做路由后保护，压住 LLM 抖动。"""
         raw_text = query or ""
+        # 「再买一次」「我买过什么」查的是订单，不能走商品检索。
+        if decision.tool != "cart" and detect_order_intent(raw_text):
+            return IntentDecision(
+                tool="cart",
+                rewritten_query=query,
+                confidence="high",
+                reasoning=f"post-route guard: order history or reorder; original={decision.tool}",
+            )
         # 「上一个 / 下一个呢」是相对当前聚焦商品的指代，不是让我重新推荐。
         if (
             decision.tool in {"recommend", "refine", "clarify"}
@@ -613,7 +621,7 @@ class Agent:
             "下单", "结算", "买这些", "就买", "删掉", "删除", "去掉",
             "不要了", "改成", "数量",
         )
-        if any(w in text for w in cart_words):
+        if detect_order_intent(text) or any(w in text for w in cart_words):
             return "cart"
         return "recommend"
 

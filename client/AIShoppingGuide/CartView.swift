@@ -8,6 +8,9 @@ struct CartView: View {
     @State private var selectedProduct: Product?
     @State private var selectedItemIDs: Set<String> = []
     @State private var knownItemIDs: Set<String> = []
+    @State private var showCheckoutConfirm = false
+    @State private var isCheckingOut = false
+    @State private var checkoutMessage: String?
 
     private let cartService = RESTProductService()
 
@@ -139,8 +142,29 @@ struct CartView: View {
             totalText: selectedTotalText,
             isAllSelected: allItemsSelected,
             isPartiallySelected: isPartiallySelected,
-            onToggleAll: toggleSelectAll
+            isCheckingOut: isCheckingOut,
+            onToggleAll: toggleSelectAll,
+            onCheckout: { showCheckoutConfirm = true }
         )
+        .confirmationDialog(
+            "确认下单 \(selectedItemCount) 件，合计 \(selectedTotalText)？",
+            isPresented: $showCheckoutConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("确认下单") { checkout() }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("寄到默认地址，实付以下单时的价格为准。")
+        }
+        .alert(
+            checkoutMessage ?? "",
+            isPresented: Binding(
+                get: { checkoutMessage != nil },
+                set: { if !$0 { checkoutMessage = nil } }
+            )
+        ) {
+            Button("好", role: .cancel) {}
+        }
         .padding(.horizontal, 20)
         .padding(.top, 12)
         .padding(.bottom, 12)
@@ -323,6 +347,32 @@ struct CartView: View {
                 quantity: quantity
             )
         )
+    }
+
+    private func checkout() {
+        let ids = selectedItems.compactMap(\.backendCartItemID)
+        guard !ids.isEmpty, !isCheckingOut else { return }
+        // 本地还没同步到后端的行不能下单，否则用户看到的合计和实际下单的对不上
+        guard ids.count == selectedItems.count else {
+            checkoutMessage = "有商品还没同步好，请稍后再试"
+            return
+        }
+        isCheckingOut = true
+        Task {
+            do {
+                let result = try await cartService.checkoutAgentCart(cartItemIDs: ids)
+                await MainActor.run {
+                    applyCartSnapshot(result.cart)
+                    checkoutMessage = "下单成功，共 \(result.order.itemCount) 件，合计 \(formattedPrice(result.order.total))"
+                    isCheckingOut = false
+                }
+            } catch {
+                await MainActor.run {
+                    checkoutMessage = "下单失败，请再试一次"
+                    isCheckingOut = false
+                }
+            }
+        }
     }
 
     private func syncBackendCart(
@@ -525,7 +575,9 @@ private struct CartCheckoutBar: View {
     let totalText: String
     let isAllSelected: Bool
     let isPartiallySelected: Bool
+    let isCheckingOut: Bool
     let onToggleAll: () -> Void
+    let onCheckout: () -> Void
 
     private var hasSelection: Bool {
         selectedCount > 0
@@ -551,8 +603,8 @@ private struct CartCheckoutBar: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            Button(action: {}) {
-                Text(hasSelection ? "结算(\(selectedCount))" : "结算")
+            Button(action: onCheckout) {
+                Text(isCheckingOut ? "下单中" : (hasSelection ? "结算(\(selectedCount))" : "结算"))
                     .font(.headline)
                     .foregroundStyle(.white)
                     .frame(minWidth: 92)
@@ -564,6 +616,7 @@ private struct CartCheckoutBar: View {
                     )
             }
             .buttonStyle(.tactile)
+            .disabled(!hasSelection || isCheckingOut)
             .disabled(!hasSelection)
         }
     }

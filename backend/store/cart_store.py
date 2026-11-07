@@ -10,18 +10,18 @@ from __future__ import annotations
 设计取舍：
     - 演示期单用户：默认 user_id = 'demo_user'（init.sql 已 seed）。
       多用户时把 user_id 换成会话/登录态即可，接口已留参数。
-    - 不新建 orders 表：下单返回一份结构化订单汇总并清空购物车，
-      达成"业务闭环"的演示目标，避免一次性引入订单状态机的复杂度。
+    - 下单写入 orders / order_lines（见 store.order_store），和清空购物车在同一事务里。
+      暂不做支付和物流状态机。
     - 加车默认选最便宜的在售 SKU——对话里用户很少指定规格，
       "把这款加进来"应当能直接成交，需要换规格再说"要XX色的"。
 """
 
 import sqlite3
-import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
+from store.order_store import insert_order
 from store.product_store import DEFAULT_DB_PATH, load_json_text
 
 
@@ -68,10 +68,12 @@ class OrderSummary:
     address: str
     lines: list[CartLine]
     total: float
+    created_at: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "order_id": self.order_id,
+            "created_at": self.created_at,
             "address": self.address,
             "lines": [line.to_dict() for line in self.lines],
             "item_count": sum(line.quantity for line in self.lines),
@@ -164,6 +166,7 @@ class CartStore:
                 VALUES (?, ?, ?, ?, ?, ?, 1)
                 ON CONFLICT(user_id, sku_id) DO UPDATE SET
                     quantity = quantity + excluded.quantity,
+                    unit_price = excluded.unit_price,
                     selected = 1
                 """,
                 (user_id, product_id, sku["sku_id"], sku["properties_json"],
@@ -229,26 +232,55 @@ class CartStore:
         user_id: str = DEMO_USER_ID,
         address: str = DEFAULT_ADDRESS,
         clear_after: bool = True,
+        order_user_id: str | None = None,
+        cart_item_ids: list[int] | None = None,
     ) -> OrderSummary:
-        """用勾选中的购物车行生成订单汇总；下单后默认清空已下单项。"""
-        lines = [line for line in self.list_items(user_id) if line.selected]
+        """用购物车行下单：写入订单并移出已下单的行，两步在同一事务里。
+
+        user_id 是购物车的归属（目前全局只有 demo_user 一辆车）；order_user_id 是下单的人，
+        历史订单和「再买一次」按它查。cart_item_ids 指定下单哪几行，不传则取勾选项。
+        价格按当前 SKU 价格结算，不用加车时的价格。
+        """
+        lines = self.list_items(user_id)
+        if cart_item_ids is not None:
+            wanted = set(cart_item_ids)
+            lines = [line for line in lines if line.cart_item_id in wanted]
+        else:
+            lines = [line for line in lines if line.selected]
         if not lines:
             raise CartNotFoundError("购物车里没有可下单的商品")
-        total = round(sum(line.subtotal for line in lines), 2)
-        order = OrderSummary(
-            order_id="ord_" + uuid.uuid4().hex[:12],
-            address=address,
-            lines=lines,
-            total=total,
-        )
-        if clear_after:
-            with self._connect() as conn:
+        with self._connect() as conn:
+            lines = [self._reprice(conn, line) for line in lines]
+            total = round(sum(line.subtotal for line in lines), 2)
+            order_id, created_at = insert_order(
+                conn,
+                user_id=order_user_id or user_id,
+                address=address,
+                total=total,
+                lines=lines,
+            )
+            if clear_after:
                 conn.executemany(
                     "DELETE FROM cart_items WHERE cart_item_id = ? AND user_id = ?",
                     [(line.cart_item_id, user_id) for line in lines],
                 )
-                conn.commit()
-        return order
+            conn.commit()
+        return OrderSummary(
+            order_id=order_id,
+            address=address,
+            lines=lines,
+            total=total,
+            created_at=created_at,
+        )
+
+    def _reprice(self, conn: sqlite3.Connection, line: CartLine) -> CartLine:
+        row = conn.execute(
+            "SELECT price FROM product_skus WHERE sku_id = ? AND status = 'active'",
+            (line.sku_id,),
+        ).fetchone()
+        if row is None:
+            raise CartNotFoundError(f"「{line.title}」这个规格已下架，请先从购物车移除")
+        return replace(line, unit_price=float(row["price"]))
 
     # ------------------------------ 内部 ------------------------------
 

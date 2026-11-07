@@ -57,12 +57,19 @@ SYSTEM_PROMPT = """你是一位友好、专业的电商导购助手，说话像�
 - 逐行输出，每行一条记录，字段之间用全角竖线「｜」分隔，不要输出任何其他文字、不要 Markdown、不要 JSON。
 - 第 1 行必须是开场白：`开场｜<一句话>`，用"为你XXX了"的格式（如"开场｜为你推荐了几款适合敏感肌的护肤品"）。
 - 有 2 款及以上商品时，把它们按真实差异分成 1-3 组，每组商品行之前先输出一行 `分组｜<小标题>`。小标题 4-14 字，说清这组的共同点（如"分组｜轻薄便携，通勤首选"），不要写品牌和价格。只有 1 款时不用分组。
-- 每款商品一行：`商品｜<productId>｜<解说>`。productId 必须原样使用 payload.hits 里的 productId，禁止自造序号；每款商品一行专属解说，不能多款共用。解说写 1-2 句、约 40 个中文字符（30-60 字），先点核心卖点再补适用场景或人群，内容要具体，**绝不能包含商品名、品牌名、型号或价格**。
+- 每款商品一行：`商品｜<productId>｜<解说>`。productId 必须原样使用 payload.hits 里的 productId，禁止自造序号；每款商品一行专属解说，不能多款共用。解说写 1-2 句、约 40 个中文字符（30-70 字），要回答"为什么这款适合这个需求"，**绝不能包含商品名、品牌名、型号或价格**。
 - 有 2 款及以上商品时，在追问之前输出一行总结：`总结｜<内容>`。先说明不同需求分别选哪款（这里可以用品牌或简称点名），最后用一个问句问用户最在意什么，共 2-3 句。
 - 最后输出 3-5 行追问：`追问｜<用户视角的一句话>`。每条都是用户亲口对导购说的话，点击后会直接发送。
     - 正确："追问｜推荐其他版型的阿迪达斯运动裤"、"追问｜找加绒的秋冬款"
     - 错误（禁止）："需要其他版型吗？"、"要不要看看其他品牌？" —— 这是助手在问用户
     - 用祈使/请求口吻（推荐/找/看看/对比/帮我…），禁止"要不要""需要吗""想要吗"等问句；结合当前推荐写具体可执行的下一步。
+
+解说的依据（最重要）：
+- hits[].evidence.points 是这款商品的原文事实，每款的解说必须落在这些事实上：挑和用户需求最相关的具体信息（成分、功能、数据、真实使用感受），用自己的话说，不要逐字照抄。
+- 证据里没有的卖点不要写，数字必须来自证据。没有 evidence 的商品只说标题里能确定的信息，不要硬夸。
+- 不要写"性能够用""品质不错""性价比高"这种放到任何商品上都成立的话。
+- 证据来自用户评价时要说清楚，如"有用户提到…""不少人反馈…"。
+- hits[].evidence.risk 是一条和需求相关的差评。有 risk 时在解说结尾用一句话客观带过，如"不过有用户反映续航偏短"；没有 risk 就不要提缺点，更不要编。
 
 内容要求：
 - 中文，简洁自然，整体控制在 400 字以内。
@@ -104,28 +111,30 @@ _FEW_SHOT: list[dict[str, str]] = [
         "role": "user",
         "content": (
             'tool: recommend\n'
-            'payload: {"query": "5000元以内高性价比数码", "parsed": {"category": "数码电子", "max_price": 5000}, '
-            '"hits": [{"productId": "p_digital_001", "title": "华为 FreeBuds Pro 5 降噪耳机", "price": 1699}, '
-            '{"productId": "p_digital_002", "title": "vivo Pad 6 Pro", "price": 3299}, {"productId": "p_digital_003", "title": "小米平板 8 Pro", "price": 3299}, '
-            '{"productId": "p_digital_004", "title": "iPad Air M4", "price": 4799}, {"productId": "p_digital_005", "title": "华为 MatePad Pro Max 12.6", "price": 4999}]}'
+            'payload: {"query": "通勤用的降噪耳机", "parsed": {"sub_category": "真无线耳机"}, "hits": ['
+            '{"productId": "p_digital_001", "title": "华为 FreeBuds Pro 5 降噪耳机", "price": 1699, "evidence": {"points": ['
+            '{"source": "商品描述", "text": "最高降噪深度可达55dB，地铁车厢的轰鸣基本听不到。"}, '
+            '{"source": "用户评价", "text": "戴了一个月，上下班路上一直开着降噪，耳朵不胀。"}], '
+            '"risk": "通话时风噪比较明显，室外打电话对方听不太清。"}}, '
+            '{"productId": "p_digital_002", "title": "Apple AirPods Pro 3", "price": 1799, "evidence": {"points": ['
+            '{"source": "商品描述", "text": "自适应降噪可抵消48dB环境噪音，单次续航6小时。"}]}}, '
+            '{"productId": "p_digital_003", "title": "某品牌入门耳机", "price": 299}]}'
         ),
     },
     {
         "role": "assistant",
         "content": (
-            "开场｜为你推荐了 5 款 5000 元以内的高性价比数码\n"
-            "分组｜通勤听歌，降噪优先\n"
-            "商品｜p_digital_001｜音质细腻、主动降噪给力，通勤地铁里也清净，长时间佩戴也不胀耳\n"
-            "分组｜学习追剧，性价比高\n"
-            "商品｜p_digital_002｜性能够用又不贵，刷剧上网课都流畅，学生党日常学习娱乐都合适\n"
-            "商品｜p_digital_003｜配置均衡、屏幕素质不错，日常追剧办公和轻度游戏都能轻松应对\n"
-            "分组｜大屏办公，生产力强\n"
-            "商品｜p_digital_004｜M4 芯片性能强劲，剪辑修图都跟得上，适合追求生产力的进阶用户\n"
-            "商品｜p_digital_005｜12.6 寸大屏视野开阔，搭配键盘办公高效，居家移动办公都得心应手\n"
-            "总结｜只想要安静通勤，华为耳机最省心；上课追剧选 vivo 或小米平板，花费最少；要剪辑办公就看 iPad Air 或 MatePad。你更看重便携还是屏幕大？\n"
-            "追问｜推荐一些更平价的选择\n"
-            "追问｜推荐其他品牌的商品\n"
-            "追问｜对比一下刚才推荐的两款"
+            "开场｜为你挑了 3 款通勤降噪耳机\n"
+            "分组｜降噪最强，地铁党首选\n"
+            "商品｜p_digital_001｜降噪深度 55dB，地铁轰鸣基本听不到，有用户戴一个月都不胀耳。不过有用户反映室外通话风噪明显\n"
+            "分组｜续航和降噪都均衡\n"
+            "商品｜p_digital_002｜能抵消 48dB 环境噪音，单次用 6 小时，一天通勤往返不用中途充电\n"
+            "分组｜预算有限先入门\n"
+            "商品｜p_digital_003｜入门款真无线耳机，资料有限，建议先看详情确认降噪效果\n"
+            "总结｜地铁噪音大选华为，想要续航更稳选 AirPods，只是偶尔用可以先看入门款。你通勤路上打电话多吗？\n"
+            "追问｜对比一下前两款的降噪\n"
+            "追问｜看看华为这款的差评\n"
+            "追问｜推荐通话效果好的耳机"
         ),
     },
     {
@@ -170,7 +179,7 @@ _FEW_SHOT: list[dict[str, str]] = [
 
 # payload 里塞 LLM 不需要的字段（如 evidence chunk）只会浪费 token。
 # 这里裁剪只保留对话术有用的精简字段。
-_HIT_KEEP_KEYS = ("title", "brand", "category", "sub_category", "price_display", "price", "base_price", "score", "price_range", "budget")
+_HIT_KEEP_KEYS = ("title", "brand", "category", "sub_category", "price_display", "price", "base_price", "score", "price_range", "budget", "evidence")
 
 
 def _trim_hit_for_llm(h: dict[str, Any]) -> dict[str, Any]:
@@ -182,6 +191,9 @@ def _trim_hit_for_llm(h: dict[str, Any]) -> dict[str, Any]:
     for k in _HIT_KEEP_KEYS:
         if k in h:
             out[k] = h[k]
+    # 只接受 card_evidence 整理过的结构；原始 chunk 列表会浪费大量 token。
+    if not isinstance(out.get("evidence"), dict):
+        out.pop("evidence", None)
     return out
 
 
@@ -533,6 +545,14 @@ def _events_from_structured(data: dict[str, Any]) -> list[dict[str, Any]]:
     return events
 
 
+def _fallback_description(hit: dict[str, Any], title: str) -> str:
+    """模型不可用时直接用证据原文，比一句套话有用。"""
+    points = (hit.get("evidence") or {}).get("points") or []
+    if points:
+        return str(points[0].get("text") or "")[:70]
+    return f"{title}整体匹配你的需求，可以先点开详情看看。"
+
+
 def _fallback_structured(tool_result: ToolResult) -> dict[str, Any]:
     payload = tool_result.payload or {}
     hits = payload.get("products") or payload.get("hits") or []
@@ -545,7 +565,7 @@ def _fallback_structured(tool_result: ToolResult) -> dict[str, Any]:
         items.append(
             {
                 "productId": product_id,
-                "description": f"{title}整体匹配你的需求，可以先点开详情看看。",
+                "description": _fallback_description(hit, title),
             }
         )
 

@@ -34,7 +34,8 @@ from pydantic import BaseModel, Field
 
 from agent import memory_service
 from api import products as products_router
-from store.cart_store import CartStore
+from store.cart_store import CartNotFoundError, CartStore
+from store.order_store import OrderStore
 from store.session_store import SqliteSessionStore
 from store.user_memory_store import UserMemoryStore, UserPreference
 
@@ -120,6 +121,12 @@ class PreferenceRequest(BaseModel):
 
 class PreferenceUndoRequest(BaseModel):
     undo_token: str = Field(..., description="memory_update 事件返回的撤销 token")
+
+
+class CheckoutRequest(BaseModel):
+    user_id: str | None = Field(None, description="下单的用户；历史订单和再买一次按它查")
+    cart_item_ids: list[str] = Field(default_factory=list, description="要下单的购物车行；不传则下单所有勾选项")
+    address: str | None = None
 
 
 class MemoryTellRequest(BaseModel):
@@ -632,6 +639,36 @@ def mutate_cart(req: CartMutationRequest) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="不支持的购物车操作")
 
     return _cart_response(store)
+
+
+@app.post("/cart/checkout")
+def checkout_cart(req: CheckoutRequest) -> dict[str, Any]:
+    """购物车页下单：写入订单并移出已下单的行，返回订单和最新购物车。"""
+    from store.cart_store import DEFAULT_ADDRESS
+
+    store = CartStore()
+    user_id = (req.user_id or "").strip() or None
+    try:
+        order = store.build_order(
+            address=(req.address or DEFAULT_ADDRESS),
+            order_user_id=user_id,
+            cart_item_ids=[_cart_item_id(value) for value in req.cart_item_ids] or None,
+        )
+    except CartNotFoundError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    order_payload = order.to_dict()
+    memory_service.record_turn(
+        _user_memory, user_id, None,
+        {"tool_name": "cart", "payload": {"action": "checkout", "order": order_payload}},
+        "购物车结算",
+    )
+    return {"order": order_payload, **_cart_response(store)}
+
+
+@app.get("/orders/{user_id}")
+def list_orders(user_id: str) -> dict[str, Any]:
+    """历史订单，最近的在前。"""
+    return {"orders": OrderStore().list_orders(_memory_user(user_id))}
 
 
 @app.get("/cart")

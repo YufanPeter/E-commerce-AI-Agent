@@ -564,6 +564,22 @@ struct UserPreferencePayload: Codable, Hashable {
     }
 }
 
+struct PlacedOrderPayload: Codable, Hashable {
+    let orderID: String
+    let total: Double
+    let itemCount: Int
+
+    enum CodingKeys: String, CodingKey {
+        case total
+        case orderID = "order_id"
+        case itemCount = "item_count"
+    }
+}
+
+struct PlacedOrderEnvelope: Codable {
+    let order: PlacedOrderPayload
+}
+
 // MARK: - 记忆页
 
 struct MemoryItemPayload: Identifiable, Codable, Hashable {

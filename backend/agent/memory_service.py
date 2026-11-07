@@ -348,6 +348,8 @@ def events_from_tool_result(tool_result: dict[str, Any], query: str) -> list[dic
         action = payload.get("action")
         if action == "add" and payload.get("added"):
             return [_product_event("add_cart", payload["added"])]
+        if action == "reorder":
+            return [_product_event("add_cart", line) for line in payload.get("added_lines") or []]
         if action == "remove" and payload.get("removed"):
             return [_product_event("remove_cart", payload["removed"])]
         if action == "checkout":

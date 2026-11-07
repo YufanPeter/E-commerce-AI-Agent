@@ -361,6 +361,48 @@ class TestMemoryEndpoints:
         assert args[4] == "推荐手机"
 
 
+class TestCheckoutAndOrders:
+    def _setup(self, client, tmp_path):
+        c, m = client
+        from store.cart_store import CartStore
+        from store.order_store import OrderStore
+        from store.user_memory_store import UserMemoryStore
+
+        db = tmp_path / "shop.sqlite3"
+        conn = sqlite3.connect(db)
+        conn.executescript("""
+            CREATE TABLE products (product_id TEXT PRIMARY KEY, title TEXT, brand TEXT, category TEXT, sub_category TEXT);
+            CREATE TABLE product_skus (sku_id TEXT PRIMARY KEY, product_id TEXT, properties_json TEXT DEFAULT '{}', price REAL, stock_qty INTEGER DEFAULT 9, status TEXT DEFAULT 'active');
+            CREATE TABLE cart_items (cart_item_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, product_id TEXT, sku_id TEXT, selected_options_json TEXT DEFAULT '{}', quantity INTEGER, unit_price REAL, selected INTEGER DEFAULT 1, UNIQUE(user_id, sku_id));
+            INSERT INTO products VALUES ('p1', '洁面乳', '珊珂', '美妆护肤', '洁面');
+            INSERT INTO product_skus (sku_id, product_id, price) VALUES ('s1', 'p1', 52);
+        """)
+        conn.commit()
+        conn.close()
+        m._user_memory = UserMemoryStore(db_path=db)
+        store = CartStore(db)
+        return c, m, store, db, OrderStore, CartStore
+
+    def test_checkout_saves_order_and_records_event(self, client, tmp_path):
+        c, m, store, db, OrderStore, CartStore = self._setup(client, tmp_path)
+        line = store.add_product("p1", sku_id="s1", quantity=2)
+
+        with patch.object(m, "CartStore", lambda: CartStore(db)), patch.object(m, "OrderStore", lambda: OrderStore(db)):
+            r = c.post("/cart/checkout", json={"user_id": "u1", "cart_item_ids": [str(line.cart_item_id)]})
+            orders = c.get("/orders/u1")
+
+        assert r.status_code == 200
+        assert r.json()["order"]["total"] == 104
+        assert r.json()["cart"]["lines"] == []
+        assert orders.json()["orders"][0]["lines"][0]["title"] == "洁面乳"
+        assert m._user_memory.recent_events("u1")[0]["type"] == "checkout"
+
+    def test_checkout_empty_cart_is_rejected(self, client, tmp_path):
+        c, m, _, db, _, CartStore = self._setup(client, tmp_path)
+        with patch.object(m, "CartStore", lambda: CartStore(db)):
+            assert c.post("/cart/checkout", json={"user_id": "u1"}).status_code == 400
+
+
 class TestCartReset:
     def test_reset_clears_cart(self, client):
         c, m = client

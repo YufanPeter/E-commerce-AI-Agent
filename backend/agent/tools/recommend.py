@@ -20,6 +20,7 @@ from typing import Any, Callable
 from agent.contextual_search import ContextualSearchPlan, detect_contextual_plan
 from agent.session import AgentSession
 from agent.tools.base import ToolResult
+from agent.tools.evidence import card_evidence
 from search.query_decomposer import SubRequest, decompose_query
 from search.query_understanding import ParsedQuery
 from search.search_service import ProductHit, SearchResult, SearchService
@@ -346,7 +347,7 @@ class RecommendTool:
             [{"product_id": h.product_id, "title": h.title} for h in hits],
         )
 
-        products = [_to_product_card(h) for h in hits]
+        products = [_card_with_evidence(h, query) for h in hits]
         self._attach_price_displays(products)
         payload = {
             "query": query,
@@ -459,7 +460,7 @@ class RecommendTool:
             [{"product_id": h.product_id, "title": h.title} for h in hits],
         )
 
-        products = [_to_product_card(h) for h in hits]
+        products = [_card_with_evidence(h, query) for h in hits]
         self._attach_price_displays(products, result.parsed)
 
         summary = {
@@ -591,7 +592,7 @@ class RecommendTool:
                 keep_seen=exclude_seen,
             )
 
-        products = [_to_product_card(h) for h in hits]
+        products = [_card_with_evidence(h, query) for h in hits]
         self._attach_price_displays(products, result.parsed)
 
         summary = {
@@ -678,7 +679,7 @@ class RecommendTool:
                 if h.product_id in seen_ids:
                     continue
                 seen_ids.add(h.product_id)
-                card = _to_product_card(h)
+                card = _card_with_evidence(h, sub.query)
                 group_products.append(card)
                 flat_products.append(card)
                 flat_hit_refs.append({"product_id": h.product_id, "title": h.title})
@@ -774,6 +775,15 @@ def _personalization_hint(signals: list[dict[str, Any]], session: AgentSession) 
     if context:
         text += "用户的长期情况：" + "；".join(dict.fromkeys(context)) + "，解说时可以结合，但不要编造商品没有的信息。"
     return text
+
+
+def _card_with_evidence(h: ProductHit, query: str) -> dict[str, Any]:
+    """商品卡片 + 给 composer 写解说用的证据（前端不用证据字段）。"""
+    card = _to_product_card(h)
+    evidence = card_evidence(h, query)
+    if evidence:
+        card["evidence"] = evidence
+    return card
 
 
 def _to_product_card(h: ProductHit) -> dict[str, Any]:

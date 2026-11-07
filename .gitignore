@@ -86,3 +86,5 @@ backend/evals/reports/*
 !backend/evals/reports/baseline.md
 !backend/evals/reports/final_dev.md
 !backend/evals/reports/final_heldout.md
+!backend/evals/reports/narrative_before.json
+!backend/evals/reports/narrative_after.json

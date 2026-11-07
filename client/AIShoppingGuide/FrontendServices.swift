@@ -383,6 +383,26 @@ final class RESTProductService: ProductServicing {
         return await agentCartSnapshot(from: data)
     }
 
+    /// 购物车页下单：后端写入订单并移出已下单的行。
+    func checkoutAgentCart(
+        userID: String = UserIdentity.defaultUserID,
+        cartItemIDs: [String]
+    ) async throws -> (order: PlacedOrderPayload, cart: CartSnapshotPayload) {
+        var urlRequest = URLRequest(url: baseURL.appendingPathComponent("cart/checkout"))
+        urlRequest.httpMethod = "POST"
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        urlRequest.httpBody = try JSONSerialization.data(withJSONObject: [
+            "user_id": userID,
+            "cart_item_ids": cartItemIDs,
+        ] as [String: Any])
+        let (data, response) = try await session.data(for: urlRequest)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw RESTServiceError.invalidResponse
+        }
+        let order = try JSONDecoder().decode(PlacedOrderEnvelope.self, from: data).order
+        return (order, await agentCartSnapshot(from: data))
+    }
+
     private func agentCartSnapshot(from data: Data) async -> CartSnapshotPayload {
         guard
             let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],

@@ -20,6 +20,7 @@ from __future__ import annotations
       让用户看到状态而不是报错。
 """
 
+import dataclasses
 import logging
 from collections import OrderedDict
 import re
@@ -30,7 +31,8 @@ from agent.session import AgentSession
 from agent.tools.base import ToolResult
 from agent.tools.resolve import enrich_candidates, focus_index_in, resolve_one
 from agent.tools.reference import attribute_matches, resolve_indices, resolve_by_name, extract_name_query
-from store.cart_store import CartNotFoundError, CartStore, DEFAULT_ADDRESS
+from store.cart_store import CartNotFoundError, CartStore, DEFAULT_ADDRESS, DEMO_USER_ID
+from store.order_store import OrderStore
 from store import sku_select
 from store.product_store import ProductStore
 
@@ -39,6 +41,46 @@ logger = logging.getLogger(__name__)
 
 # 用户在"选规格"环节放弃时的取消词。命中则清掉待选状态、不加购。
 _CANCEL_WORDS = ("算了", "不加了", "不要了", "取消", "先不", "不用了", "不买了")
+
+
+# 确定性识别「买过的东西」相关意图，不依赖模型，路由层也用它兜底。
+_ORDER_HISTORY_RE = re.compile(r"买过(什么|哪些|啥|的东西)|买了(什么|哪些|啥)|买的(是)?(什么|啥|哪)|历史订单|我的订单|订单记录|下过(什么|哪些)")
+_REORDER_WORDS = (
+    "再买一次", "再买一单", "再来一单", "再下一单", "再下一遍", "再买一遍", "复购", "回购", "补货",
+    "上次买的", "上回买的", "之前买的", "以前买的", "上一单", "买过的",
+)
+# 在问上次买的东西本身，不是要再买
+_NOT_REORDER_WORDS = ("怎么样", "好不好", "好用吗", "评价", "差评", "对比", "比较", "多少钱", "退货", "退款", "类似", "替代", "同款以外")
+_WHOLE_ORDER_WORDS = ("上一单", "整单", "全部", "都再", "那些", "一单", "一遍")
+_REORDER_FILLER_RE = re.compile(
+    r"再买一次|再买一单|再买一遍|再来一单|再下一单|再下一遍|复购|回购|补货|上一单|上次|上回|之前|以前|买的|买过的?|"
+    r"那个|那款|那件|那瓶|那些|这些|这个|整单|全部|都|一次|一遍|一单|再来|再买|帮我|给我|麻烦|一下|"
+    r"把|将|请|吧|了|的|我|想|要|"
+    r"[0-9一两二三四五六七八九十]+\s*(瓶|件|个|盒|箱|袋|桶|双|条|支|份|罐|包|台|部)"
+)
+# 「第二个」是序号不是数量；「第」后面的数字不算。
+_QUANTITY_RE = re.compile(r"(?<![第0-9])([0-9]+|[一两二三四五六七八九十])\s*(瓶|件|个|盒|箱|袋|桶|双|条|支|份|罐|包|台|部)")
+_CN_DIGITS = {"一": 1, "两": 2, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
+
+
+def detect_order_intent(text: str) -> str | None:
+    """返回 "history"、"reorder" 或 None。"""
+    text = (text or "").strip()
+    if not text:
+        return None
+    if _ORDER_HISTORY_RE.search(text):
+        return "history"
+    if any(word in text for word in _REORDER_WORDS) and not any(word in text for word in _NOT_REORDER_WORDS):
+        return "reorder"
+    return None
+
+
+def _quantity_in(text: str) -> int | None:
+    match = _QUANTITY_RE.search(text or "")
+    if not match:
+        return None
+    raw = match.group(1)
+    return int(raw) if raw.isdigit() else _CN_DIGITS.get(raw)
 
 
 _ACTIONS = [
@@ -80,6 +122,16 @@ _ACTIONS = [
             "address": {"type": "string", "description": "收货地址；说'用默认的'时省略。"},
         },
     ),
+    ActionSpec(
+        name="reorder",
+        description="把以前买过的东西再买一次（'再来一份之前那瓶'/'上回那个再拿两盒'）",
+        parameters={},
+    ),
+    ActionSpec(
+        name="order_history",
+        description="查看以前的订单（'我之前都买了啥'/'看看历史订单'）",
+        parameters={},
+    ),
 ]
 
 _PURPOSE = "管理用户的购物车（加购、改数量、删除、查看）并完成下单结算"
@@ -92,8 +144,10 @@ class CartTool:
         self,
         cart_store: CartStore | None = None,
         product_store: ProductStore | None = None,
+        order_store: OrderStore | None = None,
     ) -> None:
         self._store = cart_store or CartStore()
+        self._orders = order_store or OrderStore(self._store.db_path)
         # 全库商品检索：用户"点名"加购（把小米/oppo 加进来）但当前推荐列表里
         # 没有该商品时，直接去整库按关键词定位，而不是回退到上一轮聚焦的商品。
         self._products = product_store or ProductStore()
@@ -116,7 +170,11 @@ class CartTool:
         if pending_add:
             return self._resolve_pending_add(raw_query, session, pending_add)
 
-        action, args = self._decide(query, session)
+        order_intent = detect_order_intent(raw_query)
+        if order_intent:
+            action, args = {"history": "order_history", "reorder": "reorder"}[order_intent], {}
+        else:
+            action, args = self._decide(query, session)
         logger.info("cart: action=%s args=%s", action, args)
         try:
             if action == "add":
@@ -126,7 +184,11 @@ class CartTool:
             if action == "remove":
                 return self._remove(args)
             if action == "checkout":
-                return self._checkout(args)
+                return self._checkout(args, session)
+            if action == "reorder":
+                return self._reorder(raw_query, session)
+            if action == "order_history":
+                return self._order_history(session)
             return self._view()  # view 及未知动作的安全兜底
         except CartNotFoundError as exc:
             return self._plain(str(exc) + "。要不先看看购物车或换一件？")
@@ -292,6 +354,14 @@ class CartTool:
         if not candidates:
             session.set("pending_add", None)
             return self._plain("想加哪款呢？先让我帮你推荐几款吧～")
+
+        if pending_add.get("reorder"):
+            picked = resolve_one(query, _reorder_candidates(candidates))
+            if picked is None:
+                return self._ask_which_reorder(candidates, session, pending_add.get("quantity"))
+            session.set("pending_add", None)
+            quantity = _quantity_in(query) or pending_add.get("quantity")
+            return self._commit_reorder(candidates[picked], quantity, session)
 
         # 用户改点了候选之外的别的品牌商品 → 放弃当前候选，重新定位。
         switched = self._switch_intent(
@@ -570,9 +640,9 @@ class CartTool:
             ),
         )
 
-    def _checkout(self, args: dict[str, Any]) -> ToolResult:
+    def _checkout(self, args: dict[str, Any], session: AgentSession) -> ToolResult:
         address = args.get("address") or DEFAULT_ADDRESS
-        order = self._store.build_order(address=address)
+        order = self._store.build_order(address=address, order_user_id=self._order_user(session))
         return ToolResult(
             tool_name=self.name,
             payload={"action": "checkout", "order": order.to_dict()},
@@ -581,6 +651,153 @@ class CartTool:
                 f"合计 {order.total} 元，寄往：{order.address}。"
                 "请用愉快的口吻确认下单完成。"
             ),
+        )
+
+    # ------------------------------ 买过的东西 ------------------------------
+
+    @staticmethod
+    def _order_user(session: AgentSession) -> str:
+        return session.user_id or DEMO_USER_ID
+
+    def _reorder(self, query: str, session: AgentSession) -> ToolResult:
+        """把买过的东西加回购物车。不直接下单：现价可能变了，要用户再确认一次。"""
+        user_id = self._order_user(session)
+        orders = self._orders.list_orders(user_id)
+        if not orders:
+            return self._plain("还没有找到你的下单记录，告诉我想买什么，我帮你找。")
+
+        quantity = _quantity_in(query)
+        wants_whole_order = any(word in query for word in _WHOLE_ORDER_WORDS)
+        named = _REORDER_FILLER_RE.sub("", query).strip(" ，,。.！!？?")
+        candidates = self._orders.recent_products(user_id)
+
+        if not named:
+            last_lines = orders[0]["lines"]
+            if wants_whole_order and len(last_lines) > 1:
+                return self._commit_whole_order(orders[0], session)
+            if len(last_lines) == 1:
+                return self._commit_reorder(last_lines[0], quantity, session)
+            return self._ask_which_reorder(last_lines, session, quantity)
+
+        if len(candidates) == 1:
+            matched = candidates
+        else:
+            picked = resolve_one(query, _reorder_candidates(candidates))
+            matched = [candidates[picked]] if picked is not None else []
+        if matched:
+            return self._commit_reorder(matched[0], quantity, session)
+        titles = "、".join(line["title"][:14] for line in candidates[:3])
+        return self._plain(f"你的订单里没找到「{named}」，最近买过的有：{titles}。想再买哪个？")
+
+    def _ask_which_reorder(
+        self,
+        lines: list[dict[str, Any]],
+        session: AgentSession,
+        quantity: int | None = None,
+    ) -> ToolResult:
+        candidates = lines[:5]
+        session.set("pending_add", {"candidates": candidates, "reorder": True, "quantity": quantity})
+        rows = [
+            f"{i + 1}. {line['title'][:24]}{_spec_suffix(line)} · 上次 ¥{line['unit_price']:g}"
+            for i, line in enumerate(candidates)
+        ]
+        return ToolResult(
+            tool_name=self.name,
+            payload={"action": "ask_which_product", "candidates": candidates},
+            narrative_override="你想再买哪一个？\n" + "\n".join(rows) + "\n说序号或商品名就行。",
+            needs_composer=False,
+        )
+
+    def _price_note(self, previous: float, current: float) -> str:
+        if abs(previous - current) < 0.01:
+            return f"现价 ¥{current:g}，和上次一样"
+        direction = "便宜" if current < previous else "贵"
+        return f"现价 ¥{current:g}，比上次{direction} ¥{abs(current - previous):g}"
+
+    def _commit_reorder(
+        self,
+        line: dict[str, Any],
+        quantity: int | None,
+        session: AgentSession,
+    ) -> ToolResult:
+        qty = quantity or int(line.get("quantity") or 1)
+        product_id = line["product_id"]
+        try:
+            added = self._store.add_product(product_id, sku_id=line["sku_id"], quantity=qty)
+        except CartNotFoundError:
+            # 上次的规格下架了：商品还在就让用户重新选规格，不擅自换成别的规格
+            if self._store.list_skus(product_id):
+                result = self._begin_add(product_id, qty, session, "", source="reorder")
+                prefix = f"上次买的{_spec_suffix(line) or '规格'}已经下架了。"
+                return dataclasses.replace(result, narrative_override=prefix + (result.narrative_override or ""))
+            return self._plain(f"「{line['title'][:20]}」已经下架了，要帮你找类似的吗？")
+        session.set("last_focus_product_id", product_id)
+        snapshot = self._snapshot()
+        current = next(
+            (s["price"] for s in self._store.list_skus(product_id) if s["sku_id"] == line["sku_id"]),
+            added.unit_price,
+        )
+        text = (
+            f"已把上次买的「{line['title'][:24]}」{_spec_suffix(line)}×{qty} 加入购物车，"
+            f"{self._price_note(float(line['unit_price']), float(current))}。"
+            f"购物车合计 {snapshot['cart']['total']:g} 元，要直接下单吗？"
+        )
+        return ToolResult(
+            tool_name=self.name,
+            payload={
+                "action": "add",
+                "added": added.to_dict(),
+                "reorder": {"previous_price": line["unit_price"], "current_price": current},
+                **snapshot,
+            },
+            narrative_override=text,
+            needs_composer=False,
+        )
+
+    def _commit_whole_order(self, order: dict[str, Any], session: AgentSession) -> ToolResult:
+        added: list[dict[str, Any]] = []
+        skipped: list[str] = []
+        for line in order["lines"]:
+            try:
+                added.append(
+                    self._store.add_product(line["product_id"], sku_id=line["sku_id"], quantity=int(line["quantity"])).to_dict()
+                )
+            except CartNotFoundError:
+                skipped.append(line["title"][:16])
+        if not added:
+            return self._plain("上一单的商品都已经下架了，要帮你找类似的吗？")
+        snapshot = self._snapshot()
+        previous = round(sum(float(l["unit_price"]) * int(l["quantity"]) for l in order["lines"]), 2)
+        text = f"已把上一单的 {len(added)} 件商品加入购物车，购物车合计 {snapshot['cart']['total']:g} 元（上一单 {previous:g} 元）。"
+        if skipped:
+            text += f"其中「{'、'.join(skipped)}」已下架，没有加入。"
+        return ToolResult(
+            tool_name=self.name,
+            payload={"action": "reorder", "added_lines": added, **snapshot},
+            narrative_override=text + "要直接下单吗？",
+            needs_composer=False,
+        )
+
+    def _order_history(self, session: AgentSession) -> ToolResult:
+        orders = self._orders.list_orders(self._order_user(session), limit=5)
+        if not orders:
+            return self._plain("你还没有下过单，先看看想买什么吧～")
+        rows: list[str] = []
+        hits: list[dict[str, str]] = []
+        for order in orders:
+            names = "、".join(f"{line['title'][:14]}×{line['quantity']}" for line in order["lines"][:3])
+            more = f" 等 {len(order['lines'])} 件" if len(order["lines"]) > 3 else ""
+            rows.append(f"{order['created_at'][:10]}：{names}{more}，共 ¥{order['total']:g}")
+            for line in order["lines"]:
+                if all(hit["product_id"] != line["product_id"] for hit in hits):
+                    hits.append({"product_id": line["product_id"], "title": line["title"]})
+        # 接下来说「第一个详细说说」「再买第二个」能指到这些商品
+        session.set("last_hits", hits)
+        return ToolResult(
+            tool_name=self.name,
+            payload={"action": "order_history", "orders": orders},
+            narrative_override="你最近的订单：\n" + "\n".join(rows) + "\n想再买哪个，直接告诉我。",
+            needs_composer=False,
         )
 
     # ------------------------------ 辅助 ------------------------------
@@ -612,6 +829,26 @@ class CartTool:
             narrative_override=text,
             needs_composer=False,
         )
+
+
+def _reorder_candidates(lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """订单行转成消歧用的候选：规格值要是列表，和 enrich_candidates 的结构一致。"""
+    return [
+        {
+            "product_id": line["product_id"],
+            "title": line.get("title", ""),
+            "brand": line.get("brand", ""),
+            "category": line.get("category", ""),
+            "sub_category": line.get("sub_category", ""),
+            "options": {str(k): [str(v)] for k, v in (line.get("options") or {}).items()},
+        }
+        for line in lines
+    ]
+
+
+def _spec_suffix(line: dict[str, Any]) -> str:
+    options = line.get("options") or {}
+    return f"（{'、'.join(str(v) for v in options.values())}）" if options else ""
 
 
 def _as_int(value: Any, default: Any) -> Any:

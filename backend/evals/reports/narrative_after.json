@@ -1,0 +1,1768 @@
+{
+ "summary": {
+  "queries": 20,
+  "items": 67,
+  "证据覆盖": 1.0,
+  "事实贴合": 0.513,
+  "无据数字": 0.0,
+  "套话率": 0.0,
+  "点名率": 0.0,
+  "有差评的商品数": 10,
+  "差评提及": 0.8,
+  "平均字数": 46.6
+ },
+ "rows": [
+  {
+   "query": "适合油皮的洗面奶",
+   "product_id": "p_beauty_011",
+   "title": "珊珂洗颜专科绵润泡沫洁面乳细腻丰富泡沫温和清洁洁",
+   "description": "泡沫绵密能带走淡妆和多余油脂，适合混油皮早晚清洁；泵装按压即出泡更省事，干皮用完记得补水",
+   "evidence": {
+    "points": [
+     {
+      "source": "官方问答",
+      "text": "对于日常的淡妆（如隔离霜、轻薄粉底、腮红等），这款洁面乳的清洁力基本可以满足，绵密的泡沫能有效吸附并带走彩妆残留。"
+     },
+     {
+      "source": "商品描述",
+      "text": "适合中性、混合性皮肤日常使用，无论是晨间唤醒肌肤还是晚间卸除淡妆后的二次清洁都很合适。标准装需搭配起泡网搓出丰富泡沫，泵装则直接按压即可获得绵密泡泡，使用更便捷。干性皮肤使用后建议及时涂抹保湿产品。"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.225,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": false,
+   "length": 44
+  },
+  {
+   "query": "敏感肌修护屏障的面霜",
+   "product_id": "p_beauty_012",
+   "title": "理肤泉特安舒缓修复霜滋润型敏感肌保湿修护屏障面霜",
+   "description": "换季泛红脱皮、空调房干燥紧绷或医美后屏障脆弱时用它，长效保湿稳住肌肤，适合干性敏感肌日常打底",
+   "evidence": {
+    "points": [
+     {
+      "source": "官方问答",
+      "text": "敏感肌在以下场景使用效果显著：换季时（春秋）皮肤易泛红脱皮，用它稳定肌肤；空调房长期待着皮肤干燥紧绷，用它长效保湿；医美术后（如光子嫩肤）屏障脆弱，用它加速修复；日常干性敏感肌作为基础保湿霜，维持屏障健康。"
+     },
+     {
+      "source": "商品描述",
+      "text": "理肤泉特安舒缓修复霜滋润型是专为干性敏感肌打造的屏障修复神器，核心卖点在于温和修复受损屏障、长效保湿舒缓泛红。适用人群为干性敏感肌、屏障受损肌肤，尤其适合换季泛红、空调房干燥、医美术后修复场景。"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.6428571428571429,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": false,
+   "length": 46
+  },
+  {
+   "query": "敏感肌修护屏障的面霜",
+   "product_id": "p_beauty_007",
+   "title": "薇诺娜舒敏保湿特护霜敏感肌修护屏障舒缓干痒保湿面",
+   "description": "马齿苋提取物舒缓泛红干痒，青刺果油补脂质强屏障，适合长期敏感或突发敏感的人，首次用前先耳后测试",
+   "evidence": {
+    "points": [
+     {
+      "source": "官方问答",
+      "text": "它主要针对敏感肌的屏障受损、换季泛红、干痒脱皮、紧绷等问题。马齿苋提取物可舒缓炎症，缓解泛红干痒；青刺果油补充脂质强化屏障；日常用维持稳定，换季或医美后用加速修护，减少敏感反应，适合长期敏感或突发敏感人群。"
+     },
+     {
+      "source": "商品描述",
+      "text": "薇诺娜舒敏保湿特护霜专为敏感肌打造，核心成分含马齿苋提取物（快速舒缓泛红干痒）、青刺果油（补充皮肤脂质修护屏障）及透明质酸（深层锁水保湿）。注意：开封后6个月内用完，敏感肌首次用前需耳后测试，避免与刺激性产品叠加。"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.7857142857142857,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": false,
+   "length": 47
+  },
+  {
+   "query": "敏感肌修护屏障的面霜",
+   "product_id": "p_beauty_008",
+   "title": "玉兰油新生塑颜金纯面霜紧致提拉淡纹保湿抗初老大红",
+   "description": "含烟酰胺，日霜质地轻盈适合春夏通勤，滋润型适合秋冬干皮，敏感肌建议先耳后测试再上脸",
+   "evidence": {
+    "points": [
+     {
+      "source": "官方问答",
+      "text": "大红瓶含烟酰胺，敏感肌需谨慎。建议先取少量在耳后或手臂内侧测试，观察24小时无红肿、瘙痒等不适再使用。若耐受，可从每周2-3次开始，逐渐增加频率；若出现不适，立即停用并清洗。搭配温和洁面和爽肤水，减少皮肤刺激。"
+     },
+     {
+      "source": "商品描述",
+      "text": "SKU分三种：50g日霜质地轻盈，适合日常通勤或春夏使用；50g滋润型添加额外保湿因子，适合秋冬或干皮；14g随身装方便出差旅行补涂。敏感肌建议先做耳后测试，开封后6个月内用完，避免阳光直射。"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.6944444444444444,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": false,
+   "length": 41
+  },
+  {
+   "query": "想淡化脸上的斑，有什么精华",
+   "product_id": "p_beauty_005",
+   "title": "科颜氏新集焕白均衡亮肤淡斑精华液提亮肤色淡化斑点",
+   "description": "质地清爽不黏腻，各种肤质都能用；有用户反馈三周后肤色提亮但斑点变化不明显，顽固斑需耐心",
+   "evidence": {
+    "points": [
+     {
+      "source": "官方问答",
+      "text": "这款精华适合中性、混合性、干性及油性肤质，质地清爽易吸收，不会给肌肤造成负担。"
+     },
+     {
+      "source": "用户评价",
+      "text": "用了三个星期，斑点没怎么变淡，肤色倒是提亮了一丢丢。质地是不错，不黏腻，但淡斑效果比预期的差。可能我的斑点比较顽固？或者需要更长时间？暂时没看到明显的淡斑效果，有点失望，再用段时间看看吧。"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.28205128205128205,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": true,
+   "length": 43
+  },
+  {
+   "query": "想淡化脸上的斑，有什么精华",
+   "product_id": "p_beauty_018",
+   "title": "The Ordinary烟酰胺10%锌1%精华液",
+   "description": "10%烟酰胺调油脂、淡毛孔并提亮，1%锌辅助控油，适合油皮、混合皮和肤色不均的人",
+   "evidence": {
+    "points": [
+     {
+      "source": "商品描述",
+      "text": "The Ordinary这款烟酰胺10%锌1%精华液是油痘肌和暗沉肌的高性价比选择。核心成分10%烟酰胺能调节皮脂分泌、淡化毛孔并提亮肤色，1%锌则辅助控油舒缓。适合油性/混合性皮肤、有毛孔粗大或肤色不均问题的人群。"
+     },
+     {
+      "source": "官方问答",
+      "text": "成分功效完全相同，仅容量和价格不同。30ml单价约1.97元/ml，60ml约1.63元/ml，大容量更划算。初次尝试选30ml，长期使用选60ml更经济。"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.6571428571428571,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": false,
+   "length": 40
+  },
+  {
+   "query": "想淡化脸上的斑，有什么精华",
+   "product_id": "p_beauty_009",
+   "title": "珀莱雅弹润透亮青春精华液双抗精华提亮肤色淡纹保湿",
+   "description": "抗氧抗糖双效，改善熬夜后的暗沉蜡黄和初老细纹，适合25+常对屏幕、肤色发黄的人",
+   "evidence": {
+    "points": [
+     {
+      "source": "商品描述",
+      "text": "珀莱雅双抗精华2.0（50ml）主打抗氧抗糖双效修护，核心成分含高浓度麦角硫因+虾青素，协同清除自由基、抑制糖化反应，改善暗沉蜡黄与初老细纹。适合25+有初老迹象、熬夜后肤色暗沉或长期面对电子屏的人群。"
+     },
+     {
+      "source": "官方问答",
+      "text": "日常可搭配温和洁面+保湿爽肤水+双抗精华+乳液/面霜；抗老需求可叠加珀莱雅红宝石精华（早双抗晚红宝石）；美白需求可搭配烟酰胺类产品（需间隔使用）。注意避免与高浓度维C、酸类产品同时使用，以免刺激皮肤。"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.6,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": false,
+   "length": 39
+  },
+  {
+   "query": "想淡化脸上的斑，有什么精华",
+   "product_id": "p_beauty_024",
+   "title": "珀莱雅赋能鲜颜淡纹紧致精华液抗皱紧致提升弹润淡化",
+   "description": "六胜肽配双重胶原肽，两周左右能填平鼻翼眼周的干纹，适合想淡纹紧致的初老肌",
+   "evidence": {
+    "points": [
+     {
+      "source": "官方问答",
+      "text": "一般坚持规律使用2周左右，就能明显感觉到脸上的假性干纹比如鼻翼、眼周那些卡粉的小干纹会被填得平整很多，熬夜之后的第二天早上脸不会松垮垮的垮成凹脸，摸起来还是弹润的。"
+     },
+     {
+      "source": "商品描述",
+      "text": "珀莱雅这瓶赋能鲜颜淡纹紧致精华，主打的就是针对初老、熟龄肌的纹路改善！核心添加了高浓度六胜肽-1和双重胶原肽组合，搭配肌肽抗糖buff，能精准淡化抬头纹、法令纹、眼周干纹这些显老纹路，同时把松垮的脸撑得弹润紧致。"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.48484848484848486,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": false,
+   "length": 36
+  },
+  {
+   "query": "想淡化脸上的斑，有什么精华",
+   "product_id": "p_beauty_004",
+   "title": "资生堂新红妍肌活精华露红腰子修护维稳强韧肌底精华",
+   "description": "激活肌肤自身防御力，换季或状态差时用能稳住泛红粗糙，适合肌底不稳、想先修护的人",
+   "evidence": {
+    "points": [
+     {
+      "source": "商品描述",
+      "text": "资生堂新红妍肌活精华露（红腰子）是品牌明星修护精华，核心含ULTIMUNE肌活复合物，能激活肌肤自身防御机制，强韧肌底。添加保加利亚玫瑰水与透明质酸，兼顾舒缓与保湿。换季或肌肤状态差时可增加用量。"
+     },
+     {
+      "source": "官方问答",
+      "text": "ULTIMUNE复合物是资生堂专研成分，通过激活朗格汉斯细胞活性，增强肌肤自身的防御能力，帮助抵御外界污染、紫外线等刺激。同时能促进肌底胶原生成，改善肌肤粗糙、泛红等问题，让肌肤更稳定强韧。"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.45714285714285713,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": false,
+   "length": 39
+  },
+  {
+   "query": "25岁开始抗初老用什么精华",
+   "product_id": "p_beauty_009",
+   "title": "珀莱雅弹润透亮青春精华液双抗精华提亮肤色淡纹保湿",
+   "description": "麦角硫因配虾青素，抗氧抗糖双管齐下，改善熬夜后的蜡黄和初老细纹，适合长期对着屏幕的上班族",
+   "evidence": {
+    "points": [
+     {
+      "source": "商品描述",
+      "text": "珀莱雅双抗精华2.0（50ml）主打抗氧抗糖双效修护，核心成分含高浓度麦角硫因+虾青素，协同清除自由基、抑制糖化反应，改善暗沉蜡黄与初老细纹。适合25+有初老迹象、熬夜后肤色暗沉或长期面对电子屏的人群。"
+     },
+     {
+      "source": "官方问答",
+      "text": "日常可搭配温和洁面+保湿爽肤水+双抗精华+乳液/面霜；抗老需求可叠加珀莱雅红宝石精华（早双抗晚红宝石）；美白需求可搭配烟酰胺类产品（需间隔使用）。注意避免与高浓度维C、酸类产品同时使用，以免刺激皮肤。"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.475,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": false,
+   "length": 44
+  },
+  {
+   "query": "25岁开始抗初老用什么精华",
+   "product_id": "p_beauty_024",
+   "title": "珀莱雅赋能鲜颜淡纹紧致精华液抗皱紧致提升弹润淡化",
+   "description": "主打改善初老纹路，官方说规律用两周左右，鼻翼眼周的干纹会平整不少，熬夜后脸也不容易垮",
+   "evidence": {
+    "points": [
+     {
+      "source": "官方问答",
+      "text": "一般坚持规律使用2周左右，就能明显感觉到脸上的假性干纹比如鼻翼、眼周那些卡粉的小干纹会被填得平整很多，熬夜之后的第二天早上脸不会松垮垮的垮成凹脸，摸起来还是弹润的。"
+     },
+     {
+      "source": "商品描述",
+      "text": "珀莱雅这瓶赋能鲜颜淡纹紧致精华，主打的就是针对初老、熟龄肌的纹路改善！特别适合25+开始冒小干纹、经常熬夜脸垮、化妆卡纹的姐妹。"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.3684210526315789,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": false,
+   "length": 42
+  },
+  {
+   "query": "25岁开始抗初老用什么精华",
+   "product_id": "p_beauty_001",
+   "title": "雅诗兰黛特润修护肌活精华露淡纹紧致保湿夜间修护抗",
+   "description": "夜间修护型，透明质酸锁水加植物提取物淡纹，适合干纹细纹明显的熬夜党。不过有混油皮用户反馈用完更干还冒闭口",
+   "evidence": {
+    "points": [
+     {
+      "source": "商品描述",
+      "text": "雅诗兰黛特润修护肌活精华露（小棕瓶）是品牌经典抗初老单品，主打夜间肌底修护。搭配透明质酸锁水保湿，猴面包树籽提取物淡纹紧致。适合25+有干纹细纹、熬夜后暗沉的抗初老人群，夜间护肤时使用效果更佳。"
+     },
+     {
+      "source": "官方问答",
+      "text": "这款精华大部分肤质适用，但敏感肌需谨慎。因含活性修护成分，建议敏感肌使用前取少量精华涂抹于耳后或手臂内侧，观察24小时无红肿、刺痛等不适再使用。此外，开封后建议6个月内用完，避免成分失活影响效果；"
+     }
+    ],
+    "risk": "混油皮用了反而更干，还冒闭口。想抗初老结果皮肤状态更差，这款可能不适合混油皮，后悔买了，以后不会再试雅诗兰黛小棕瓶了。"
+   },
+   "has_evidence": true,
+   "grounded": 0.5416666666666666,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": true,
+   "mentions_risk": true,
+   "length": 52
+  },
+  {
+   "query": "25岁开始抗初老用什么精华",
+   "product_id": "p_beauty_004",
+   "title": "资生堂新红妍肌活精华露红腰子修护维稳强韧肌底精华",
+   "description": "核心是激活肌肤自身防御力，换季或状态差时可加量用，适合想先稳住底子再谈抗老的人",
+   "evidence": {
+    "points": [
+     {
+      "source": "商品描述",
+      "text": "资生堂新红妍肌活精华露（红腰子）是品牌明星修护精华，核心含ULTIMUNE肌活复合物，能激活肌肤自身防御机制，强韧肌底。添加保加利亚玫瑰水与透明质酸，兼顾舒缓与保湿。换季或肌肤状态差时可增加用量。"
+     },
+     {
+      "source": "官方问答",
+      "text": "30ml经典装建议开封后3个月内用完，50ml加大装建议4个月内，75ml家用装建议6个月内。因为精华含活性成分，开封后易受空气、温度影响氧化失效，所以尽量在建议期限内用完，以保证效果。"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.3888888888888889,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": false,
+   "length": 39
+  },
+  {
+   "query": "25岁开始抗初老用什么精华",
+   "product_id": "p_beauty_005",
+   "title": "科颜氏新集焕白均衡亮肤淡斑精华液提亮肤色淡化斑点",
+   "description": "走提亮淡斑路线，质地轻薄好叠加，白天用要配合足量防晒，适合有暗沉斑点困扰的人",
+   "evidence": {
+    "points": [
+     {
+      "source": "官方问答",
+      "text": "可以叠加使用，但建议遵循“先薄后厚、先水后油”的原则。若要叠加抗老精华（如含视黄醇的产品），建议先使用这款淡斑精华（质地较轻薄），待其完全吸收后再涂抹抗老精华。敏感肌叠加时更需谨慎，建议逐步添加。"
+     },
+     {
+      "source": "官方问答",
+      "text": "白天使用时，最重要的是配合足量防晒产品。因为精华中的维生素C成分具有一定的光敏性（虽然乙基维生素C相对稳定），若不做好防晒，紫外线会加速黑色素生成，反而影响淡斑效果。"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.38235294117647056,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": false,
+   "length": 38
+  },
+  {
+   "query": "控油定妆的散粉",
+   "product_id": "p_beauty_013",
+   "title": "方里柔焦蜜粉饼控油定妆细腻粉质隐匿毛孔提亮肤色粉",
+   "description": "官方说油皮夏季通勤能撑 4-6 小时不泛油，粉质细腻补妆不卡粉，混油皮用户反馈到下午也不脱妆",
+   "evidence": {
+    "points": [
+     {
+      "source": "官方问答",
+      "text": "控油效果因肤质和环境而异：油皮夏季通勤可维持4-6小时不泛油；混油皮T区能维持3-5小时。高温或出汗多的环境建议随身携带补妆，其细腻粉质补妆时不会卡粉结块，能保持妆容完整。"
+     },
+     {
+      "source": "用户评价",
+      "text": "混油皮表示完美！控油效果好到下午不脱妆，粉质细腻不卡粉，毛孔隐形超棒。清透色适合黄二白，自然提亮。12g补充装划算，换芯环保。强烈推荐油皮混油皮姐妹！"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.575,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": false,
+   "length": 46
+  },
+  {
+   "query": "控油定妆的散粉",
+   "product_id": "p_beauty_014",
+   "title": "花西子空气蜜粉轻盈定妆控油提亮肤色细腻粉质散粉8",
+   "description": "有用户说早上定妆到晚上九点妆面还是哑光，只补一次就够，粉质细不卡粉，包装小巧方便随身带",
+   "evidence": {
+    "points": [
+     {
+      "source": "用户评价",
+      "text": "控油款适合大油皮！夏天出门最怕脱妆，这款早上涂完到晚上9点回家，妆面还是哑光，只有一点油光，补一次就够。粉质细腻不卡粉，提亮自然不灰，包装小巧补妆方便，推荐油皮姐妹。"
+     },
+     {
+      "source": "官方问答",
+      "text": "先确保底妆完全干透，取粉扑蘸粉后在盒盖轻压去余粉，以按压手法从中央向外推开，重点按压T区、鼻翼等易出油部位。易脱妆区域可采用“三明治定妆法”：底妆后轻拍一层蜜粉，喷定妆喷雾待干，再薄涂一层蜜粉。"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.5897435897435898,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": true,
+   "length": 43
+  },
+  {
+   "query": "夏天去海边玩水用的防水防晒",
+   "product_id": "p_beauty_010",
+   "title": "安热沙金灿倍护防晒乳高倍防水防汗清爽户外面部身体",
+   "description": "遇水遇汗防晒膜反而更紧密，防水防汗能撑 80 分钟，SPF50+ PA++++，游泳出汗多建议每两小时补涂一次",
+   "evidence": {
+    "points": [
+     {
+      "source": "官方问答",
+      "text": "这款防晒乳采用安热沙专利的Aqua Booster EX技术，防水防汗持续时间可达80分钟，符合国际防水标准（ISO 18841）。游泳或长时间户外活动时，若持续浸泡水中或大量出汗，建议每2小时补涂一次，以确保防护效果。"
+     },
+     {
+      "source": "商品描述",
+      "text": "安热沙金灿倍护防晒乳（经典金瓶）是户外防晒的明星产品，核心采用品牌特有的Aqua Booster EX遇水增强技术，遇汗遇水后防晒膜更紧密，SPF50+ PA++++的高倍防护能有效阻隔UVA/UVB，避免晒伤晒黑。"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.6521739130434783,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": false,
+   "length": 55
+  },
+  {
+   "query": "夏天去海边玩水用的防水防晒",
+   "product_id": "p_beauty_006",
+   "title": "巴黎欧莱雅新多重防护隔离露水感轻薄高倍防晒修护提",
+   "description": "麦色滤科技高倍广谱防晒，还加了玻尿酸和维E修护提亮，但防水一般，大量出汗或下水要及时补涂",
+   "evidence": {
+    "points": [
+     {
+      "source": "官方问答",
+      "text": "这款隔离露防晒指数为SPF50+ PA++++，属高倍广谱防晒，能抵御98%以上UVB（晒伤）和UVA（晒黑老化）。其防水防汗性能一般，遇大量出汗或水需及时补涂，以维持防晒效果。"
+     },
+     {
+      "source": "商品描述",
+      "text": "采用欧莱雅专利麦色滤科技，实现SPF50+ PA++++高倍广谱防晒，有效阻隔UVA/UVB，添加玻尿酸与维生素E，防晒同时修护肌肤屏障，自然提亮肤色，让后续妆容更服帖。"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.575,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": false,
+   "length": 44
+  },
+  {
+   "query": "夏天去海边玩水用的防水防晒",
+   "product_id": "p_beauty_023",
+   "title": "理肤泉特护清盈防晒乳高倍防晒清爽控油易敏肌适用面",
+   "description": "专为易敏肌设计，高倍防护同时用温泉水舒缓肌肤，适合怕刺激又怕晒的人，记得用卸妆产品清洁",
+   "evidence": {
+    "points": [
+     {
+      "source": "商品描述",
+      "text": "理肤泉这款特护清盈防晒乳，专为易敏肌设计，50ml的容量刚好满足日常通勤或短途旅行需求。它采用高倍防晒配方，SPF50+ PA++++，能有效抵御UVA/UVB伤害，同时添加了理肤泉温泉水成分，舒缓肌肤不适。"
+     },
+     {
+      "source": "官方问答",
+      "text": "是的，这款防晒乳含有防晒剂成分，普通洁面产品可能无法完全清洁。建议使用温和的卸妆产品（如卸妆乳、卸妆水）先进行卸妆，再用洁面产品清洁面部，确保肌肤彻底干净，避免毛孔堵塞。"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.5128205128205128,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": false,
+   "length": 43
+  },
+  {
+   "query": "敏感肌能用的防晒",
+   "product_id": "p_beauty_023",
+   "title": "理肤泉特护清盈防晒乳高倍防晒清爽控油易敏肌适用面",
+   "description": "专为易敏肌设计，SPF50+ PA++++，含温泉水舒缓，有用户反馈上脸温和不闷，海边也没晒伤。不过也有人用后泛红起疹，建议先试",
+   "evidence": {
+    "points": [
+     {
+      "source": "用户评价",
+      "text": "敏感肌的福音！我皮肤特别容易泛红，这款防晒乳涂上去很温和，没有刺激感。质地清透，不厚重，夏天用也不会闷。防晒力也很强，上次去海边玩，涂了这个没被晒伤。会一直回购的！"
+     },
+     {
+      "source": "商品描述",
+      "text": "理肤泉这款特护清盈防晒乳，专为易敏肌设计，50ml的容量刚好满足日常通勤或短途旅行需求。它采用高倍防晒配方，SPF50+ PA++++，能有效抵御UVA/UVB伤害，同时添加了理肤泉温泉水成分，舒缓肌肤不适。"
+     }
+    ],
+    "risk": "用了一次就过敏了！本来以为理肤泉是敏感肌专用，结果涂完脸就发红发痒，还起了小疹子。质地倒是挺清爽的，但过敏反应太严重了，不敢再用。建议易敏肌的姐妹还是先做测试再买，别像我一样踩雷。"
+   },
+   "has_evidence": true,
+   "grounded": 0.42592592592592593,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": true,
+   "mentions_risk": true,
+   "length": 64
+  },
+  {
+   "query": "敏感肌能用的防晒",
+   "product_id": "p_beauty_010",
+   "title": "安热沙金灿倍护防晒乳高倍防水防汗清爽户外面部身体",
+   "description": "高倍防水防汗，适合通勤和户外出汗场景，还加了保湿因子。但含酒精，有敏感肌用户用后刺痛泛红，用前务必耳后测试",
+   "evidence": {
+    "points": [
+     {
+      "source": "官方问答",
+      "text": "虽然产品质地温和，但部分敏感肌人群可能对其中的某些成分（如酒精）敏感。建议敏感肌用户在使用前，先取少量产品涂抹于耳后或手臂内侧，观察24小时无红肿、刺痛等不适反应后再使用。若使用过程中出现不适，应立即停止使用并清洗干净。"
+     },
+     {
+      "source": "商品描述",
+      "text": "适合户外爱好者、通勤族及易出汗人群，无论是爬山、海滩度假还是日常上班都适用。成分中添加保湿因子，兼顾防晒与肌肤保湿。防水配方需用卸妆产品清洁，敏感肌建议先在耳后做皮肤测试，避免入眼，存放于阴凉干燥处。"
+     }
+    ],
+    "risk": "本来很期待这款防晒，结果用了两次就过敏了！涂在脸上有点刺刺的，过了半天脸颊就泛红起小疹子，赶紧洗掉了。我是混干敏感肌，可能这款里的酒精成分不适合我吧。以后不会再买了，敏感肌慎入！"
+   },
+   "has_evidence": true,
+   "grounded": 0.46808510638297873,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": true,
+   "mentions_risk": false,
+   "length": 53
+  },
+  {
+   "query": "敏感肌能用的防晒",
+   "product_id": "p_beauty_012",
+   "title": "理肤泉特安舒缓修复霜滋润型敏感肌保湿修护屏障面霜",
+   "description": "滋润型修护霜，针对干性敏感肌的屏障受损，换季泛红、空调房干燥、医美后都能用来稳定肌肤",
+   "evidence": {
+    "points": [
+     {
+      "source": "官方问答",
+      "text": "敏感肌在以下场景使用效果显著：换季时（春秋）皮肤易泛红脱皮，用它稳定肌肤；空调房长期待着皮肤干燥紧绷，用它长效保湿；医美术后（如光子嫩肤）屏障脆弱，用它加速修复；日常干性敏感肌作为基础保湿霜，维持屏障健康。"
+     },
+     {
+      "source": "商品描述",
+      "text": "理肤泉特安舒缓修复霜滋润型是专为干性敏感肌打造的屏障修复神器，核心卖点在于温和修复受损屏障、长效保湿舒缓泛红。适用人群为干性敏感肌、屏障受损肌肤，尤其适合换季泛红、空调房干燥、医美术后修复场景。"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.6486486486486487,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": false,
+   "length": 42
+  },
+  {
+   "query": "敏感肌能用的防晒",
+   "product_id": "p_beauty_007",
+   "title": "薇诺娜舒敏保湿特护霜敏感肌修护屏障舒缓干痒保湿面",
+   "description": "含马齿苋和青刺果油，舒缓泛红干痒同时补脂质修屏障，适合长期敏感或突发敏感时日常维稳",
+   "evidence": {
+    "points": [
+     {
+      "source": "商品描述",
+      "text": "薇诺娜舒敏保湿特护霜专为敏感肌打造，核心成分含马齿苋提取物（快速舒缓泛红干痒）、青刺果油（补充皮肤脂质修护屏障）及透明质酸（深层锁水保湿）。注意：开封后6个月内用完，敏感肌首次用前需耳后测试，避免与刺激性产品叠加。"
+     },
+     {
+      "source": "官方问答",
+      "text": "它主要针对敏感肌的屏障受损、换季泛红、干痒脱皮、紧绷等问题。马齿苋提取物可舒缓炎症，缓解泛红干痒；青刺果油补充脂质强化屏障；日常用维持稳定，换季或医美后用加速修护，减少敏感反应，适合长期敏感或突发敏感人群。"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.6486486486486487,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": false,
+   "length": 41
+  },
+  {
+   "query": "敏感肌能用的防晒",
+   "product_id": "p_beauty_009",
+   "title": "珀莱雅弹润透亮青春精华液双抗精华提亮肤色淡纹保湿",
+   "description": "主打提亮淡纹的精华，配方相对温和但含活性成分，敏感肌需先做24小时测试，有人反馈长了闭口",
+   "evidence": {
+    "points": [
+     {
+      "source": "官方问答",
+      "text": "双抗精华2.0配方相对温和，但含活性成分，敏感肌需谨慎。建议先取少量在耳后或手腕内侧做24小时皮肤测试，无红肿、瘙痒等不适再使用。"
+     },
+     {
+      "source": "官方问答",
+      "text": "日常可搭配温和洁面+保湿爽肤水+双抗精华+乳液/面霜；抗老需求可叠加珀莱雅红宝石精华（早双抗晚红宝石）；美白需求可搭配烟酰胺类产品（需间隔使用）。注意避免与高浓度维C、酸类产品同时使用，以免刺激皮肤。"
+     }
+    ],
+    "risk": "用了一周左右，额头和下巴长了好几个闭口，不知道是不是成分不耐受。质地是清爽的，但上脸后有点轻微刺痛感，可能我是敏感肌？之前用1.0没这种情况，2.0反而更刺激？暂时停了，等闭口消了再试试，希望不是产品问题。"
+   },
+   "has_evidence": true,
+   "grounded": 0.625,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": true,
+   "mentions_risk": false,
+   "length": 44
+  },
+  {
+   "query": "油皮夏天不脱妆的粉底液",
+   "product_id": "p_beauty_020",
+   "title": "雅诗兰黛持妆粉底液SPF10PA持久遮瑕控油抗汗",
+   "description": "官方说油皮能持妆6-8小时，抗汗出色；有用户反馈早8到晚6只轻微出油，遮瑕清透不厚重，适合夏天通勤和户外活动",
+   "evidence": {
+    "points": [
+     {
+      "source": "官方问答",
+      "text": "油皮正常情况下可持妆6-8小时，夏季出汗多T区可能轻微脱妆，但不会斑驳。用散粉定妆T区能延长持妆时间。抗汗效果出色，日常户外活动没问题，是夏日持妆的可靠选择。"
+     },
+     {
+      "source": "用户评价",
+      "text": "油皮福音！夏天用完全不脱妆，早8到晚6T区仅轻微出油，吸油纸按一下就好，妆容完整。遮瑕力棒，小痘印毛孔都遮住，质地清透不厚重，油皮友好色号yyds！"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.5102040816326531,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": true,
+   "length": 54
+  },
+  {
+   "query": "干皮秋冬用的保湿爽肤水",
+   "product_id": "p_beauty_019",
+   "title": "兰蔻清滢柔肤水大粉水保湿舒缓干性肌肤柔润爽肤水4",
+   "description": "专为干性和换季敏感干皮设计，含玫瑰精华舒缓、玻尿酸锁水，早晚轻拍或妆前打底都合适",
+   "evidence": {
+    "points": [
+     {
+      "source": "商品描述",
+      "text": "兰蔻清滢柔肤水（大粉水）是干性肌肤的秋冬保湿救星！适用人群精准锁定干性、偏干及换季敏感干皮，日常护肤第一步用它，早晚轻拍或用化妆棉擦拭都可，妆前打底还能让底妆更服帖。"
+     },
+     {
+      "source": "官方问答",
+      "text": "兰蔻大粉水主要针对干性肌肤设计，成分中添加了玫瑰精华和玻尿酸，玫瑰精华能舒缓肌肤不适感，玻尿酸则强效锁水。如果测试过程中出现不适，应立即停止使用并咨询皮肤科医生。"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.5833333333333334,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": false,
+   "length": 40
+  },
+  {
+   "query": "干皮秋冬用的保湿爽肤水",
+   "product_id": "p_beauty_003",
+   "title": "SK-II护肤精华露神仙水晶透保湿调理角质收缩毛",
+   "description": "九成以上酵母发酵滤液，温和调理角质、改善毛孔，保湿不油腻，敏感肌需先小面积试用",
+   "evidence": {
+    "points": [
+     {
+      "source": "商品描述",
+      "text": "SK-II神仙水（护肤精华露）核心成分是90%以上的PITERA™酵母发酵滤液，这是SK-II独家灵魂成分，含氨基酸、矿物质、有机酸等多种活性物质。它能温和调理角质，促进肌肤代谢，收缩毛孔，让皮肤水晶透亮、保湿不油腻。"
+     },
+     {
+      "source": "官方问答",
+      "text": "敏感肌可尝试但需谨慎。PITERA™有调理角质作用，初期可能轻微刺痛泛红，属正常适应现象。首次用取少量耳后或手臂测试，24小时无不适再少量用；初期每周2-3次，逐渐增加频率建立耐受；"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.5588235294117647,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": false,
+   "length": 39
+  },
+  {
+   "query": "眼周干纹用什么眼霜",
+   "product_id": "p_beauty_021",
+   "title": "科颜氏牛油果保湿眼霜滋润补水细腻质地淡化干纹眼周",
+   "description": "针对缺水引起的假性干纹，牛油果油配神经酰胺，质地化水不闷脂肪粒，不少人反馈两三周后干纹变浅、上妆不卡粉。不过也有用户用一个月没见变化，吸收偏慢",
+   "evidence": {
+    "points": [
+     {
+      "source": "官方问答",
+      "text": "它针对的就是因眼周干燥缺水产生的假性干纹，不是深的真性皱纹，坚持正确使用是可以逐步改善的。很多用户反馈连续用2到3周之后，之前一笑就冒出来的眼尾干纹、上妆卡粉的纹路就会明显变浅，上妆再也不会在眼角卡出一道粉线。"
+     },
+     {
+      "source": "商品描述",
+      "text": "科颜氏这款牛油果眼霜是万千干纹眼周星人的老熟人啦，核心采用冷压萃取的智利天然牛油果油，搭配维生素E与神经酰胺复合物，质地是那种刚挖出来像柔滑牛油果泥、触肤就会慢慢化水的特殊配方，完全不会糊眼闷脂肪粒。"
+     }
+    ],
+    "risk": "我抱着试试的心态买了28g的，结果用了快一个月，眼周的干纹一点变化都没有，该卡粉还是卡粉，每次涂完要等半天才能完全吸收，我这种经常熬夜的人用着感觉完全没效果，三百多块钱买这么一大瓶，啥用都没有，还不如之前用的一百多的入门"
+   },
+   "has_evidence": true,
+   "grounded": 0.42857142857142855,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": true,
+   "mentions_risk": true,
+   "length": 71
+  },
+  {
+   "query": "眼周干纹用什么眼霜",
+   "product_id": "p_beauty_016",
+   "title": "AHC塑颜修护全脸眼霜紧致淡纹保湿提亮多效眼周护",
+   "description": "不含酒精香精，眼周之外法令纹、颈纹也能涂，有用户用一个月干纹明显变淡、早上眼周仍滋润，适合想一瓶兼顾多处的人",
+   "evidence": {
+    "points": [
+     {
+      "source": "官方问答",
+      "text": "是的，这款眼霜配方温和，不含酒精、香精等刺激性成分，除眼周外，法令纹、抬头纹、颈纹等易产生细纹的部位都可使用。它的多效配方能同时满足不同区域的修护需求，相当于一瓶多用，性价比很高。"
+     },
+     {
+      "source": "用户评价",
+      "text": "真的太惊喜了！用了一个月，眼周的干纹明显淡了，尤其是笑起来的细纹几乎看不见。保湿也超持久，早上起来眼周还是润润的。全脸用在法令纹处，感觉也紧致了一点。价格也实惠，30ml能用很久，会无限回购的，必须给5分！"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.3829787234042553,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": true,
+   "length": 54
+  },
+  {
+   "query": "地铁通勤隔绝噪音的耳机",
+   "product_id": "p_digital_007",
+   "title": "华为HUAWEI FreeBuds Pro 5 ",
+   "description": "能实时识别环境噪音并自动调整降噪强度，从小区走到主干道不用手动切档。不过有用户反馈耳型偏小的话快走时容易往下滑",
+   "evidence": {
+    "points": [
+     {
+      "source": "官方问答",
+      "text": "是的，它搭载了华为最新的动态降噪适配算法，耳机内置的多传感器会实时监测你所处的环境噪音类型，比如你从安静的小区走到车流密集的主干道，系统会自动把降噪强度调整到适配交通噪音的档位，走到人声密集的商圈时也会自动优化降噪参数，"
+     },
+     {
+      "source": "商品描述",
+      "text": "日常通勤挤地铁、办公室赶方案、居家沉浸式听歌都能用，使用时建议首次佩戴先在华为智慧生活APP里做贴合度检测，选择适配的耳塞套，不要在雷雨天气或者高水压的水下环境佩戴，避免元器件受潮损坏。"
+     }
+    ],
+    "risk": "用了快两周还是有点小失望，我耳朵属于偏小的类型，哪怕换了最小号的耳塞套，走路快走半小时耳机就会往下滑，之前用的旧款FreeBuds Pro戴着就很稳不会掉。"
+   },
+   "has_evidence": true,
+   "grounded": 0.36538461538461536,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": true,
+   "mentions_risk": true,
+   "length": 55
+  },
+  {
+   "query": "运动的时候能测心率的耳机",
+   "product_id": "p_digital_018",
+   "title": "Apple AirPods Pro 3 主动降噪",
+   "description": "配对 iPhone 后开启开关，贴合耳道就能后台记录静息和运动心率，数据同步到健康 App，跑步健身都合适",
+   "evidence": {
+    "points": [
+     {
+      "source": "官方问答",
+      "text": "首次配对连接你的iPhone升级到iOS 18及以上系统后，在蓝牙设备详情页打开「心率监测」开关即可自动启用，日常佩戴时耳机贴合耳道就会自动后台监测静息、运动状态下的心率，数据会自动同步到苹果健康APP，同时支持联动Ap"
+     },
+     {
+      "source": "商品描述",
+      "text": "特别适合日常通勤的上班族、跑步健身的运动爱好者、长时间戴耳机听网课的学生党使用，早高峰挤地铁、夜跑夜骑、办公室隔绝同事闲聊等场景都能适配。"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.5652173913043478,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": false,
+   "length": 53
+  },
+  {
+   "query": "运动的时候能测心率的耳机",
+   "product_id": "p_digital_007",
+   "title": "华为HUAWEI FreeBuds Pro 5 ",
+   "description": "能根据环境自动调整降噪强度，从小区走到马路会自动适配，降噪模式单次 6 小时、配盒共 30 小时",
+   "evidence": {
+    "points": [
+     {
+      "source": "官方问答",
+      "text": "是的，它搭载了华为最新的动态降噪适配算法，耳机内置的多传感器会实时监测你所处的环境噪音类型，比如你从安静的小区走到车流密集的主干道，系统会自动把降噪强度调整到适配交通噪音的档位，走到人声密集的商圈时也会自动优化降噪参数，"
+     },
+     {
+      "source": "商品描述",
+      "text": "华为FreeBuds Pro 5是专为追求高音质和强降噪体验的数码爱好者、通勤族、办公党打造的旗舰级真无线耳机。单耳满电可支持6小时降噪模式播放，搭配充电盒总续航能到30小时，支持快充15分钟听歌4小时。"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.4594594594594595,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": false,
+   "length": 48
+  },
+  {
+   "query": "夜景拍照厉害的手机",
+   "product_id": "p_digital_016",
+   "title": "OPPO Reno 16 Pro 轻薄人像摄影高",
+   "description": "深夜路边摊或昏暗清吧拍合照，人脸不发灰不反光，霓虹背景虚化成光斑；不过有用户反映晴天户外人像磨皮过头",
+   "evidence": {
+    "points": [
+     {
+      "source": "官方问答",
+      "text": "哪怕你是在深夜路边摊、光线昏暗的清吧里拍合照，也不用开闪光灯晃得大家睁不开眼，拍出来的人脸不会出现油光反光，背景的夜市灯光、店面霓虹灯还能保留自然的虚化光斑，肤色还原得很通透，完全不会出现普通手机夜景人像发灰发糊的问题，"
+     },
+     {
+      "source": "用户评价",
+      "text": "这机子真的买对了！我平时特别爱和朋友出门探店拍照片，之前的旧手机在暖光的咖啡馆里拍出来的人脸总是发黄，这个Reno16Pro拍出来的肤色特别通透，自带的虚化把背景的蛋糕灯虚化得特别好看，直出都不用修图直接发朋友圈。"
+     }
+    ],
+    "risk": "用了快两周真的有点失望，本来冲着人像摄影买的，结果晴天户外拍人像的时候，后置镜头的算法过度磨皮，把我脸上的痘印全磨没就算了，连眉毛的毛流感都给磨没了，拍出来的人像假得像网图。"
+   },
+   "has_evidence": true,
+   "grounded": 0.45652173913043476,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": true,
+   "mentions_risk": true,
+   "length": 50
+  },
+  {
+   "query": "夜景拍照厉害的手机",
+   "product_id": "p_digital_002",
+   "title": "华为HUAWEI Pura 90 Pro 超感光",
+   "description": "暗光场景自动识别，路边摊拍食物、楼道拍宠物抬手两秒出干净成片；但有用户反映夜拍对焦偏慢，动态瞬间容易错过",
+   "evidence": {
+    "points": [
+     {
+      "source": "官方问答",
+      "text": "日常夜拍不需要手动调整参数，系统自带的超感光夜景算法会自动识别暗光场景，从进光量优化到噪点压制全流程自动处理，就算是路边摊拍烟火气食物、楼道里拍宠物，抬手按快门等2秒就能出干净透亮的成片。"
+     },
+     {
+      "source": "用户评价",
+      "text": "拍照日常光线里表现还行，但是夜拍的时候对焦速度特别慢，晚上出去拍路边的小猫，按快门之后对焦对了三四秒才对上，好几次想拍的动态瞬间直接错过。"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.5319148936170213,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": true,
+   "length": 52
+  },
+  {
+   "query": "夜景拍照厉害的手机",
+   "product_id": "p_digital_015",
+   "title": "OPPO Find X9 Ultra 超大底影像",
+   "description": "超大底主摄自动调曝光，拍夜间车流能留住光轨又保住暗部细节，探店博主拍暗调菜品直出就好看",
+   "evidence": {
+    "points": [
+     {
+      "source": "官方问答",
+      "text": "这款机型的超大底主摄搭配了全新的全域像素动态范围调整算法，默认夜景模式下会自动识别移动光源场景，动态调整曝光时长和ISO数值，拍夜间车流轨迹时既能保留车流光轨的流畅感，也不会让周边的暗部场景过暗丢失细节。"
+     },
+     {
+      "source": "用户评价",
+      "text": "平时做美食探店博主，以前带个相机拍店里的暗调环境菜品，经常拍出来噪点多还要后期磨半天，现在用这台手机的超大底主摄，暖光下的牛排纹理、甜品的奶油光泽直出就特别好看，连桌面的木纹细节都不丢。"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.525,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": false,
+   "length": 43
+  },
+  {
+   "query": "夜景拍照厉害的手机",
+   "product_id": "p_digital_017",
+   "title": "vivo X300 Ultra 旗舰影像2K护眼",
+   "description": "大底潜望长焦配夜景算法，傍晚拍百米外招牌噪点少、色彩讨喜，跑一天探店拍剪还剩电，适合内容创作者",
+   "evidence": {
+    "points": [
+     {
+      "source": "官方问答",
+      "text": "它搭载的大底潜望式长焦拥有更大的感光面积，搭配vivo独家的夜景长焦算法，哪怕是在傍晚拍100米外的建筑招牌，画面也不会像普通小底长焦那样满是噪点，色彩还原度甚至比很多入门便携卡片机更讨喜。"
+     },
+     {
+      "source": "用户评价",
+      "text": "作为常年拍探店素材的博主，换这款手机半个月真的太香了！连续跑一下午探店拍视频，中间还剪了两条1分钟的片段，晚上到家还剩28%的电，之前的旧手机早就得插充电宝了，这个续航真的顶，完全是为我们这种内容创作者量身定做的。"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.5,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": false,
+   "length": 47
+  },
+  {
+   "query": "夜景拍照厉害的手机",
+   "product_id": "p_digital_008",
+   "title": "小米 17 Ultra 2K高刷屏潜望长焦澎湃芯",
+   "description": "芯片单独处理长焦暗部数据，夜里拍对面高楼店招、演唱会后排都清楚，噪点比同规格低约四成，扫街修图也合适",
+   "evidence": {
+    "points": [
+     {
+      "source": "官方问答",
+      "text": "这套组合专门针对暗光长焦场景做了定向调校，澎湃芯片会独立处理长焦镜头采集的暗部raw数据，不用靠主摄像头裁切凑数，就算在夜间商业街拍对面高楼的店招，或是演唱会后排拍台上的表演者，成片噪点比同规格其他旗舰低40%左右，色彩"
+     },
+     {
+      "source": "用户评价",
+      "text": "作为常年扫街的摄影爱好者，这台手机真的戳中我所有需求！而且2K屏修图的时候看色准特别准，导出的图在电脑上看色差几乎没有，太适合我们这种经常出门拍照的人了。"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.4888888888888889,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": false,
+   "length": 50
+  },
+  {
+   "query": "打游戏续航长的大屏手机",
+   "product_id": "p_digital_009",
+   "title": "小米 17 Max 大屏长续航高性能影音游戏5G",
+   "description": "7 英寸 2K 高刷屏，有用户说最高画质连玩一下午游戏帧率几乎不波动，适合重度手游玩家",
+   "evidence": {
+    "points": [
+     {
+      "source": "商品描述",
+      "text": "小米17 Max是专为影音游戏爱好者打造的大屏5G性能旗舰，搭配超窄边7英寸2K超清大屏，支持120Hz自适应高刷，峰值亮度达1800nit，户外强光下看剧刷攻略也清晰透亮。"
+     },
+     {
+      "source": "用户评价",
+      "text": "之前的旧手机玩原神半小时就烫得能煎鸡蛋，还总掉帧，这款开最高画质连续玩一下午原神都稳得不行，帧率几乎没怎么波动，屏幕大视野看得特别清楚，打深渊找怪都比以前快好多。"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.4594594594594595,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": true,
+   "length": 43
+  },
+  {
+   "query": "打游戏续航长的大屏手机",
+   "product_id": "p_digital_015",
+   "title": "OPPO Find X9 Ultra 超大底影像",
+   "description": "2K 屏会按场景自动调刷新率，玩高帧手游才拉满，兼顾流畅和省电，适合爱玩游戏也爱拍照的人",
+   "evidence": {
+    "points": [
+     {
+      "source": "官方问答",
+      "text": "这块2K高刷屏搭载了OPPO自研的智能刷新率适配芯片，会实时识别当前运行的APP场景：刷静态图文内容时自动降到1Hz省电模式，刷短视频、浏览网页时调整到90Hz兼顾流畅和功耗，玩支持高帧的大型手游时才会拉满120Hz。"
+     },
+     {
+      "source": "用户评价",
+      "text": "作为一个业余拍风光的爱好者真的太爱这台手机了，上周去山里拍日落，用超大底主摄随手拍的剪影晚霞，暗部的树影细节都清清楚楚，以前带微单出门沉得要死，现在揣兜里随手就能出大片。"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.3333333333333333,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": false,
+   "length": 44
+  },
+  {
+   "query": "打游戏续航长的大屏手机",
+   "product_id": "p_digital_016",
+   "title": "OPPO Reno 16 Pro 轻薄人像摄影高",
+   "description": "中度使用能撑一整天，连玩两小时轻度手游耗电不到三成，适合预算有限又怕掉电快的用户",
+   "evidence": {
+    "points": [
+     {
+      "source": "官方问答",
+      "text": "日常中度使用的话满电支撑一整天完全没问题，就算你连续2小时玩轻度的MOBA类手游，耗电也不到30%，完全不用为了续航特意把高刷关掉，兼顾了流畅体验和续航表现，不会出现普通高刷手机掉电飞快的情况。"
+     },
+     {
+      "source": "官方问答",
+      "text": "这款Reno 16 Pro搭载了OPPO自研的内存拓展技术，12GB的物理运存最高可以拓展到等效24GB的运行空间，日常你同时挂微信、QQ、淘宝、抖音、小红书还有办公的文档APP，来回切换基本不会出现重新加载的情况，正常"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.3783783783783784,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": false,
+   "length": 40
+  },
+  {
+   "query": "打游戏续航长的大屏手机",
+   "product_id": "p_digital_017",
+   "title": "vivo X300 Ultra 旗舰影像2K护眼",
+   "description": "大电池加影像功耗优化，拍一天素材到晚上还剩两成电，适合常外出拍摄的内容创作者",
+   "evidence": {
+    "points": [
+     {
+      "source": "官方问答",
+      "text": "vivo X300 Ultra内置的大电池搭配专属的影像功耗优化算法，连续录制4K 60帧视频可以坚持接近7小时，日常出门逛景区拍一天素材，中间间歇刷社交平台、接打十几个电话，到晚上回家还能剩20%左右的电量，轻度使用甚"
+     },
+     {
+      "source": "商品描述",
+      "text": "vivo X300 Ultra是专门为影像发烧友、高清内容创作者打造的旗舰级5G手机，标配2K级10亿色护眼直屏，支持1920Hz高频PWM调光，长时间剪vlog、刷4K内容眼睛也不容易酸。"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.4857142857142857,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": false,
+   "length": 38
+  },
+  {
+   "query": "打游戏续航长的大屏手机",
+   "product_id": "p_digital_003",
+   "title": "Apple iPhone 17 Pro Max ",
+   "description": "6.9 英寸大屏配旗舰芯片，游戏和剪辑都够快，适合预算充足、手掌不小的用户",
+   "evidence": {
+    "points": [
+     {
+      "source": "官方问答",
+      "text": "不过因为机身面积大，还是建议手掌特别小的用户选配套的半透磨砂保护壳，平时过马路单手刷手机的时候可以握住边框中上部，避免从手心滑出去摔碎后盖。"
+     },
+     {
+      "source": "商品描述",
+      "text": "iPhone 17 Pro Max这次直接把大屏体验拉到新高度，6.9英寸超视网膜XDR显示屏不管是刷4K纪录片还是连剪几小时vlog都够爽，A19 Pro仿生芯片的算力直接把移动端3A游戏和专业修图的速度拉满，连导出4"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.41935483870967744,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": false,
+   "length": 37
+  },
+  {
+   "query": "能折叠的手机，主要用来办公",
+   "product_id": "p_digital_010",
+   "title": "小米 MIX Fold 5 内折大屏旗舰折叠屏手",
+   "description": "展开后视野比普通直屏多近六成，有用户边开会议边拖资料进文档，不用来回切应用",
+   "evidence": {
+    "points": [
+     {
+      "source": "商品描述",
+      "text": "小米MIX Fold 5作为小米旗下最新的内折大屏旗舰折叠屏，专为高效办公和沉浸式影音体验打造。日常刷4K高清剧集、玩大屏开放世界手游时，视野比普通直屏手机多出近60%。"
+     },
+     {
+      "source": "用户评价",
+      "text": "平时上班我一边开腾讯会议记笔记，一边拖资料到PPT里，不用来回切应用省了超多时间。周末窝在家里展开屏看新出的科幻大片，那个沉浸感完全不是普通小屏手机能比的，同事看到都问我要链接。"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.5294117647058824,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": true,
+   "length": 37
+  },
+  {
+   "query": "能折叠的手机，主要用来办公",
+   "product_id": "p_digital_014",
+   "title": "OPPO Find N6 内折柔性大屏旗舰折叠屏",
+   "description": "铰链经过多次迭代，折痕几乎看不出来，有用户反馈展开屏一边改文档一边挂消息，开会还能悬浮记笔记",
+   "evidence": {
+    "points": [
+     {
+      "source": "商品描述",
+      "text": "OPPO Find N6是主打内折柔性大屏体验的旗舰折叠屏，搭载经过多次迭代的精工铰链，折痕几乎隐于7.82英寸的内折大屏之下，展开后屏幕比例接近黄金比例，不管是同时打开微信、文档和会议界面的多任务办公，还是拉满画幅看杜"
+     },
+     {
+      "source": "用户评价",
+      "text": "终于等到Find N6到手，这个大屏多任务真的太适合我这种经常跑客户的打工人了！展开屏幕一边改PPT一边挂微信接客户消息，开线上会的时候还能悬浮调出笔记界面记要点，再也不用来回切应用漏消息。"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.5121951219512195,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": true,
+   "length": 46
+  },
+  {
+   "query": "能折叠的手机，主要用来办公",
+   "product_id": "p_digital_017",
+   "title": "vivo X300 Ultra 旗舰影像2K护眼",
+   "description": "2K护眼直屏配高频调光，长时间剪片刷片眼睛不易酸，有用户跑一下午探店还剩近三成电",
+   "evidence": {
+    "points": [
+     {
+      "source": "商品描述",
+      "text": "vivo X300 Ultra是专门为影像发烧友、高清内容创作者打造的旗舰级5G手机，标配2K级10亿色护眼直屏，支持1920Hz高频PWM调光，长时间剪vlog、刷4K内容眼睛也不容易酸。"
+     },
+     {
+      "source": "用户评价",
+      "text": "作为常年拍探店素材的博主，换这款手机半个月真的太香了！连续跑一下午探店拍视频，中间还剪了两条1分钟的片段，晚上到家还剩28%的电，之前的旧手机早就得插充电宝了，这个续航真的顶，完全是为我们这种内容创作者量身定做的。"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.5135135135135135,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": true,
+   "length": 40
+  },
+  {
+   "query": "能折叠的手机，主要用来办公",
+   "product_id": "p_digital_015",
+   "title": "OPPO Find X9 Ultra 超大底影像",
+   "description": "超大底主摄加影像芯片，暗光远景都能拍干净，不过有用户反映机身偏重，单手久用会累",
+   "evidence": {
+    "points": [
+     {
+      "source": "用户评价",
+      "text": "作为一个业余拍风光的爱好者真的太爱这台手机了，上周去山里拍日落，用超大底主摄随手拍的剪影晚霞，暗部的树影细节都清清楚楚，以前带微单出门沉得要死，现在揣兜里随手就能出大片。"
+     },
+     {
+      "source": "商品描述",
+      "text": "这台OPPO Find X9 Ultra是实打实的年度影像旗舰，搭载超大底主摄传感器，搭配自研影像NPU，暗光夜拍、远景抓拍都能出纯净通透的大片，没有普通手机常有的噪点糊片问题。"
+     }
+    ],
+    "risk": "而且机身重量比我之前用的手机重不少，单手握持刷半小时微信手就酸得不行，出门装牛仔裤口袋里坠得裤兜都往下滑，虽然拍照画质确实不错，但用久了握持的累手感真的接受不了，感觉不太适合我这种习惯单手操作的用户。"
+   },
+   "has_evidence": true,
+   "grounded": 0.3142857142857143,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": true,
+   "mentions_risk": true,
+   "length": 39
+  },
+  {
+   "query": "能折叠的手机，主要用来办公",
+   "product_id": "p_digital_009",
+   "title": "小米 17 Max 大屏长续航高性能影音游戏5G",
+   "description": "7英寸大屏但做了弧度收边，重量控制得比同尺寸轻，还带小屏模式，适合爱追剧打游戏的人",
+   "evidence": {
+    "points": [
+     {
+      "source": "官方问答",
+      "text": "小米17 Max虽然屏幕达到7英寸，但是机身做了专门的2.5D弧度收边处理，整机重量控制在228g，比同尺寸的其他大屏手机轻了近20g，适配了专门的小屏模式，你只要在屏幕边缘向内侧滑动停留半秒，就能把整个操作界面缩小到适"
+     },
+     {
+      "source": "用户评价",
+      "text": "更糟的是我揣包里挤地铁的时候不小心蹭到扶手，屏幕边角直接碎了一道小缝，之前用的旧小屏手机摔好几次都没事，这个大屏的边角抗摔性确实比我预想的差很多，去官方问换屏幕要一千多，感觉性价比没那么高。"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.4594594594594595,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": false,
+   "length": 41
+  },
+  {
+   "query": "轻薄好看适合拍人像的手机",
+   "product_id": "p_digital_016",
+   "title": "OPPO Reno 16 Pro 轻薄人像摄影高",
+   "description": "整机几乎没坠手感，揣口袋出门扫街轻松；有用户说咖啡馆暖光下肤色通透、背景虚化好看，直出就能发。不过有人反映晴天户外磨皮偏重",
+   "evidence": {
+    "points": [
+     {
+      "source": "用户评价",
+      "text": "这机子真的买对了！我平时特别爱和朋友出门探店拍照片，之前的旧手机在暖光的咖啡馆里拍出来的人脸总是发黄，这个Reno16Pro拍出来的肤色特别通透，自带的虚化把背景的蛋糕灯虚化得特别好看，直出都不用修图直接发朋友圈。"
+     },
+     {
+      "source": "商品描述",
+      "text": "OPPO Reno 16 Pro是专门为爱拍人像的年轻用户打造的轻薄5G旗舰机，整机拿在手里几乎没有坠手感，长时间刷剧出门扫街揣口袋都毫无负担。"
+     }
+    ],
+    "risk": "用了快两周真的有点失望，本来冲着人像摄影买的，结果晴天户外拍人像的时候，后置镜头的算法过度磨皮，把我脸上的痘印全磨没就算了，连眉毛的毛流感都给磨没了，拍出来的人像假得像网图。"
+   },
+   "has_evidence": true,
+   "grounded": 0.45454545454545453,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": true,
+   "mentions_risk": true,
+   "length": 61
+  },
+  {
+   "query": "轻薄好看适合拍人像的手机",
+   "product_id": "p_digital_015",
+   "title": "OPPO Find X9 Ultra 超大底影像",
+   "description": "超大底主摄配自研影像芯片，有探店博主反馈暖光下菜品纹理和奶油光泽直出就好看，暗光噪点少，适合爱拍美食和夜景的人",
+   "evidence": {
+    "points": [
+     {
+      "source": "用户评价",
+      "text": "平时做美食探店博主，以前带个相机拍店里的暗调环境菜品，经常拍出来噪点多还要后期磨半天，现在用这台手机的超大底主摄，暖光下的牛排纹理、甜品的奶油光泽直出就特别好看，连桌面的木纹细节都不丢。"
+     },
+     {
+      "source": "商品描述",
+      "text": "这台OPPO Find X9 Ultra是实打实的年度影像旗舰，搭载超大底主摄传感器，搭配自研影像NPU，暗光夜拍、远景抓拍都能出纯净通透的大片，没有普通手机常有的噪点糊片问题。"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.49019607843137253,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": false,
+   "length": 55
+  },
+  {
+   "query": "轻薄好看适合拍人像的手机",
+   "product_id": "p_digital_002",
+   "title": "华为HUAWEI Pura 90 Pro 超感光",
+   "description": "193g 机身加 8.2mm 薄中框，久握不累，超感光影像日常拍人拍景都稳。不过有用户反映套上全包壳后侧边触控不太灵",
+   "evidence": {
+    "points": [
+     {
+      "source": "商品描述",
+      "text": "华为Pura 90 Pro是主打超感光影像的曲面屏轻薄旗舰，整机仅重193g搭配8.2mm超薄中框，持握久了也不会累手。"
+     },
+     {
+      "source": "用户评价",
+      "text": "用了快一个月体验真的超出预期，193g的重量揣兜里完全没负担，曲面屏的手感摸起来太顺滑了。平时打游戏开最高画质也不卡，续航中度用一整天完全够，七千多花得太值了。"
+     }
+    ],
+    "risk": "手机本身重量控制得确实不错，但是搭配我之前买的全包壳之后，侧边的触控灵敏度变得很奇怪，有时候点屏幕边缘按好几下才反应，用着挺闹心的。"
+   },
+   "has_evidence": true,
+   "grounded": 0.34,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": true,
+   "mentions_risk": true,
+   "length": 58
+  },
+  {
+   "query": "轻薄好看适合拍人像的手机",
+   "product_id": "p_digital_017",
+   "title": "vivo X300 Ultra 旗舰影像2K护眼",
+   "description": "2K 护眼直屏加高频调光，长时间剪片刷视频眼睛不易酸，随手拍就能出社交平台可发的高清片，适合爱拍 vlog 的人",
+   "evidence": {
+    "points": [
+     {
+      "source": "官方问答",
+      "text": "日常外出扫街拍人文、旅拍记录风景，不用额外带沉重的相机，揣口袋里随拿随拍就能出符合社交平台发布要求的高清大片，对非专业级的普通影像爱好者来说完全够用。"
+     },
+     {
+      "source": "商品描述",
+      "text": "vivo X300 Ultra是专门为影像发烧友、高清内容创作者打造的旗舰级5G手机，标配2K级10亿色护眼直屏，支持1920Hz高频PWM调光，长时间剪vlog、刷4K内容眼睛也不容易酸。"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.4897959183673469,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": false,
+   "length": 56
+  },
+  {
+   "query": "轻薄好看适合拍人像的手机",
+   "product_id": "p_digital_008",
+   "title": "小米 17 Ultra 2K高刷屏潜望长焦澎湃芯",
+   "description": "潜望长焦加自研影像芯片，有摄影爱好者说 2K 屏修图色准很准，导出几乎无色差，适合常扫街又爱后期的人",
+   "evidence": {
+    "points": [
+     {
+      "source": "用户评价",
+      "text": "作为常年扫街的摄影爱好者，这台手机真的戳中我所有需求！而且2K屏修图的时候看色准特别准，导出的图在电脑上看色差几乎没有，太适合我们这种经常出门拍照的人了。"
+     },
+     {
+      "source": "商品描述",
+      "text": "这台小米17 Ultra是专为影像发烧友、手游重度玩家和职场精英打造的年度旗舰，搭载小米自研澎湃影像芯片+潜望长焦模组，配合2K超高刷新率的定制AMOLED屏，全链路5G网络适配各类高速场景。"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.5227272727272727,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": false,
+   "length": 50
+  },
+  {
+   "query": "专业视频剪辑用什么笔记本",
+   "product_id": "p_digital_012",
+   "title": "Apple MacBook Pro 16英寸 M",
+   "description": "统一内存架构调用效率高，32GB 同时跑两条 4K 时间线加特效工程也不卡。有用户反馈十分钟 4K 片导出十五分钟搞定",
+   "evidence": {
+    "points": [
+     {
+      "source": "官方问答",
+      "text": "完全不会出现卡顿情况，M5 Pro芯片的统一内存架构和CPU、GPU是直连的，比传统PC的独立内存调用效率高40%左右，32GB版本同时导入2条4K 60fps素材时间线，后台挂着AE的10层动态粒子特效工程，再开PS调"
+     },
+     {
+      "source": "用户评价",
+      "text": "做影视后期的毫不犹豫冲了48GB的深空黑版本，用了快半个月简直幸福感拉满！之前用旧笔记本导出一条10分钟的4K广告片要等40多分钟，现在用这台跑导出15分钟就搞定了，省下来的时间能多接好几个私单。"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.46938775510204084,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": true,
+   "length": 59
+  },
+  {
+   "query": "专业视频剪辑用什么笔记本",
+   "product_id": "p_digital_006",
+   "title": "Apple MacBook Pro 14英寸 M",
+   "description": "有短视频用户反馈十分钟 4K 短片十来分钟就能导出，机身噪音小，剪辑续航最长 18 小时，外出跑项目不用带充电器",
+   "evidence": {
+    "points": [
+     {
+      "source": "用户评价",
+      "text": "做短视频剪辑的入手了16GB+512GB的深空黑款，用了快半个月太香了！之前旧电脑导出10分钟4K短片要等二十多分钟，这台M5芯片十来分钟就能跑完，而且机身几乎没什么明显的噪音。"
+     },
+     {
+      "source": "商品描述",
+      "text": "机身采用全铝一体成型工艺，深空黑版本加入特殊纳米涂层抗指纹，连续视频剪辑续航最长可达18小时，外出跑项目一整天不用带充电器。"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.7021276595744681,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": false,
+   "length": 56
+  },
+  {
+   "query": "专业视频剪辑用什么笔记本",
+   "product_id": "p_digital_023",
+   "title": "联想 ThinkBook 14+ 2026 全面",
+   "description": "高配 32GB 内存同时开修图软件、剪映和十几个网页不卡，2.8K 高刷屏看素材细节清楚，导出比旧机快一倍多",
+   "evidence": {
+    "points": [
+     {
+      "source": "用户评价",
+      "text": "做设计买的高配版，用了快半个月真的香，32GB内存同时开PS、剪映还有十几个网页完全不卡，2.8K高刷屏看素材细节特别清楚，剪10分钟的4Kvlog导出速度比我之前旧笔记本快了一倍多。"
+     },
+     {
+      "source": "商品描述",
+      "text": "联想ThinkBook 14+ 2026是专为职场商务人和在校学生打造的高性能轻薄本，整机薄至15.9mm仅重1.4kg，搭载全新一代标压处理器搭配2.8K 120Hz全尺寸高清全面屏，100%sRGB高色域覆盖让修图、"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.6739130434782609,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": false,
+   "length": 54
+  },
+  {
+   "query": "专业视频剪辑用什么笔记本",
+   "product_id": "p_digital_004",
+   "title": "华为HUAWEI MateBook 14 鸿蒙版",
+   "description": "轻度剪辑剪半小时 1080P 工程能流畅预览，只有同时开三个以上大型专业软件才会偶尔加载延迟",
+   "evidence": {
+    "points": [
+     {
+      "source": "官方问答",
+      "text": "如果是做轻度视频剪辑，剪1080P的半小时vlog工程也能流畅预览，只有同时运行超过3个大型专业建模软件的时候，才会偶尔出现轻微的加载延迟。"
+     },
+     {
+      "source": "用户评价",
+      "text": "作为程序员买这个本真的选对了！平时开十几个网页查文档，同时挂着微信钉钉，开两个编辑器跑代码一点都不卡，跨屏协同还能直接把手机上收到的需求文档直接拖到代码文件夹里，复制粘贴连扫码发文件的步骤都省了。"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.6904761904761905,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": false,
+   "length": 46
+  },
+  {
+   "query": "专业视频剪辑用什么笔记本",
+   "product_id": "p_digital_022",
+   "title": "联想 ThinkPad X1 Carbon Au",
+   "description": "碳纤维机身仅 1.1kg，会议待办能自动整理成表格同步日程，适合常开会、剪辑需求不重的商务人士",
+   "evidence": {
+    "points": [
+     {
+      "source": "用户评价",
+      "text": "作为行政总监平时天天要开跨部门线上会，这台本的AI功能真的帮我省了超多事，它自动把会议里各部门的待办事项全部整理成表格，还能自动同步到我的日程表，完全不用我会后熬夜整理。"
+     },
+     {
+      "source": "商品描述",
+      "text": "这台联想ThinkPad X1 Carbon Aura AI元启版2026是专为高端商务人士打造的14英寸轻薄本，整机采用航空级碳纤维材质打造，裸机重量仅1.1kg，薄至14.9mm，揣进通勤公文包完全没负担。"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.4634146341463415,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": false,
+   "length": 47
+  },
+  {
+   "query": "经常出差要带的轻薄商务本",
+   "product_id": "p_digital_022",
+   "title": "联想 ThinkPad X1 Carbon Au",
+   "description": "碳纤维机身仅 1.1kg、薄至 14.9mm，塞进公文包没负担；有用户说雾面屏在高铁站强光下也不反光",
+   "evidence": {
+    "points": [
+     {
+      "source": "用户评价",
+      "text": "雾面屏在高铁站的强光下也看得清清楚楚，完全没有反光晃眼的情况，真的是我用过最顺手的商务本。"
+     },
+     {
+      "source": "商品描述",
+      "text": "这台联想ThinkPad X1 Carbon Aura AI元启版2026是专为高端商务人士打造的14英寸轻薄本，整机采用航空级碳纤维材质打造，裸机重量仅1.1kg，薄至14.9mm，揣进通勤公文包完全没负担。"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.6428571428571429,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": true,
+   "length": 50
+  },
+  {
+   "query": "经常出差要带的轻薄商务本",
+   "product_id": "p_digital_020",
+   "title": "Apple MacBook Air 13英寸 M",
+   "description": "16GB 内存多开网页文档不卡，满电续航 18 小时，跑一整天会议都不用带充电器",
+   "evidence": {
+    "points": [
+     {
+      "source": "商品描述",
+      "text": "16GB统一内存后台同时开十几个网页、修图软件和文档都不卡，512GB起步的SSD传大文件速度拉满，续航满电能撑18小时，出差跑全天会议都不用带充电器。"
+     },
+     {
+      "source": "用户评价",
+      "text": "真的太喜欢这款本了！天蓝色的机身颜值超高，带去图书馆好多同学问我在哪买的，M5芯片剪我平时拍的vlog素材超级顺，之前旧电脑导出十分钟的视频现在两分钟就搞定。"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.6470588235294118,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": false,
+   "length": 40
+  },
+  {
+   "query": "经常出差要带的轻薄商务本",
+   "product_id": "p_digital_023",
+   "title": "联想 ThinkBook 14+ 2026 全面",
+   "description": "1.4kg 机身配 2.8K 120Hz 高色域屏，有用户反馈 32GB 内存同时开修图和剪辑也不卡",
+   "evidence": {
+    "points": [
+     {
+      "source": "商品描述",
+      "text": "联想ThinkBook 14+ 2026是专为职场商务人和在校学生打造的高性能轻薄本，整机薄至15.9mm仅重1.4kg，搭载全新一代标压处理器搭配2.8K 120Hz全尺寸高清全面屏，100%sRGB高色域覆盖让修图、"
+     },
+     {
+      "source": "用户评价",
+      "text": "做设计买的高配版，用了快半个月真的香，32GB内存同时开PS、剪映还有十几个网页完全不卡，2.8K高刷屏看素材细节特别清楚，剪10分钟的4Kvlog导出速度比我之前旧笔记本快了一倍多。"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.575,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": true,
+   "length": 50
+  },
+  {
+   "query": "经常出差要带的轻薄商务本",
+   "product_id": "p_digital_004",
+   "title": "华为HUAWEI MateBook 14 鸿蒙版",
+   "description": "机身轻，通勤挤地铁没负担，鸿蒙跨端协同碰一下就能传文件、接力改文档，适合常在外的商务人",
+   "evidence": {
+    "points": [
+     {
+      "source": "用户评价",
+      "text": "用了快半个月真的太香了！屏幕的显示效果特别细腻，触控点一下就响应，有时候改方案来不及找鼠标直接点屏幕就操作了，重量也轻我天天塞通勤包里挤地铁完全没负担，续航从早用到晚还剩电，太适合我们这种经常在外跑的人了。"
+     },
+     {
+      "source": "商品描述",
+      "text": "这款华为MateBook 14鸿蒙版是专为高效生产力打造的14英寸轻薄本，搭载鸿蒙分布式能力，能和华为手机、平板、智慧屏无缝跨端协同，碰一下就能直接互传大文件、接力编辑未完成的文档，还支持多屏同开拖拽素材。"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.5526315789473685,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": false,
+   "length": 43
+  },
+  {
+   "query": "经常出差要带的轻薄商务本",
+   "product_id": "p_digital_006",
+   "title": "Apple MacBook Pro 14英寸 M",
+   "description": "M5 芯片面向专业创作者和开发者，有设计师反馈背着去咖啡店办公肩膀不酸，键盘久敲也舒服",
+   "evidence": {
+    "points": [
+     {
+      "source": "用户评价",
+      "text": "自由设计师入了24GB+1TB的银色款，用来做平面设计和轻量3D渲染太够用了。机身重量比我想象的轻很多，天天背着去咖啡店办公肩膀都不会酸，妙控键盘的敲字手感巨舒服，改方案改一整天手指都不疼。"
+     },
+     {
+      "source": "商品描述",
+      "text": "这款14英寸Apple MacBook Pro搭载全新M5系列芯片，是面向专业创作者、程序开发者、高端商务人士的高性能生产力工具。"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.6153846153846154,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": false,
+   "length": 43
+  },
+  {
+   "query": "学生上网课记笔记的平板",
+   "product_id": "p_digital_011",
+   "title": "小米平板 8 Pro 12.1英寸高刷大屏影音娱",
+   "description": "手写公式能自动识别转成可编辑文档，12.1 英寸大屏分屏看直播记笔记不卡，适合预算有限的学生党",
+   "evidence": {
+    "points": [
+     {
+      "source": "官方问答",
+      "text": "笔记APP里还支持随手画的图形自动修正、手写文字一键转成可编辑的文档，甚至你手写的公式也能自动识别转成可编辑的电子版，对上网课记笔记的学生党特别友好。"
+     },
+     {
+      "source": "用户评价",
+      "text": "12.1英寸的大屏看网课比我之前的小平板舒服太多，144Hz刷新率滑动笔记页面一点都不卡，我平时上网课分屏一边放老师直播一边记笔记，偶尔还能开个小窗查资料，8+256G装了一整个学期的课件和几十部动漫也还剩很多空间。"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.6190476190476191,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": false,
+   "length": 47
+  },
+  {
+   "query": "学生上网课记笔记的平板",
+   "product_id": "p_digital_019",
+   "title": "vivo Pad 6 Pro 12.1英寸高刷全",
+   "description": "高刷滑动笔记无拖影，还能定时提醒远眺放松，适合长时间上网课。不过有用户反映连旧路由器容易断流",
+   "evidence": {
+    "points": [
+     {
+      "source": "官方问答",
+      "text": "高刷模式下翻页、滑动笔记的动作完全没有拖影，不会因为画面卡顿晃眼加重用眼负担，还可以自定义定时提醒休息功能，连续使用45分钟就会弹出提示让你远眺放松，对于学生长时间上网课的场景适配度很高。"
+     },
+     {
+      "source": "用户评价",
+      "text": "冲着办公需求买的，结果连接我家的旧款5GWi-Fi路由器经常断流，每次打开在线文档加载半天，换了别的手机连同一个网都完全没问题，问客服说要我换新款路由器，哪有买个平板还要换路由器的道理。"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.4523809523809524,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": true,
+   "length": 46
+  },
+  {
+   "query": "学生上网课记笔记的平板",
+   "product_id": "p_digital_025",
+   "title": "Apple iPad Air 11英寸 2026",
+   "description": "配二代笔手写延迟低至 8ms，标记重点几乎无滞后，蜂窝版出门没 WiFi 也能用，适合常带出门上课的",
+   "evidence": {
+    "points": [
+     {
+      "source": "官方问答",
+      "text": "2026款11英寸iPad Air完美适配第二代Apple Pencil，支持磁吸无线充电和双击切换橡皮擦功能，手写延迟最低压到8ms，几乎感觉不到笔触和屏幕显示的滞后，记笔记的时候随手画的重点标记、几何图形都跟在纸上写"
+     },
+     {
+      "source": "用户评价",
+      "text": "买的蜂窝版日常出门在外没WiFi的时候用着特别方便，网速也很稳定，星光色的外观质感超棒，拿出去上课同学都问链接。"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.42857142857142855,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": false,
+   "length": 50
+  },
+  {
+   "query": "学生上网课记笔记的平板",
+   "product_id": "p_digital_005",
+   "title": "华为HUAWEI MatePad Pro Max",
+   "description": "12.6 英寸大屏分屏查文献配手写笔直接批注，省下打印钱，适合要查资料写论文的高校学生",
+   "evidence": {
+    "points": [
+     {
+      "source": "用户评价",
+      "text": "分屏一边放知网的文献，另一边直接开word敲字，再也不用在两个APP之间反复横跳，配个华为的手写笔直接在文献上标注重点，省了好多打印资料的钱，12.6英寸的大屏看扫描版的古籍资料也能看清小字，高刷滑动翻页的时候完全没有颗"
+     },
+     {
+      "source": "商品描述",
+      "text": "不管是经常要带设备开线上会的职场打工人，还是需要分屏查资料写文档的内容创作者，或是用来上网课做笔记的高校学生都适配。"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.5263157894736842,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": false,
+   "length": 43
+  },
+  {
+   "query": "学生上网课记笔记的平板",
+   "product_id": "p_digital_021",
+   "title": "华为 MatePad Pro 13.2英寸 柔性",
+   "description": "13.2 英寸大屏看资料分屏记重点，机身比轻薄本轻便好塞包，适合移动办公和宿舍学习两用",
+   "evidence": {
+    "points": [
+     {
+      "source": "官方问答",
+      "text": "这类大屏平板更适合经常移动办公、需要手写批注、看资料、开会记录和轻度创作的人，也适合宿舍或家里拿来追剧、看漫画和做轻量学习设备。"
+     },
+     {
+      "source": "用户评价",
+      "text": "我最近开会基本都带这台平板，13.2英寸看会议资料真的舒服，分屏一边看 PDF 一边记重点不用来回切。机身比我之前背的轻薄本轻很多，塞进通勤包里明显省地方，午休拿出来追一集剧也很顺，屏幕观感确实有旗舰感。"
+     }
+    ]
+   },
+   "has_evidence": true,
+   "grounded": 0.5526315789473685,
+   "unsupported_number": false,
+   "generic": false,
+   "names_brand_or_price": false,
+   "has_risk": false,
+   "mentions_risk": false,
+   "length": 43
+  }
+ ]
+}

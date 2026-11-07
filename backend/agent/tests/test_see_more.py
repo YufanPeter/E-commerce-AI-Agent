@@ -51,7 +51,7 @@ def tool_setup():
         recommend = RecommendTool(search_service=service)
         recommend._attach_price_displays = lambda *a, **k: None
         return service, RefineTool(recommend=recommend)
-    with patch("agent.tools.recommend._to_product_card", lambda h: {"product_id": h.product_id}):
+    with patch("agent.tools.recommend._to_product_card", lambda h, *_: {"product_id": h.product_id}):
         yield build
 
 
