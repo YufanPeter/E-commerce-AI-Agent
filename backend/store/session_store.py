@@ -98,7 +98,7 @@ class SqliteSessionStore:
             ensure_ascii=False,
         )
         try:
-            memory_json = json.dumps(session.working_memory, ensure_ascii=False)
+            memory_json = json.dumps(session.persisted_memory(), ensure_ascii=False)
         except (TypeError, ValueError):
             # Working memory should be JSON-safe; fall back to an empty object if not.
             logger.warning("Session %s has non-serializable working memory; storing an empty value", session.session_id)

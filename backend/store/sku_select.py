@@ -126,6 +126,45 @@ def mentioned_constraints(query: str, skus: list[dict[str, Any]]) -> dict[str, s
     return out
 
 
+def matching(skus: list[dict[str, Any]], selected: dict[str, str]) -> list[dict[str, Any]]:
+    """SKUs carrying every selected option."""
+    return [sku for sku in skus if all((sku.get("options") or {}).get(d) == v for d, v in selected.items())]
+
+
+_SIZE_DIM = re.compile(r"size|waist|length|capacity|尺码|尺寸|码|容量", re.I)
+_LETTER_SIZES = ("xxs", "xs", "s", "m", "l", "xl", "xxl", "xxxl")
+
+
+def _size_rank(value: str) -> float | None:
+    text = str(value).strip().casefold().removesuffix("码")
+    if text in _LETTER_SIZES:
+        return float(_LETTER_SIZES.index(text))
+    match = re.search(r"\d+(?:\.\d+)?", text)
+    if match is None:
+        return None
+    return float(match[0]) * (1024 if "tb" in text else 1)
+
+
+def stepped_size(skus: list[dict[str, Any]], current: dict[str, Any], step: int) -> dict[str, str]:
+    """The option one size up or down from the current one; empty at either end."""
+    for dim, values in varying_dims(skus).items():
+        ranks = [_size_rank(value) for value in values]
+        if not _SIZE_DIM.search(str(dim)) or None in ranks or current.get(dim) not in values:
+            continue
+        ordered = [value for _, value in sorted(zip(ranks, values), key=lambda pair: pair[0])]
+        target = ordered.index(current[dim]) + step
+        return {dim: ordered[target]} if 0 <= target < len(ordered) else {}
+    return {}
+
+
+def spec_changes(query: str, skus: list[dict[str, Any]], current: dict[str, Any], step: int = 0) -> dict[str, str]:
+    """The fields this message changes; every other field keeps its current value."""
+    changes = mentioned_constraints(query, skus)
+    if step and not changes:
+        changes = stepped_size(skus, current, step)
+    return {dim: value for dim, value in changes.items() if current.get(dim) != value}
+
+
 _ENGLISH_SIZE_WORDS = (
     (re.compile(r"\b(?:double|2)\s*-?\s*(?:xl|extra[- ]large)\b", re.I), "xxl"),
     (re.compile(r"\b(?:extra|x)[- ]large\b", re.I), "xl"),

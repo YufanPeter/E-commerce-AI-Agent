@@ -35,13 +35,13 @@ def test_save_and_reload_history(store, tmp_path):
 
 def test_working_memory_persists(store):
     sess = store.get_or_create("s2")
-    sess.set("last_hits", [{"product_id": "p1", "title": "A"}])
-    sess.set("pending_cart", {"product_id": "p1", "title": "A", "quantity": 1})
+    sess.task.show("search", [{"product_id": "p1", "title": "A"}])
+    sess.task.ask("cart_sku", {"product_id": "p1", "title": "A", "quantity": 1})
     store.save(sess)
 
     loaded = SqliteSessionStore(db_path=store.db_path).get_or_create("s2")
-    assert loaded.get("last_hits") == [{"product_id": "p1", "title": "A"}]
-    assert loaded.get("pending_cart")["product_id"] == "p1"
+    assert loaded.recall_hits() == [{"product_id": "p1", "title": "A"}]
+    assert loaded.task.pending_data("cart_sku")["product_id"] == "p1"
 
 
 def test_get_or_create_new_session_is_empty(store):
@@ -62,7 +62,7 @@ def test_reset_removes_session(store):
 
 def test_save_handles_unserializable_memory_gracefully(store):
     sess = store.get_or_create("s4")
-    sess.set("bad", object())  # 不可 JSON 序列化
+    sess.working_memory["bad"] = object()  # 不可 JSON 序列化
     # This should not raise; the in-memory fallback stores an empty state.
     store.save(sess)
     loaded = SqliteSessionStore(db_path=store.db_path).get_or_create("s4")

@@ -1,7 +1,8 @@
-"""Evidence-backed attribute extraction from listing text.
+"""Evidence-backed attribute candidates from listing text.
 
-A value is recorded only when a rule matches the listing. An absent attribute is unknown:
-the listing did not say, which is different from the product lacking it.
+A value is proposed only when a rule matches the listing. An absent attribute is unknown:
+the listing did not say, which is different from the product lacking it. Rules match words
+without understanding them, so ``attribute_verification`` decides what is published.
 """
 
 from __future__ import annotations
@@ -14,13 +15,15 @@ from typing import Any, Callable, Mapping
 
 TITLE = "title"
 DESCRIPTION = "rag_knowledge.marketing_description"
-NUMBER = r"(?P<value>\d+(?:\.\d+)?)"
+NUMBER = r"(?P<value>\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d*\.\d+|\d+)"
+# A whole number token: never the "400" of "13,400" or the "45" of ".45".
+AMOUNT = r"(?<![\w.,])" + NUMBER
 SEP = r"\s*[:=–-]?\s*"
-VOLUME = NUMBER + r"\s*(?:[-–]\s*)?(?P<unit>fl\.?\s*oz\.?|fluid ounces?|oz\.?|ounces?|mL|millilit(?:er|re)s?|L|lit(?:er|re)s?)\b"
+VOLUME = AMOUNT + r"\s*(?:[-–]\s*)?(?P<unit>fl\.?\s*oz\.?|fluid ounces?|oz\.?|ounces?|mL|millilit(?:er|re)s?|L|lit(?:er|re)s?)\b"
 NEGATION = re.compile(r"\b(?:no|not|without|lacks?|not rated(?: for)?)(?:\s+(?:a|an|the|have|with|any|does|do|contain|contains))*\s*$", re.I)
 _RANGE_PREFIX = re.compile(r"\b\d+(?:\.\d+)?\s*(?:[-–]|to)\s*$", re.I)
 
-ATTRIBUTE_RULES_VERSION = "attributes-v1"
+ATTRIBUTE_RULES_VERSION = "attributes-v2"
 
 
 @dataclass(frozen=True)
@@ -38,16 +41,20 @@ def rule(
     return Rule(re.compile(pattern, re.I), normalize, fields)
 
 
+def _number(match: re.Match[str]) -> str:
+    return match["value"].replace(",", "")
+
+
 def bounded(lo: float, hi: float) -> Callable[[re.Match[str]], float | None]:
     def get(match: re.Match[str]) -> float | None:
-        value = float(match["value"])
+        value = float(_number(match))
         return value if lo <= value <= hi else None
     return get
 
 
 def milliliters(match: re.Match[str]) -> float | None:
     unit = match["unit"].casefold().strip(".")
-    value = Decimal(match["value"])
+    value = Decimal(_number(match))
     if unit == "l" or unit.startswith(("liter", "litre")):
         value *= 1000
     elif unit != "ml" and not unit.startswith("millilit"):
@@ -147,7 +154,7 @@ _FEATURES: tuple[Rule, ...] = (
     rule(r"\bwater[- ]resistant\b", constant("water_resistant")),
 )
 _DEVICES: tuple[Rule, ...] = (
-    rule(r"\biphone\s*(?P<value>\d{1,2}(?:\s*(?:pro max|pro|plus|mini))?)\b",
+    rule(r"\biphone\s*(?P<value>\d{1,2}(?:\s*(?:pro max|pro|plus|mini))?)\b(?!\.\d)",
          lambda m: "iphone_" + re.sub(r"\s+", "_", m["value"].casefold())),
     rule(r"\biphone\b", constant("iphone")),
     rule(r"\bipad\b", constant("ipad")),
@@ -188,24 +195,24 @@ _COLOR: tuple[Rule, ...] = tuple(
 SINGLE_VALUE: dict[str, dict[str, tuple[Rule, ...]]] = {
     "Beauty & Personal Care": {
         "spf": (rule(r"\bspf\s*-?\s*" + NUMBER + r"\b", bounded(2, 130)),),
-        "volume_ml": (rule(r"\b" + VOLUME, milliliters),),
+        "volume_ml": (rule(VOLUME, milliliters),),
     },
     "Electronics": {
         "battery_hours": (
-            rule(r"\b" + NUMBER + r"\s*(?:\+\s*)?(?:hours?|hrs?)\b.{0,25}\bbattery\b", bounded(1, 2000)),
-            rule(r"\bbattery\b.{0,25}?\b" + NUMBER + r"\s*(?:\+\s*)?(?:hours?|hrs?)\b", bounded(1, 2000)),
+            rule(AMOUNT + r"\s*(?:\+\s*)?(?:hours?|hrs?)\b.{0,25}\bbattery\b", bounded(1, 2000)),
+            rule(r"\bbattery\b.{0,25}?" + AMOUNT + r"\s*(?:\+\s*)?(?:hours?|hrs?)\b", bounded(1, 2000)),
         ),
-        "battery_mah": (rule(r"\b" + NUMBER + r"\s*mah\b", bounded(50, 60000)),),
-        "wattage": (rule(r"\b" + NUMBER + r"\s*w(?:atts?)?\b", bounded(1, 2000)),),
-        "storage_gb": (rule(r"\b" + NUMBER + r"\s*gb\b", bounded(1, 4096)),),
-        "cable_length_ft": (rule(r"\b" + NUMBER + r"\s*(?:ft|feet|foot)\b", bounded(0.25, 100)),),
+        "battery_mah": (rule(AMOUNT + r"\s*mah\b", bounded(50, 60000)),),
+        "wattage": (rule(AMOUNT + r"\s*w(?:atts?)?\b", bounded(1, 2000)),),
+        "storage_gb": (rule(AMOUNT + r"\s*gb\b", bounded(1, 4096)),),
+        "cable_length_ft": (rule(AMOUNT + r"\s*(?:ft|feet|foot)\b", bounded(0.25, 100)),),
         "ingress_rating": (rule(r"\b(?P<value>IP[0-6X][0-9X]K?)\b", lambda m: m["value"].upper()),),
     },
     "Clothing & Sports": {},
     "Home & Kitchen": {
-        "volume_ml": (rule(r"\b" + VOLUME, milliliters),),
-        "capacity_cups": (rule(r"\b" + NUMBER + r"\s*[-–]?\s*cups?\b", bounded(1, 60)),),
-        "wattage": (rule(r"\b" + NUMBER + r"\s*w(?:atts?)?\b", bounded(1, 5000)),),
+        "volume_ml": (rule(VOLUME, milliliters),),
+        "capacity_cups": (rule(AMOUNT + r"\s*[-–]?\s*cups?\b", bounded(1, 60)),),
+        "wattage": (rule(AMOUNT + r"\s*w(?:atts?)?\b", bounded(1, 5000)),),
     },
 }
 MULTI_VALUE: dict[str, dict[str, tuple[Rule, ...]]] = {

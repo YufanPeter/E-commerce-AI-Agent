@@ -224,6 +224,43 @@ class CartStore:
             ).fetchone()
         return self._line_from_row(row)
 
+    def change_sku(self, cart_item_id: int, sku_id: str, user_id: str = DEMO_USER_ID) -> CartLine:
+        """Move a line to another SKU of the same product, merging if that SKU is already there."""
+        with self._connect() as conn:
+            line = conn.execute(
+                "SELECT product_id, quantity FROM cart_items WHERE cart_item_id = ? AND user_id = ?",
+                (cart_item_id, user_id),
+            ).fetchone()
+            if line is None:
+                raise CartNotFoundError(t("cart.error.no_line", cart_item_id=cart_item_id))
+            sku = self._resolve_sku(conn, line["product_id"], sku_id)
+            if sku is None:
+                raise CartNotFoundError(t("cart.error.no_sku", product_id=line["product_id"]))
+            existing = conn.execute(
+                "SELECT cart_item_id, quantity FROM cart_items WHERE user_id = ? AND sku_id = ? AND cart_item_id != ?",
+                (user_id, sku["sku_id"], cart_item_id),
+            ).fetchone()
+            quantity = int(line["quantity"]) + (int(existing["quantity"]) if existing else 0)
+            if quantity > int(sku["stock_qty"]):
+                raise CartStockError(t("cart.error.sold_out", stock=int(sku["stock_qty"])))
+            if existing:
+                conn.execute("DELETE FROM cart_items WHERE cart_item_id = ?", (existing["cart_item_id"],))
+            conn.execute(
+                "UPDATE cart_items SET sku_id = ?, selected_options_json = ?, unit_price = ?, quantity = ? WHERE cart_item_id = ?",
+                (sku["sku_id"], sku["properties_json"], float(sku["price"]), quantity, cart_item_id),
+            )
+            conn.commit()
+            row = conn.execute(
+                """
+                SELECT c.cart_item_id, c.product_id, c.sku_id, c.selected_options_json,
+                       c.quantity, c.unit_price, c.selected, p.title
+                FROM cart_items c JOIN products p ON p.product_id = c.product_id
+                WHERE c.cart_item_id = ?
+                """,
+                (cart_item_id,),
+            ).fetchone()
+        return self._line_from_row(row)
+
     def remove_item(self, cart_item_id: int, user_id: str = DEMO_USER_ID) -> bool:
         with self._connect() as conn:
             cur = conn.execute(

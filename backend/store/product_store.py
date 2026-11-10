@@ -11,7 +11,7 @@ import argparse
 import json
 import re
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -87,6 +87,7 @@ class ProductDetail:
     faqs: list[ProductFaq]
     reviews: list[ProductReview]
     catalog_source: dict[str, Any] | None = None
+    attributes: dict[str, list[str]] = field(default_factory=dict)
 
 
 class ProductStore:
@@ -283,6 +284,7 @@ class ProductStore:
                 (product_id,),
             ).fetchone()
             catalog_source = None
+            attributes: dict[str, list[str]] = {}
             if row is not None and PROFILE.source_metadata:
                 source = conn.execute(
                     "SELECT dataset, parent_asin, category_path, price_usd, average_rating, rating_number "
@@ -290,6 +292,12 @@ class ProductStore:
                     (product_id,),
                 ).fetchone()
                 catalog_source = dict(source) if source is not None else None
+                for item in conn.execute(
+                    "SELECT attribute, value FROM product_attributes WHERE product_id = ? AND status = 'observed' "
+                    "ORDER BY attribute, value",
+                    (product_id,),
+                ):
+                    attributes.setdefault(item["attribute"], []).append(item["value"])
 
         if row is None:
             return None
@@ -313,6 +321,7 @@ class ProductStore:
             faqs=self.get_faqs(product_id),
             reviews=self.get_reviews(product_id),
             catalog_source=catalog_source,
+            attributes=attributes,
         )
 
     def get_skus(

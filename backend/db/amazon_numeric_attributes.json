@@ -1,0 +1,14 @@
+{
+  "description": "Measured attributes a shopper can put a limit on. Values in product_attributes use 'unit'; each spelling in 'units' converts to it by its factor. A unit in 'prefix_units' is written before the number (SPF 50).",
+  "attributes": {
+    "battery_hours": {"label": "battery life or playtime", "unit": "hours", "units": {"hours": 1, "hour": 1, "hrs": 1, "hr": 1, "h": 1, "days": 24, "day": 24}},
+    "battery_mah": {"label": "built-in battery capacity", "unit": "mAh", "units": {"mah": 1}},
+    "wattage": {"label": "rated or charging power", "unit": "W", "units": {"watts": 1, "watt": 1, "w": 1}},
+    "storage_gb": {"label": "storage capacity", "unit": "GB", "units": {"gb": 1, "tb": 1024}},
+    "cable_length_ft": {"label": "cable or cord length", "unit": "ft", "units": {"feet": 1, "foot": 1, "ft": 1, "meters": 3.281, "meter": 3.281, "m": 3.281}},
+    "spf": {"label": "sun protection factor", "unit": "SPF", "units": {"spf": 1}, "prefix_units": ["spf"]},
+    "volume_ml": {"label": "volume of one unit", "unit": "ml", "units": {"ml": 1, "fl oz": 29.57, "oz": 29.57, "liters": 1000, "liter": 1000, "l": 1000}},
+    "capacity_cups": {"label": "brewing or holding capacity", "unit": "cups", "units": {"cups": 1, "cup": 1}}
+  },
+  "other_units": ["minutes", "minute", "mins", "min", "weeks", "week", "months", "month", "years", "year", "yrs", "kw", "volts", "volt", "v", "amps", "amp", "mb", "inches", "inch", "\"", "%", "yards", "yard", "cm", "mm", "lbs", "lb", "kg", "grams", "gram", "g", "packs", "pack", "pcs", "pieces", "piece", "count", "ct", "percent", "db", "hz", "khz", "mph", "ports", "port", "stars", "star", "people", "persons", "person", "k"]
+}

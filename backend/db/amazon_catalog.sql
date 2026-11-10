@@ -48,6 +48,19 @@ CREATE TABLE product_attributes (
 
 CREATE INDEX idx_product_attributes_lookup ON product_attributes(attribute, value);
 
+-- Extracted values the verification step refused. Kept for audits; nothing reads them at runtime.
+CREATE TABLE attribute_rejections (
+    product_id TEXT NOT NULL REFERENCES products(product_id) ON DELETE CASCADE,
+    attribute TEXT NOT NULL,
+    value TEXT NOT NULL,
+    verdict TEXT NOT NULL CHECK (verdict IN ('no', 'unclear')),
+    evidence_field TEXT NOT NULL,
+    evidence_start INTEGER NOT NULL,
+    evidence_end INTEGER NOT NULL,
+    provenance TEXT NOT NULL,
+    PRIMARY KEY (product_id, attribute, value, provenance)
+);
+
 CREATE TABLE catalog_build_info (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL

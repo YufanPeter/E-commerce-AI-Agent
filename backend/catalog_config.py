@@ -100,7 +100,7 @@ def _amazon_profile() -> CatalogProfile:
         capabilities=CatalogCapabilities(
             cart=True,
             vision=_env_flag("CARTPILOT_AMAZON_VISION"),
-            llm_copy=_env_flag("CARTPILOT_AMAZON_MODEL_COPY"),
+            llm_copy=llm,
             llm_routing=llm,
             llm_query_parsing=llm,
             query_decomposition=llm,
@@ -109,7 +109,7 @@ def _amazon_profile() -> CatalogProfile:
             vector_evidence=False,
             query_prefetch=False,
             inferred_memory=False,
-            llm_memory=False,
+            llm_memory=llm,
             reference_prices=False,
         ),
     )

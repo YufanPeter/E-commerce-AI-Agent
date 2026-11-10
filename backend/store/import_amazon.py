@@ -19,6 +19,7 @@ from urllib.parse import urlsplit
 
 from catalog_config import AMAZON_CATEGORIES, AMAZON_DATA_DIR, AMAZON_DB_PATH
 from store.attribute_rules import ATTRIBUTE_RULES_VERSION, extract_attributes
+from store.attribute_verification import VERIFIER_VERSION, AttributeVerifier, spending_guard, verify_catalog
 from store.import_product_data import DEFAULT_INIT_SQL, import_product, init_database, load_json
 from store.synthesize_commerce import load_rules, synthesize_skus
 
@@ -104,8 +105,14 @@ def _validated(path: Path, manifest: dict[str, str], exchange_rate: Decimal, see
     return product
 
 
-def build_amazon_catalog(data_dir: Path, db_path: Path, taxonomy_path: Path = TAXONOMY_PATH) -> int:
-    """Validate and publish a complete snapshot; an existing database is never replaced."""
+def build_amazon_catalog(
+    data_dir: Path, db_path: Path, taxonomy_path: Path = TAXONOMY_PATH, verifier: AttributeVerifier | None = None,
+) -> int:
+    """Validate and publish a complete snapshot; an existing database is never replaced.
+
+    Without a ``verifier`` the extracted attributes are published unchecked, and the build
+    info says so.
+    """
     data_dir, db_path = data_dir.resolve(), db_path.resolve()
     if db_path.exists():
         raise FileExistsError(f"Database already exists; choose another output path: {db_path}")
@@ -152,12 +159,24 @@ def build_amazon_catalog(data_dir: Path, db_path: Path, taxonomy_path: Path = TA
                          json.dumps(node["terms"], ensure_ascii=False),
                          json.dumps(node["accessory_for"], ensure_ascii=False)),
                     )
-                for path, product in zip(product_paths, products):
-                    _insert_product(conn, path, product, data_dir, nodes, brands, duplicates, manifest, exchange_rate, variant_rules)
+                candidates = {
+                    product["product_id"]: _insert_product(conn, path, product, data_dir, nodes, brands, duplicates, manifest, exchange_rate)
+                    for path, product in zip(product_paths, products)
+                }
+                if verifier is not None:
+                    verify_catalog(conn, verifier)
+                # After verification, so a refused color never becomes a variant.
+                published = set(conn.execute("SELECT product_id, value FROM product_attributes WHERE attribute = 'color'"))
+                for product in products:
+                    pid = product["product_id"]
+                    colors = [row["value"].title() for row in candidates[pid]
+                              if row["attribute"] == "color" and (pid, row["value"]) in published]
+                    _insert_skus(conn, product, nodes, colors, variant_rules)
                 build_info = {
                     "schema_version": "amazon-catalog-v2",
                     "taxonomy_version": taxonomy["version"],
                     "attribute_rules_version": ATTRIBUTE_RULES_VERSION,
+                    "attribute_verification": VERIFIER_VERSION if verifier is not None else "none",
                     "dataset": "amazon_dense_10k",
                     "commerce_source": variant_rules["version"],
                     "product_count": str(len(products)),
@@ -191,8 +210,8 @@ def _insert_product(
     duplicates: dict[str, str],
     manifest: dict[str, str],
     exchange_rate: Decimal,
-    variant_rules: dict[str, Any],
-) -> None:
+) -> list[dict[str, Any]]:
+    """Insert one product and return its attribute candidates."""
     source = product["source"]
     pid, node = product["product_id"], nodes[source["cell"]]
     usd = Decimal(str(source["price_usd"]))
@@ -232,8 +251,16 @@ def _insert_product(
             (pid, row["attribute"], row["value"], row["status"], row["evidence_field"],
              row["evidence_start"], row["evidence_end"], row["provenance"]),
         )
-    observed_colors = [row["value"].title() for row in attributes if row["attribute"] == "color"]
-    for sku in synthesize_skus(source["parent_asin"], node["label"], float(usd), observed_colors, variant_rules):
+    return attributes
+
+
+def _insert_skus(
+    conn: sqlite3.Connection, product: dict[str, Any], nodes: dict[str, dict[str, Any]], colors: list[str],
+    variant_rules: dict[str, Any],
+) -> None:
+    source, pid = product["source"], product["product_id"]
+    label = nodes[source["cell"]]["label"]
+    for sku in synthesize_skus(source["parent_asin"], label, float(Decimal(str(source["price_usd"]))), colors, variant_rules):
         conn.execute(
             "INSERT INTO product_skus (sku_id, product_id, properties_json, price, stock_qty) VALUES (?, ?, ?, ?, ?)",
             (sku["sku_id"], pid, json.dumps(sku["properties"], ensure_ascii=False, separators=(",", ":")),
@@ -273,10 +300,12 @@ def coverage_report(db_path: Path) -> dict[str, Any]:
         ).fetchall()
         taxonomy = conn.execute("SELECT COUNT(DISTINCT sub_category) FROM products").fetchone()[0]
         skus, sold_out = conn.execute("SELECT COUNT(*), SUM(stock_qty = 0) FROM product_skus").fetchone()
+        rejected = dict(conn.execute("SELECT verdict, COUNT(*) FROM attribute_rejections GROUP BY verdict"))
     finally:
         conn.close()
     report: dict[str, Any] = {
         "sub_categories": taxonomy, "skus": skus, "out_of_stock_share": round(sold_out / skus, 3), "attributes": {},
+        "rejected_attributes": rejected,
     }
     for category, attribute, status, count in rows:
         entry = report["attributes"].setdefault(category, {}).setdefault(attribute, {})
@@ -288,8 +317,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-dir", type=Path, default=AMAZON_DATA_DIR)
     parser.add_argument("--db", type=Path, default=AMAZON_DB_PATH)
+    parser.add_argument("--skip-verification", action="store_true", help="Publish extracted attributes unchecked (free, less accurate).")
+    parser.add_argument("--off-peak", action="store_true", help="Pause verification during double-priced hours.")
+    parser.add_argument("--min-balance", type=float, default=2.0, help="Stop verification when the CNY balance reaches this.")
     args = parser.parse_args()
-    count = build_amazon_catalog(args.data_dir, args.db)
+    verifier = None if args.skip_verification else AttributeVerifier(before_chunk=spending_guard(args.off_peak, args.min_balance))
+    count = build_amazon_catalog(args.data_dir, args.db, verifier=verifier)
     db = args.db.resolve()
     report = {"products": count, "content_digest": content_digest(db), **coverage_report(db)}
     db.with_name("build_report.json").write_text(json.dumps(report, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
