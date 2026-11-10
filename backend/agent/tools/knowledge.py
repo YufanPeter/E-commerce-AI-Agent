@@ -11,8 +11,7 @@ from typing import Any
 from agent.session import AgentSession
 from agent.tools.base import ToolResult
 from agent.tools.recommend import RecommendTool, _card_with_evidence
-from agent.tools.resolve import focus_index_in, resolve_one
-from i18n import en as english
+from agent.tools.resolve import focus_index_in, positions_in, resolve_one
 from search.catalog_understanding import understand
 
 
@@ -34,24 +33,32 @@ class KnowledgeTool:
         service = self._recommend._get_service()
         if self.name == "buying_guide":
             return self._guide(query, session, service)
-        focus = self._focus(query, session)
+        focus = self._focus(query, session, slots)
         if focus is None:
             return _text_result(self.name, "Which product do you mean? Try “the first one”.")
         return self._accessories(focus, session, service) if self.name == "accessories" else self._similar(query, focus, session, service, slots)
 
     @staticmethod
-    def _focus(query: str, session: AgentSession) -> dict[str, Any] | None:
+    def _focus(query: str, session: AgentSession, slots: dict[str, Any]) -> dict[str, Any] | None:
         """The named product, then the one under discussion, then the top result."""
         hits = session.recall_hits()
         if not hits:
             return None
         focus_index = focus_index_in(hits, session)
-        index = resolve_one(query, hits, use_llm=False, focus_index=focus_index)
+        named = positions_in(query, hits, session, slots)
+        index = named[0] if named else resolve_one(query, hits, use_llm=False, focus_index=focus_index)
         return hits[next(i for i in (index, focus_index, 0) if i is not None)]
 
-    def _cards(self, hits: list[Any], query: str, session: AgentSession, opening: str, notes: dict[str, str] | None = None) -> ToolResult:
-        """Result in the search shape, so follow-ups such as "the second one" keep working."""
-        session.remember_search(session.recall_parsed() or {}, [{"product_id": h.product_id, "title": h.title} for h in hits])
+    def _cards(
+        self, hits: list[Any], query: str, session: AgentSession, opening: str,
+        notes: dict[str, str] | None = None, constraints: dict[str, Any] | None = None,
+    ) -> ToolResult:
+        """Result in the search shape, so follow-ups such as "the second one" keep working.
+
+        ``constraints`` describe what is now shown; follow-ups such as "cheaper ones" refine it.
+        """
+        shown = constraints if constraints is not None else (session.recall_parsed() or {})
+        session.remember_search(shown, [{"product_id": h.product_id, "title": h.title} for h in hits])
         products = [_card_with_evidence(h, query) for h in hits]
         self._recommend._attach_price_displays(products, None)
         payload = {
@@ -61,7 +68,7 @@ class KnowledgeTool:
         return ToolResult(tool_name="recommend", payload=payload, composer_hint=opening)
 
     def _similar(self, query: str, focus: dict[str, Any], session: AgentSession, service: Any, slots: dict[str, Any]) -> ToolResult:
-        title, wants_cheaper = focus["title"], bool(english.CHEAPER_RE.search(query))
+        title, wants_cheaper = focus["title"], bool(slots.get("cheaper"))
         price = service.min_price(focus["product_id"])
         limit = price - 0.01 if wants_cheaper and price is not None else None
         related = service.graph.similar(focus["product_id"], _POOL) if service.graph is not None else []
@@ -81,14 +88,18 @@ class KnowledgeTool:
         if matches is None or not matches.product_ids:
             return _text_result(self.name, f"I don't have accessory information for {title}.")
         hits = service.hits_for(list(matches.product_ids), popular_first=True)[:_SHOWN]
+        # Accessories are now on screen, so a follow-up refines them, not the earlier search.
+        types = {hit.sub_category for hit in hits}
+        label = types.pop() if len(types) == 1 else None
+        shown = {"original_query": f"{label or 'accessories'} for {title}", "retrieval_query": label or "accessories", "sub_category": label}
         if not matches.confirmed:
             opening = f"These accessories are in the matching category, but their listings don't confirm they fit {title}. Check the listing before buying."
-            return self._cards(hits, title, session, opening)
+            return self._cards(hits, title, session, opening, constraints=shown)
         notes = {
             product_id: f"Listing mentions “{claim['quote']}”."
             for product_id, claim in matches.evidence.items() if claim.get("quote")
         }
-        return self._cards(hits, title, session, f"These listings state compatibility with {title}.", notes)
+        return self._cards(hits, title, session, f"These listings state compatibility with {title}.", notes, constraints=shown)
 
     def _guide(self, query: str, session: AgentSession, service: Any) -> ToolResult:
         parsed = understand(query, service.vocabulary)

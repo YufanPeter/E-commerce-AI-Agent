@@ -135,7 +135,7 @@ def test_cart_add_resolves_index(monkeypatch, store: CartStore):
 def test_cart_add_uses_focus_when_no_index(monkeypatch, store: CartStore):
     monkeypatch.setattr(cart_module, "dispatch_action", _stub_dispatch("add"))
     sess = _session_with_hits()
-    sess.set("last_focus_product_id", "p2")  # The previous detail turn focused the second product.
+    sess.task.focus_on("p2")  # The previous detail turn focused the second product.
     r = CartTool(cart_store=store).run("把刚才那款加进来", sess, {})
     assert r.payload["added"]["product_id"] == "p2"
     assert r.payload["resolution"]["source"] == "focus"
@@ -145,7 +145,7 @@ def test_cart_add_prefers_focus_over_hallucinated_index(monkeypatch, store: Cart
     """Ignore a hallucinated dispatch index when the user gave no ordinal and a focused product exists."""
     monkeypatch.setattr(cart_module, "dispatch_action", _stub_dispatch("add", index=1))
     sess = _session_with_hits()
-    sess.set("last_focus_product_id", "p2")
+    sess.task.focus_on("p2")
 
     r = CartTool(cart_store=store).run("帮我加入购物车吧", sess, {})
 
@@ -157,7 +157,7 @@ def test_cart_add_pronoun_uses_focus(monkeypatch, store: CartStore):
     """Treat the pronoun in an add-to-cart request as a reference, not a catalog keyword."""
     monkeypatch.setattr(cart_module, "dispatch_action", _stub_dispatch("add"))
     sess = _session_with_hits()
-    sess.set("last_focus_product_id", "p2")
+    sess.task.focus_on("p2")
 
     r = CartTool(cart_store=store).run("把它加入购物车", sess, {})
 
@@ -183,7 +183,7 @@ def test_cart_add_spec_prompt_confirms_resolved_product(monkeypatch, store: Cart
 
     monkeypatch.setattr(cart_module, "dispatch_action", _stub_dispatch("add"))
     sess = AgentSession()
-    sess.set("last_focus_product_id", "p3")
+    sess.task.focus_on("p3")
 
     r = CartTool(cart_store=store).run("把它加入购物车", sess, {})
 
@@ -403,4 +403,4 @@ def test_add_ambiguous_name_llm_unavailable_asks(store: CartStore, monkeypatch):
     monkeypatch.setattr(cart_module, "resolve_one", lambda query, cands: None)
     res = tool.run("把华为加进来", sess, {})
     assert res.payload["action"] == "ask_which_product"
-    assert sess.get("pending_add") is not None
+    assert sess.task.pending_data("cart_pick") is not None

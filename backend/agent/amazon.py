@@ -1,71 +1,26 @@
-"""English routing and factual copy for the offline Amazon experience."""
+"""English routing support and factual copy for the Amazon experience."""
 
 from __future__ import annotations
 
 from dataclasses import replace
-import re
 from typing import Any
 
 from agent.intent_router import IntentDecision
 from agent.session import AgentSession
-from i18n import en as english
 from agent.tools.base import ToolResult
 
 
-_CART_WORDS = re.compile(r"\b(cart|checkout|check out|place (?:an |the |my )?order|buy (?:it|this|that) now)\b")
-_CART_ADD = re.compile(
-    r"^(?:please\s+)?(?:add|put)\b"
-    r"|^(?:please\s+)?(?:buy|get|take|order|i'?ll take)\s+(?:\d+\s+|two\s+|three\s+)?(?:of\s+)?(?:the\s+)?"
-    r"(?:first|second|third|fourth|fifth|last|this|that|it|these|those)\b"
-)
-
-
-def _is_cart_request(text: str) -> bool:
-    return bool(
-        _CART_WORDS.search(text) or _CART_ADD.search(text) or english.ORDER_HISTORY_RE.search(text)
-        or (english.REORDER_RE.search(text) and not english.NOT_REORDER_RE.search(text))
+def unrouted(query: str, session: AgentSession) -> IntentDecision:
+    """Without the router a message is treated as a search; a follow-up gets a retry prompt instead."""
+    follow_up = bool(session.recall_hits() or session.task.pending)
+    return IntentDecision(
+        tool="fallback" if follow_up else "recommend", rewritten_query=query, confidence="low",
+        reasoning="router unavailable", args={"unavailable": True} if follow_up else {},
     )
 
 
-def knowledge_route(query: str, session: AgentSession) -> str | None:
-    """The tool for a graph-shaped question; the first two need a product on screen."""
-    if english.GUIDE_RE.search(query):
-        return "buying_guide"
-    if not session.recall_hits():
-        return None
-    if english.ACCESSORY_RE.search(query):
-        return "accessories"
-    # The graph tool cannot apply a stated budget, so those requests go to normal routing.
-    return "similar" if english.SIMILAR_RE.search(query) and not english.EXPLICIT_PRICE_RE.search(query) else None
-
-
-def route_catalog(query: str, session: AgentSession) -> IntentDecision:
-    text = query.strip().lower()
-    if _is_cart_request(text):
-        tool = "cart"
-    elif re.search(r"\b(compare|versus|vs\.?|differences?|which is better)\b", text):
-        tool = "compare"
-    elif re.search(r"\b(details?|reviews?|tell me about|previous one|next one|the last one)\b", text):
-        tool = "product_detail"
-    elif session.recall_parsed() and re.search(
-        r"^(?:under|below|over|between|up to|within|only|by|no|not|without|exclude|avoid|any brand|clear|budget|"
-        r"same brand|make it|keep|just|instead)\b|\b(?:cheaper|more expensive|any price)\b", text,
-    ):
-        tool = "refine"
-    elif text.strip(" !?.") in {"", "hi", "hey", "hello", "help", "recommend", "recommend something", "just browsing"}:
-        tool = "clarify"
-    elif re.search(r"\b(weather|stock market|write (?:me )?(?:a poem|code))\b", text):
-        tool = "fallback"
-    else:
-        tool = "recommend"
-    decision = IntentDecision(tool=tool, rewritten_query=query, confidence="high", reasoning="English catalog routing")
-    return with_cheaper_bound(decision, query, session) if tool == "refine" else decision
-
-
-def with_cheaper_bound(decision: IntentDecision, query: str, session: AgentSession) -> IntentDecision:
+def with_cheaper_bound(decision: IntentDecision, session: AgentSession) -> IntentDecision:
     """Turn "cheaper" into a price limit below everything just shown."""
-    if "cheaper" not in query.lower() or "$" in query:
-        return decision
     from store.product_store import ProductStore
 
     hits = ProductStore().get_products_by_ids([hit["product_id"] for hit in session.recall_hits()])
@@ -86,18 +41,6 @@ class CatalogMessageTool:
 
 def reply(tool_result: ToolResult) -> str | dict[str, Any]:
     data = tool_result.payload
-    if data.get("error"):
-        return "I couldn't complete that request. Please try again."
-    if tool_result.narrative_override is not None:
-        # Keep the English copy of supported outcomes. Older tools contain demo-only Chinese copy.
-        text = tool_result.narrative_override
-        if not re.search(r"[\u4e00-\u9fff]", text):
-            return text
-        if tool_result.tool_name == "compare":
-            return "Which two products should I compare? Try “Compare the first and second.”"
-        if tool_result.tool_name == "product_detail":
-            return "Which product do you mean? Try “Show details for the second one.”"
-        return "Tell me what product you want to find and, if you have one, your budget in USD."
     if tool_result.tool_name == "product_detail":
         product = data.get("product") or {}
         if not product:
@@ -146,7 +89,7 @@ def reply(tool_result: ToolResult) -> str | dict[str, Any]:
         )
         items.append({
             "productId": card["product_id"],
-            "description": details[:240] or f"From {card['brand']} in {card['sub_category']}.",
+            "description": details[:240] or f"From {card.get('brand') or 'this brand'} in {card.get('sub_category') or 'this category'}.",
         })
     return {
         "opening": data.get("opening") or f"I found {len(items)} matching options in the Amazon catalog.",

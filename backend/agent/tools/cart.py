@@ -24,9 +24,16 @@ from typing import Any
 from agent.llm_actions import ActionSpec, dispatch_action
 from agent.session import AgentSession
 from agent.tools.base import ToolResult
-from agent.tools.resolve import enrich_candidates, focus_index_in, resolve_one
-from agent.tools.reference import attribute_matches, resolve_indices, resolve_by_name, extract_name_query
-from i18n import en as english
+from agent.tools.resolve import (
+    attribute_matches,
+    enrich_candidates,
+    extract_name_query,
+    positions_in,
+    resolve_by_name,
+    resolve_indices,
+    resolve_one,
+)
+from agent.turn_args import quantity_in, size_step, spec_change_cue
 from i18n import format_money, is_english, t
 from store.cart_store import CartStockError
 from store.cart_store import CartNotFoundError, CartStore, DEFAULT_ADDRESS, DEMO_USER_ID
@@ -56,37 +63,21 @@ _REORDER_FILLER_RE = re.compile(
     r"把|将|请|吧|了|的|我|想|要|"
     r"[0-9一两二三四五六七八九十]+\s*(瓶|件|个|盒|箱|袋|桶|双|条|支|份|罐|包|台|部)"
 )
-# 「第二个」是序号不是数量；「第」后面的数字不算。
-_QUANTITY_RE = re.compile(r"(?<![第0-9])([0-9]+|[一两二三四五六七八九十])\s*(瓶|件|个|盒|箱|袋|桶|双|条|支|份|罐|包|台|部)")
-_CN_DIGITS = {"一": 1, "两": 2, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
+
+
+_LEAVE_QUESTION_RE = re.compile(r"下单|结算|看看?购物车|购物车里|删掉|去掉")
 
 
 def detect_order_intent(text: str) -> str | None:
     """返回 "history"、"reorder" 或 None。"""
     text = (text or "").strip()
-    if not text:
-        return None
-    if is_english():
-        if english.ORDER_HISTORY_RE.search(text):
-            return "history"
-        if english.REORDER_RE.search(text) and not english.NOT_REORDER_RE.search(text):
-            return "reorder"
+    if not text or is_english():  # The English router reports these as cart actions.
         return None
     if _ORDER_HISTORY_RE.search(text):
         return "history"
     if any(word in text for word in _REORDER_WORDS) and not any(word in text for word in _NOT_REORDER_WORDS):
         return "reorder"
     return None
-
-
-def _quantity_in(text: str) -> int | None:
-    if is_english():
-        return english.quantity_in(text or "")
-    match = _QUANTITY_RE.search(text or "")
-    if not match:
-        return None
-    raw = match.group(1)
-    return int(raw) if raw.isdigit() else _CN_DIGITS.get(raw)
 
 
 _ACTIONS = [
@@ -107,6 +98,13 @@ _ACTIONS = [
         parameters={
             "cart_index": {"type": "integer", "description": "购物车里第几件，从 1 开始。"},
             "quantity": {"type": "integer", "description": "改成的目标数量。"},
+        },
+    ),
+    ActionSpec(
+        name="change_spec",
+        description="把购物车里某件商品换成别的规格（'换成 L 码'/'改成黑色'/'大一码'）",
+        parameters={
+            "cart_index": {"type": "integer", "description": "购物车里第几件，从 1 开始；说'刚加的/这件'时省略。"},
         },
     ),
     ActionSpec(
@@ -163,40 +161,70 @@ class CartTool:
         # inject contextual product names. The rewritten query is used only for action type.
         raw_query = self._user_text(session, query)
 
-        # Treat a turn as an SKU answer while a multi-SKU selection is pending.
-        pending = session.get("pending_cart")
-        if pending:
-            return self._resolve_pending_sku(raw_query, session, pending)
-
-        # Treat a turn as a product selection while an ambiguous add is pending.
-        pending_add = session.get("pending_add")
-        if pending_add:
-            return self._resolve_pending_add(raw_query, session, pending_add)
-
-        order_intent = detect_order_intent(raw_query)
-        if order_intent:
-            action, args = {"history": "order_history", "reorder": "reorder"}[order_intent], {}
-        else:
-            action, args = self._decide(query, session)
-        logger.info("cart: action=%s args=%s", action, args)
         try:
-            if action == "add":
-                return self._add(raw_query, session, args)
-            if action == "set_quantity":
-                return self._set_quantity(args)
-            if action == "remove":
-                return self._remove(args)
-            if action == "checkout":
-                return self._checkout(args, session)
-            if action == "reorder":
-                return self._reorder(raw_query, session)
-            if action == "order_history":
-                return self._order_history(session)
-            return self._view()  # view 及未知动作的安全兜底
+            if "cart_action" in (slots or {}):
+                return self._run_routed(raw_query, session, slots)
+            if self._leaves_question(raw_query):
+                session.task.end_pending("cart_sku", "cart_pick")
+            # A waiting question takes this turn as its answer.
+            pending = session.task.pending_data("cart_sku")
+            if pending:
+                return self._resolve_pending_sku(raw_query, session, pending)
+            pending_add = session.task.pending_data("cart_pick")
+            if pending_add:
+                return self._resolve_pending_add(raw_query, session, pending_add)
+
+            order_intent = detect_order_intent(raw_query)
+            if order_intent:
+                action, args = {"history": "order_history", "reorder": "reorder"}[order_intent], {}
+            elif self.is_spec_change(raw_query, session):
+                action, args = "change_spec", {}
+            else:
+                action, args = self._decide(query, session)
+            logger.info("cart: action=%s args=%s", action, args)
+            return self._perform(action, raw_query, session, args, slots)
         except CartStockError as exc:
             return self._plain(str(exc))
         except CartNotFoundError as exc:
             return self._plain(t("cart.error", detail=str(exc)))
+
+    def _run_routed(self, query: str, session: AgentSession, slots: dict[str, Any]) -> ToolResult:
+        """Carry out the action the router read from the message."""
+        action = slots["cart_action"]
+        if action == "cancel":
+            session.task.end_pending("cart_sku", "cart_pick")
+            return self._plain(t("cart.cancelled"))
+        if action == "answer":
+            pending = session.task.pending_data("cart_sku")
+            if pending:
+                return self._resolve_pending_sku(query, session, pending, (slots.get("spec_update") or {}).get("step", 0))
+            pending_add = session.task.pending_data("cart_pick")
+            if pending_add:
+                return self._resolve_pending_add(query, session, pending_add)
+            action = "add"  # Nothing was waiting, so the answer names a product to add.
+        session.task.end_pending("cart_sku", "cart_pick")
+        args = {"cart_index": slots.get("cart_item"), "quantity": slots.get("quantity")}
+        logger.info("cart: routed action=%s args=%s", action, args)
+        return self._perform(action, query, session, args, slots)
+
+    def _perform(
+        self, action: str, query: str, session: AgentSession, args: dict[str, Any], slots: dict[str, Any],
+    ) -> ToolResult:
+        if action == "add":
+            return self._add(query, session, args, slots)
+        if action == "change_spec":
+            return self._change_spec(query, session, args, slots)
+        if action == "set_quantity":
+            return self._set_quantity(args)
+        if action == "remove":
+            return self._remove(args)
+        if action == "checkout":
+            return self._checkout(args, session)
+        if action == "reorder":
+            return self._reorder(query, session, slots)
+        if action == "order_history":
+            return self._order_history(session)
+        return self._view(session)  # view 及未知动作的安全兜底
 
     # ------------------------------ Action dispatch ------------------------------
 
@@ -214,10 +242,6 @@ class CartTool:
 
     def _decide(self, query: str, session: AgentSession) -> tuple[str, dict[str, Any]]:
         """Select an action, falling back to cart view when LLM dispatch fails."""
-        if is_english():
-            decided = english.cart_action(query)
-            if decided is not None:
-                return decided
         try:
             decision = dispatch_action(query, session, _ACTIONS, purpose=_PURPOSE)
             return decision.action, decision.args
@@ -227,15 +251,32 @@ class CartTool:
 
     # ------------------------------ Actions ------------------------------
 
-    def _add(self, query: str, session: AgentSession, args: dict[str, Any]) -> ToolResult:
+    @staticmethod
+    def _leaves_question(query: str) -> bool:
+        """Whether the shopper moved on to checkout, the cart or their orders (Chinese rules)."""
+        if is_english():
+            return False  # The English router ends the question when the shopper moves on.
+        return bool(detect_order_intent(query)) or _LEAVE_QUESTION_RE.search(query) is not None
+
+    def is_spec_change(self, query: str, session: AgentSession) -> bool:
+        """Whether this message changes an option of the item just added (Chinese rules)."""
+        added = session.task.last_added
+        if is_english() or not added or not spec_change_cue(query):
+            return False
+        return bool(size_step(query) or sku_select.mentioned_constraints(query, self._store.list_skus(added["product_id"])))
+
+    def _add(
+        self, query: str, session: AgentSession, args: dict[str, Any], slots: dict[str, Any] | None = None
+    ) -> ToolResult:
         """Resolve the product and begin the add-to-cart flow.
 
         Priority is explicit ordinal, current-list name, catalog lookup, focused product,
         then a sole candidate. Ambiguous candidates trigger clarification; an unrelated
         product is never selected silently.
         """
-        last_hits = session.recall_hits()
-        qty = _as_int(args.get("quantity"), default=1)
+        slots = slots or {}
+        last_hits = session.task.add_targets()
+        qty = slots.get("quantity") or _as_int(args.get("quantity"), default=1)
 
         # An explicitly named brand in the raw utterance is more reliable than an index
         # inferred from rewritten context, so calculate brand matches first.
@@ -246,7 +287,7 @@ class CartTool:
         # dispatch_action 的 args.index 可能来自 router/LLM 对上下文的猜测；
         # 用户只说"帮我加入购物车"时若上一轮刚聚焦了小米，不能让这个猜测
         # 覆盖 last_focus_product_id，错加成列表第一个 iPad。
-        parsed = resolve_indices(query, len(last_hits), focus_index=focus_index_in(last_hits, session))
+        parsed = positions_in(query, last_hits, session, slots)
         idx = (parsed[0] + 1) if parsed else None
         if idx is not None:
             i = int(idx) - 1
@@ -270,11 +311,11 @@ class CartTool:
             picked = resolve_one(query, subset)
             if picked is not None:
                 return self._begin_add(subset[picked]["product_id"], qty, session, query, source="semantic_context_match")
-            return self._ask_which_product(subset, session)
+            return self._ask_which_product(subset, session, qty)
 
         # 2.5) 没点名、只说了个规格值（「42 码的加进来」「黑色的来一件」）：
         #      指向刚聚焦（详情介绍过 / 刚加购过）的那一款，规格交给 _begin_add 用同一句话选。
-        focus = session.get("last_focus_product_id")
+        focus = session.task.focus_product_id
         if focus and not brand_ids:
             focus_hit = next((h for h in enriched_hits if str(h.get("product_id")) == str(focus)), None)
             if focus_hit is not None and attribute_matches(query, focus_hit):
@@ -293,11 +334,11 @@ class CartTool:
         if len(found) > 1:
             hits = [{"product_id": c.product_id, "title": c.title} for c in found]
             # Store catalog matches so subsequent turns can refer to them.
-            session.set("last_hits", hits)
-            return self._ask_which_product(hits, session)
+            session.task.show("candidates", hits)
+            return self._ask_which_product(hits, session, qty)
 
         # 4. Use the focused product for an unnamed demonstrative request.
-        focus = session.get("last_focus_product_id")
+        focus = session.task.focus_product_id
         if focus and not keyword:
             return self._begin_add(focus, qty, session, query, source="focus")
 
@@ -309,18 +350,18 @@ class CartTool:
         if len(last_hits) == 1:
             return self._begin_add(last_hits[0]["product_id"], qty, session, query, source="only_candidate")
         if last_hits:
-            return self._ask_which_product(last_hits, session)
+            return self._ask_which_product(last_hits, session, qty)
 
         return self._plain(t("cart.ask_add"))
 
     def _ask_which_product(
-        self, hits: list[dict[str, Any]], session: AgentSession
+        self, hits: list[dict[str, Any]], session: AgentSession, quantity: int = 1
     ) -> ToolResult:
         """List candidates when reference resolution cannot identify one product."""
         candidates = [
             {"product_id": h["product_id"], "title": h.get("title", "")} for h in hits
         ]
-        session.set("pending_add", {"candidates": candidates})
+        session.task.ask("cart_pick", {"candidates": candidates, "quantity": quantity})
         lines = [f"{i + 1}. {c['title']}" for i, c in enumerate(candidates)]
         text = t("cart.which_product", lines="\n".join(lines))
         return ToolResult(
@@ -343,20 +384,19 @@ class CartTool:
     ) -> ToolResult:
         """Resolve an answer to a pending product choice, or ask again."""
         if self._is_cancel(query):
-            session.set("pending_add", None)
+            session.task.end_pending()
             return self._plain(t("cart.cancelled"))
 
         candidates: list[dict[str, Any]] = pending_add.get("candidates", [])
         if not candidates:
-            session.set("pending_add", None)
+            session.task.end_pending()
             return self._plain(t("cart.no_candidates"))
 
         if pending_add.get("reorder"):
             picked = resolve_one(query, _reorder_candidates(candidates))
             if picked is None:
                 return self._ask_which_reorder(candidates, session, pending_add.get("quantity"))
-            session.set("pending_add", None)
-            quantity = _quantity_in(query) or pending_add.get("quantity")
+            quantity = quantity_in(query) or pending_add.get("quantity")
             return self._commit_reorder(candidates[picked], quantity, session)
 
         # 用户改点了候选之外的别的品牌商品 → 放弃当前候选，重新定位。
@@ -370,10 +410,11 @@ class CartTool:
         picked = resolve_one(query, self._enrich_candidates(candidates))
         if picked is None:
             # Preserve candidates and ask again when unresolved.
-            return self._ask_which_product(candidates, session)
+            return self._ask_which_product(candidates, session, _as_int(pending_add.get("quantity"), default=1))
 
-        session.set("pending_add", None)
-        return self._begin_add(candidates[picked]["product_id"], 1, session, query, source="pending_add")
+        session.task.end_pending()
+        quantity = quantity_in(query) or _as_int(pending_add.get("quantity"), default=1)
+        return self._begin_add(candidates[picked]["product_id"], quantity, session, query, source="pending_add")
 
     def _switch_intent(
         self, query: str, session: AgentSession, current_ids: list[str]
@@ -390,8 +431,7 @@ class CartTool:
         found_ids = {c.product_id for c in found}
         if found_ids & set(current_ids):
             return None  # The same brand remains within the current selection.
-        session.set("pending_cart", None)
-        session.set("pending_add", None)
+        session.task.end_pending()
         return self._add(query, session, {})
 
     def _begin_add(
@@ -409,23 +449,23 @@ class CartTool:
             return self._plain(t("cart.no_sku"))
 
         if len(skus) == 1:
-            return self._commit_add(product_id, skus[0]["sku_id"], qty, resolution=resolution)
+            return self._commit_add(product_id, skus[0]["sku_id"], qty, session, resolution=resolution)
 
         # Check whether the current utterance already identifies one SKU.
-        matched = self._filter_skus(query, skus)
+        selected = sku_select.mentioned_constraints(query, skus)
+        matched = sku_select.matching(skus, selected)
         if len(matched) == 1:
-            return self._commit_add(product_id, matched[0]["sku_id"], qty, resolution=resolution)
+            return self._commit_add(product_id, matched[0]["sku_id"], qty, session, resolution=resolution)
 
-        # Store pending state and accumulated specification text for later filtering.
         title = self._store.product_title(product_id)
-        session.set("pending_cart", {
+        session.task.ask("cart_sku", {
             "product_id": product_id,
             "title": title,
             "quantity": qty,
-            "spec_text": query,
+            "selected": selected,
             "resolution": resolution,
         })
-        return self._ask_spec(product_id, title, matched if matched else skus, resolution=resolution)
+        return self._ask_spec(product_id, title, matched if matched else skus, session, resolution=resolution)
 
     def _build_resolution(self, product_id: str, query: str, source: str) -> dict[str, Any]:
         """Record the resolved product for diagnostics and confirmation copy."""
@@ -439,11 +479,11 @@ class CartTool:
         }
 
     def _resolve_pending_sku(
-        self, query: str, session: AgentSession, pending: dict[str, Any]
+        self, query: str, session: AgentSession, pending: dict[str, Any], step: int | None = None
     ) -> ToolResult:
         """Resolve a pending SKU answer and add it, or continue clarification."""
         if self._is_cancel(query):
-            session.set("pending_cart", None)
+            session.task.end_pending()
             return self._plain(t("cart.cancelled"))
 
         # Restart product resolution when another brand is named during SKU selection.
@@ -452,36 +492,40 @@ class CartTool:
             return switched
 
         product_id = pending["product_id"]
-        qty = _as_int(pending.get("quantity"), default=1)
+        qty = quantity_in(query) or _as_int(pending.get("quantity"), default=1)
         skus = self._store.list_skus(product_id)
         if not skus:
-            session.set("pending_cart", None)
+            session.task.end_pending()
             return self._plain(t("cart.sku_lost"))
 
-        # Combine previous and current specification terms to narrow dimensions gradually.
-        combined = f"{pending.get('spec_text', '')} {query}".strip()
-        matched = self._filter_skus(combined, skus)
+        # Each answer sets only the fields it names, so "actually large" replaces "medium".
+        earlier = pending.get("selected") or {}
+        named = sku_select.mentioned_constraints(query, skus) or sku_select.stepped_size(skus, earlier, size_step(query) if step is None else step)
+        selected = {**earlier, **named}
+        matched = sku_select.matching(skus, selected)
+        if not matched:  # The new choice conflicts with an earlier one; the latest wins.
+            selected = named
+            matched = sku_select.matching(skus, selected)
         if len(matched) != 1:
             picked = self._match_ordinal(query, matched if matched else skus)
             if picked is not None:
                 matched = [picked]
 
+        pending = {**pending, "selected": selected, "quantity": qty}
+        session.task.ask("cart_sku", pending)  # Stays open until the cart write succeeds.
         if len(matched) == 1:
-            session.set("pending_cart", None)
             return self._commit_add(
                 product_id,
                 matched[0]["sku_id"],
                 qty,
+                session,
                 resolution=pending.get("resolution"),
             )
-
-        # Preserve accumulated terms and ask about remaining dimensions.
-        pending = {**pending, "spec_text": combined}
-        session.set("pending_cart", pending)
         return self._ask_spec(
             product_id,
             pending["title"],
             matched if matched else skus,
+            session,
             resolution=pending.get("resolution"),
         )
 
@@ -490,16 +534,18 @@ class CartTool:
         product_id: str,
         sku_id: str,
         qty: int,
+        session: AgentSession,
         resolution: dict[str, Any] | None = None,
     ) -> ToolResult:
         """Persist a resolved SKU and return the confirmation result.
 
-        This deterministic action uses concise local copy, avoiding another LLM call.
+        A failed write leaves any waiting question open, so the shopper can pick again.
         """
         try:
             line = self._store.add_product(product_id, sku_id=sku_id, quantity=qty)
         except CartStockError as exc:
             return self._plain(str(exc))
+        session.task.added_to_cart(product_id, sku_id)
         snapshot = self._snapshot()
         text = t(
             "cart.added", title=line.title, spec=_options_suffix(line.options), quantity=line.quantity,
@@ -523,13 +569,14 @@ class CartTool:
         product_id: str,
         title: str,
         skus: list[dict[str, Any]],
+        session: AgentSession,
         resolution: dict[str, Any] | None = None,
     ) -> ToolResult:
         """Ask for varying SKU dimensions instead of listing every combination."""
         dims = self._varying_dims(skus)
         if not dims:
             # Defensive fallback for multiple SKUs with no varying dimension.
-            return self._commit_add(product_id, skus[0]["sku_id"], 1)
+            return self._commit_add(product_id, skus[0]["sku_id"], 1, session)
 
         # Let the client render options; keep narrative copy concise.
         text = t("cart.ask_spec", title=title)
@@ -587,9 +634,54 @@ class CartTool:
 
     @staticmethod
     def _is_cancel(query: str) -> bool:
-        if is_english():
-            return english.CANCEL_RE.search(query) is not None
-        return any(word in query for word in _CANCEL_WORDS)
+        # The English router reports a cancel as its own action.
+        return not is_english() and any(word in query for word in _CANCEL_WORDS)
+
+    def _change_spec(
+        self, query: str, session: AgentSession, args: dict[str, Any], slots: dict[str, Any]
+    ) -> ToolResult:
+        """Change the named options of a cart line and keep the rest."""
+        line = self._line_to_change(args.get("cart_index"), session)
+        if line is None:
+            return self._plain(t("cart.ask_which_line"))
+        skus = self._store.list_skus(line.product_id)
+        step = (slots.get("spec_update") or {}).get("step", 0) if "cart_action" in slots else size_step(query)
+        changes = sku_select.spec_changes(query, skus, line.options, step)
+        options = _join([str(value) for values in sku_select.varying_dims(skus).values() for value in values])
+        if not changes:
+            if args.get("quantity") is not None:  # "Change it to 2" on a product without a size 2.
+                return self._set_quantity(args)
+            return self._plain(t("cart.spec_not_found", title=line.title, options=options))
+        wanted = sku_select.matching(skus, {**line.options, **changes})
+        if not wanted:
+            return self._plain(t("cart.spec_unavailable", title=line.title, spec=_join(list(changes.values())), options=options))
+        updated = self._store.change_sku(line.cart_item_id, wanted[0]["sku_id"])
+        session.task.added_to_cart(updated.product_id, updated.sku_id)
+        snapshot = self._snapshot()
+        total = snapshot["cart"]["total"]
+        return ToolResult(
+            tool_name=self.name,
+            payload={"action": "change_spec", "changed": updated.to_dict(), **snapshot},
+            narrative_override=t(
+                "cart.spec_changed", title=updated.title, spec=_options_suffix(updated.options), total=total, money=format_money(total),
+            ),
+            needs_composer=False,
+        )
+
+    def _line_to_change(self, cart_index: Any, session: AgentSession) -> Any:
+        """The cart line meant: a stated position, the item just added, the focus, or the only line."""
+        lines = self._store.list_items()
+        index = _as_int(cart_index, default=None)
+        if index is not None:
+            return lines[index - 1] if 0 < index <= len(lines) else None
+        added = session.task.last_added or {}
+        for line in lines:
+            if line.sku_id == added.get("sku_id"):
+                return line
+        focused = [line for line in lines if line.product_id == session.task.focus_product_id]
+        if len(focused) == 1:
+            return focused[0]
+        return lines[0] if len(lines) == 1 else None
 
     def _set_quantity(self, args: dict[str, Any]) -> ToolResult:
         line = self._target_line(args.get("cart_index"))
@@ -615,10 +707,11 @@ class CartTool:
             t("cart.removed", title=line.title, count=snapshot["cart"]["item_count"], total=total, money=format_money(total)),
         )
 
-    def _view(self) -> ToolResult:
+    def _view(self, session: AgentSession) -> ToolResult:
         snapshot = self._snapshot()
         if not snapshot["cart"]["lines"]:
             return self._plain(t("cart.empty"))
+        session.task.show("cart", [{"product_id": line["product_id"], "title": line["title"]} for line in snapshot["cart"]["lines"]])
         total = snapshot["cart"]["total"]
         rows = "\n".join(
             f"{i + 1}. {line['title'][:60]} × {line['quantity']} — {format_money(line['unit_price'] * line['quantity'])}"
@@ -647,20 +740,19 @@ class CartTool:
     def _order_user(session: AgentSession) -> str:
         return session.user_id or DEMO_USER_ID
 
-    def _reorder(self, query: str, session: AgentSession) -> ToolResult:
+    def _reorder(self, query: str, session: AgentSession, slots: dict[str, Any] | None = None) -> ToolResult:
         """把买过的东西加回购物车。不直接下单：现价可能变了，要用户再确认一次。"""
         user_id = self._order_user(session)
         orders = self._orders.list_orders(user_id)
         if not orders:
             return self._plain(t("cart.no_orders"))
 
-        quantity = _quantity_in(query)
-        wants_whole_order = (
-            bool(english.WHOLE_ORDER_RE.search(query)) if is_english()
-            else any(word in query for word in _WHOLE_ORDER_WORDS)
-        )
-        filler = english.REORDER_FILLER_RE if is_english() else _REORDER_FILLER_RE
-        named = filler.sub("", query).strip(" ，,。.！!？?")
+        if slots is not None and "cart_action" in slots:  # The router already read the message.
+            quantity, wants_whole_order, named = slots.get("quantity"), bool(slots.get("whole_order")), slots.get("reorder_item") or ""
+        else:
+            quantity = quantity_in(query)
+            wants_whole_order = any(word in query for word in _WHOLE_ORDER_WORDS)
+            named = _REORDER_FILLER_RE.sub("", query).strip(" ，,。.！!？?")
         candidates = self._orders.recent_products(user_id)
 
         if not named:
@@ -674,7 +766,7 @@ class CartTool:
         if len(candidates) == 1:
             matched = candidates
         else:
-            picked = resolve_one(query, _reorder_candidates(candidates))
+            picked = resolve_one(named or query, _reorder_candidates(candidates))
             matched = [candidates[picked]] if picked is not None else []
         if matched:
             return self._commit_reorder(matched[0], quantity, session)
@@ -688,7 +780,7 @@ class CartTool:
         quantity: int | None = None,
     ) -> ToolResult:
         candidates = lines[:5]
-        session.set("pending_add", {"candidates": candidates, "reorder": True, "quantity": quantity})
+        session.task.ask("cart_pick", {"candidates": candidates, "reorder": True, "quantity": quantity})
         rows = [
             t("cart.reorder_row", index=i + 1, title=line["title"][:40 if is_english() else 24],
               spec=_spec_suffix(line), price=format_money(line["unit_price"]))
@@ -724,7 +816,7 @@ class CartTool:
                 prefix = t("cart.reorder_spec_gone", spec=_spec_suffix(line) or t("cart.spec_word"))
                 return dataclasses.replace(result, narrative_override=prefix + (result.narrative_override or ""))
             return self._plain(t("cart.reorder_delisted", title=line["title"][:40 if is_english() else 20]))
-        session.set("last_focus_product_id", product_id)
+        session.task.added_to_cart(product_id, added.sku_id)
         snapshot = self._snapshot()
         current = next(
             (s["price"] for s in self._store.list_skus(product_id) if s["sku_id"] == line["sku_id"]),
@@ -788,7 +880,7 @@ class CartTool:
                 if all(hit["product_id"] != line["product_id"] for hit in hits):
                     hits.append({"product_id": line["product_id"], "title": line["title"]})
         # 接下来说「第一个详细说说」「再买第二个」能指到这些商品
-        session.set("last_hits", hits)
+        session.task.show("orders", hits)
         return ToolResult(
             tool_name=self.name,
             payload={"action": "order_history", "orders": orders},

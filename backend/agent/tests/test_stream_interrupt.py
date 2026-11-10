@@ -106,7 +106,7 @@ def test_close_before_any_card_restores_previous_hits():
     upstream = _TrackedStream(["开场｜为你找到两款\n", "商品｜p1｜轻\n"])
     session = AgentSession()
     previous = [{"product_id": "old", "title": "上一轮"}]
-    session.working_memory["last_hits"] = previous
+    session.task.show("search", previous)
     with patch("agent.intent_router.get_client") as rc, patch("agent.composer.get_client") as cc:
         rc.return_value.chat.completions.create.return_value = _router_resp()
         cc.return_value.chat.completions.create.return_value = upstream

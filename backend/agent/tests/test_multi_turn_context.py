@@ -122,7 +122,7 @@ def test_refine_without_memory_falls_back_to_plain_recommend():
 
 def test_refine_tolerates_legacy_string_memory():
     session = AgentSession()
-    session.set("last_parsed_query", "跑鞋")  # Older versions stored a string.
+    session.task.constraints = "跑鞋"  # Older versions stored a string.
 
     spy = _SpyRecommend()
     RefineTool(recommend=spy).run("Adidas", session, slots={})

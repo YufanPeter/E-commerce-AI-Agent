@@ -38,7 +38,9 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from i18n import format_money
+from catalog_config import AMAZON_CATEGORIES
+from i18n import format_money, is_english, t
+from agent.tools.evidence import product_claims
 from store.product_store import ProductDetail, price_display
 from store.sku_select import all_dims, select_sku, sku_label, sku_to_dict
 
@@ -200,20 +202,20 @@ def _price_row(
         sku = selected[i] if selected and i < len(selected) else None
         if sku is not None:
             price = float(sku.get("price", 0) or 0)
-            values.append(f"¥{price:g}")
+            values.append(format_money(price))
             numeric.append(price)
         else:
             values.append(price_display(d.price_range))
             numeric.append(float(d.price_range.min_price))
     min_idx = min(range(len(details)), key=lambda i: numeric[i])
-    return {"label": "价格", "values": values, "highlight": min_idx}
+    return {"label": t("compare.price"), "values": values, "highlight": min_idx}
 
 
 def _range_row(details: list[ProductDetail]) -> dict[str, Any] | None:
     """价格区间行：只有某件商品是多规格、区间和确定价不同时才有必要显示。"""
     if all(d.price_range.min_price == d.price_range.max_price for d in details):
         return None
-    return {"label": "价格区间", "values": [price_display(d.price_range) for d in details], "highlight": None}
+    return {"label": t("compare.price_range"), "values": [price_display(d.price_range) for d in details], "highlight": None}
 
 
 def _sku_dimension_rows(selected: list[dict[str, Any] | None]) -> list[dict[str, Any]]:
@@ -230,7 +232,7 @@ def _sku_dimension_rows(selected: list[dict[str, Any] | None]) -> list[dict[str,
     return [
         {
             "label": dim,
-            "values": [str(((sku or {}).get("options") or {}).get(dim) or _EMPTY) for sku in selected],
+            "values": [str(((sku or {}).get("options") or {}).get(dim) or t("compare.unknown")) for sku in selected],
             "highlight": None,
         }
         for dim in dims
@@ -280,6 +282,91 @@ def _product_header(
     return header
 
 
+_ATTRIBUTE_ROWS = {
+    "spf": ("SPF", ""),
+    "skin_type": ("Skin type", ""),
+    "contains": ("Contains", ""),
+    "free_of": ("Free of", ""),
+    "volume_ml": ("Volume", " ml"),
+    "connectivity": ("Connectivity", ""),
+    "battery_hours": ("Battery life", " hours"),
+    "battery_mah": ("Battery capacity", " mAh"),
+    "wattage": ("Power", " W"),
+    "storage_gb": ("Storage", " GB"),
+    "ingress_rating": ("Water and dust rating", ""),
+    "compatible_device": ("Works with", ""),
+    "cable_length_ft": ("Cable length", " ft"),
+    "capacity_cups": ("Capacity", " cups"),
+    "material": ("Material", ""),
+    "feature": ("Features", ""),
+}
+_SHARED_ATTRIBUTES = ("material", "feature")
+_CATEGORY_ATTRIBUTES = {
+    AMAZON_CATEGORIES["美妆护肤"]: ("spf", "skin_type", "contains", "free_of", "volume_ml", "feature"),
+    AMAZON_CATEGORIES["数码电子"]: (
+        "connectivity", "battery_hours", "battery_mah", "wattage", "storage_gb", "ingress_rating",
+        "compatible_device", "cable_length_ft", "feature",
+    ),
+    AMAZON_CATEGORIES["服饰运动"]: _SHARED_ATTRIBUTES,
+    AMAZON_CATEGORIES["家居厨房"]: ("capacity_cups", "wattage", "volume_ml", "material", "feature"),
+}
+_MAX_CELL_VALUES = 4
+
+
+_DISPLAY_WORDS = {
+    "gps": "GPS", "usb": "USB", "nfc": "NFC", "led": "LED", "lcd": "LCD", "oled": "OLED", "uv": "UV", "bpa": "BPA", "hd": "HD",
+    "iphone": "iPhone", "ipad": "iPad", "airpods": "AirPods",
+}
+
+
+def _readable(value: str) -> str:
+    """Stored values are lowercase keys or plain numbers; show them as a shopper would write them."""
+    try:
+        return f"{float(value):g}"
+    except ValueError:
+        pass
+    if value.isupper():
+        return value
+    words = value.replace("_", " ").split()
+    text = " ".join(_DISPLAY_WORDS.get(word.casefold(), word) for word in words)
+    return text if words and words[0].casefold() in _DISPLAY_WORDS else text[:1].upper() + text[1:]
+
+
+def _cell(values: list[str], unit: str = "") -> str:
+    """One table cell; an absent value is reported as unknown, never guessed."""
+    if not values:
+        return t("compare.unknown")
+    return ", ".join(f"{_readable(value)}{unit}" for value in values[:_MAX_CELL_VALUES])
+
+
+def _catalog_rows(details: list[ProductDetail]) -> list[dict[str, Any]]:
+    """Rows built from stored facts: ratings, listing attributes and review signals."""
+    sources = [detail.catalog_source or {} for detail in details]
+    rows = [
+        {"label": "Brand", "values": [d.brand for d in details], "highlight": None},
+        {"label": "Catalog category", "values": [d.sub_category for d in details], "highlight": None},
+        {"label": "Historical rating", "values": [f"{s['average_rating']:g}/5" for s in sources], "highlight": None},
+        {"label": "Rating count", "values": [f"{s['rating_number']:,}" for s in sources], "highlight": None},
+    ]
+    categories = {d.category for d in details}
+    attributes = _CATEGORY_ATTRIBUTES.get(next(iter(categories)), _SHARED_ATTRIBUTES) if len(categories) == 1 else _SHARED_ATTRIBUTES
+    for attribute in attributes:
+        if any(d.attributes.get(attribute) for d in details):
+            label, unit = _ATTRIBUTE_ROWS[attribute]
+            rows.append({"label": label, "values": [_cell(d.attributes.get(attribute) or [], unit) for d in details], "highlight": None})
+    return rows + _review_signal_rows(details)
+
+
+def _review_signal_rows(details: list[ProductDetail]) -> list[dict[str, Any]]:
+    claims = [product_claims(detail.product_id) for detail in details]
+    rows = []
+    for relation, label in (("PRAISED_FOR", "Reviewers praise"), ("CRITICIZED_FOR", "Reviewers criticize")):
+        named = [list(dict.fromkeys(c["value"] for c in product if c["relation"] == relation)) for product in claims]
+        if any(named):
+            rows.append({"label": label, "values": [_cell(values) for values in named], "highlight": None})
+    return rows
+
+
 def select_skus_for(
     details: list[ProductDetail],
     *,
@@ -321,25 +408,6 @@ def build_comparison(
     if len(details) < 2:
         raise ValueError("A comparison requires at least two products")
 
-    if all(getattr(detail, "catalog_source", None) for detail in details):
-        sources = [detail.catalog_source or {} for detail in details]
-        prices = [detail.price_range.min_price for detail in details]
-        best = prices.index(min(prices)) if prices.count(min(prices)) == 1 else None
-        return {
-            "title": "Product comparison",
-            "products": [_product_header(detail, None, "", []) for detail in details],
-            "rows": [
-                {"label": "Price", "values": [price_display(d.price_range) for d in details], "highlight": best},
-                {"label": "Brand", "values": [d.brand for d in details], "highlight": None},
-                {"label": "Catalog category", "values": [d.sub_category for d in details], "highlight": None},
-                {"label": "Historical rating", "values": [f"{s['average_rating']:g}/5" for s in sources], "highlight": None},
-                {"label": "Rating count", "values": [f"{s['rating_number']:,}" for s in sources], "highlight": None},
-            ],
-            "recommendation": "",
-        }
-
-    index = get_compare_index()
-    dimensions = _dimensions_for(details)
     picked = select_skus_for(
         details, selections=selections, query=query, budget_max=budget_max, budget_min=budget_min,
     )
@@ -351,16 +419,20 @@ def build_comparison(
         rows.append(range_row)
     sku_rows = _sku_dimension_rows(selected)
     rows.extend(sku_rows)
-    for dim in dimensions:
-        if sku_rows and dim in _SKU_COVERED_DIMENSIONS:
-            continue
-        values = [index.value(d.product_id, dim) for d in details]
-        # Do not force a winner for textual dimensions; only price is deterministic.
-        rows.append({"label": dim, "values": values, "highlight": None})
+    if all(getattr(detail, "catalog_source", None) for detail in details):
+        rows.extend(_catalog_rows(details))
+    else:
+        index = get_compare_index()
+        for dim in _dimensions_for(details):
+            if sku_rows and dim in _SKU_COVERED_DIMENSIONS:
+                continue
+            values = [index.value(d.product_id, dim) for d in details]
+            # Do not force a winner for textual dimensions; only price is deterministic.
+            rows.append({"label": dim, "values": values, "highlight": None})
 
-    titles = " vs ".join(d.title[:16] for d in details)
+    titles = " vs ".join(d.title[:30 if is_english() else 16] for d in details)
     return {
-        "title": f"对比：{titles}",
+        "title": t("compare.title", titles=titles),
         "products": [
             _product_header(d, sku, reason, all_skus)
             for d, (sku, reason, all_skus) in zip(details, picked)

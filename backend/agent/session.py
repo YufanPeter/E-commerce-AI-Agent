@@ -9,8 +9,8 @@ V1 memory layers:
         - Loaded by the API into ``user_profile``; this class does not persist it.
 
     Working memory
-        - A temporary dictionary shared by tools and the composer.
-        - Typical fields include ``last_parsed_query`` and ``last_hits``.
+        - ``task``: the typed ``ShoppingTask`` every tool reads and updates.
+        - ``working_memory``: the rolling session summary, plus ``task`` when persisted.
 
     Session memory
         - Raw conversation messages retained in a sliding window.
@@ -20,44 +20,109 @@ V1 memory layers:
 Phase 1 assumes one FastAPI worker and serialized calls per session.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from typing import Any, TypedDict
 from uuid import uuid4
 
 
-# ---------------------------------------------------------------------------
-# Working-memory type contract
-# ---------------------------------------------------------------------------
-#
-# ``working_memory`` was previously an untyped dictionary whose keys were documented
-# only inside individual tools. A renamed key could silently break the chain. TypedDict
-# provides one discoverable contract for names, types, and meanings.
-#
-# TypedDict is a type-level view only; runtime values remain ordinary dictionaries,
-# preserving compatibility with set/get and adding no dependency.
-
-
 class HitRef(TypedDict):
-    """Compact product reference retained from the previous turn."""
+    """Compact product reference retained from an earlier turn."""
 
     product_id: str
     title: str
 
 
-class WorkingMemory(TypedDict, total=False):
-    """Optional working-memory fields reused across turns.
+@dataclass
+class ActiveView:
+    """The ordered list the shopper is looking at, which "the second one" counts through."""
 
-    ``last_parsed_query`` is the previous structured retrieval intent and provides the
-    base for lossless refinement. ``last_hits`` contains compact references used by
-    compare and product-detail tools to resolve ordinal or demonstrative references.
+    kind: str = "search"  # search, candidates, compare, cart or orders
+    items: list[HitRef] = field(default_factory=list)
+    version: int = 0
+
+
+@dataclass
+class PendingAction:
+    """A clarifying question waiting for the shopper's answer."""
+
+    kind: str  # cart_sku, cart_pick, detail_pick or compare_pick
+    data: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class ShoppingTask:
+    """Everything one conversation is in the middle of.
+
+    Tools change this state through the methods below, so a new list cannot leave a
+    focus, comparison or question behind that belongs to the previous one.
     """
 
-    last_parsed_query: dict[str, Any]
-    last_hits: list[HitRef]
-    seen_product_ids: list[str]
-    last_search_multi: bool
-    session_summary: str
-    summary_updated_at_turn: int
+    constraints: Any = None  # ParsedQuery.to_dict() of the latest search
+    active_view: ActiveView = field(default_factory=ActiveView)
+    shopping_items: list[HitRef] = field(default_factory=list)  # kept while the cart is on screen
+    focus_product_id: str | None = None
+    pending: PendingAction | None = None
+    comparison: dict[str, Any] | None = None
+    last_added: dict[str, Any] | None = None
+    seen_product_ids: list[str] = field(default_factory=list)
+    multi_search: bool = False
+
+    def show(self, kind: str, items: list[HitRef]) -> None:
+        """Make a new list current and drop whatever referred to the old one."""
+        view = self.active_view
+        if kind == "cart":
+            if view.kind != "cart":
+                self.shopping_items = view.items
+            self.active_view = ActiveView(kind, list(items), view.version + 1)
+            return
+        self.active_view = ActiveView(kind, list(items), view.version + 1)
+        self.shopping_items = []
+        if self.focus_product_id not in {item.get("product_id") for item in items}:
+            self.focus_product_id = None
+        self.pending = None
+        self.last_added = None
+        if kind != "compare":
+            self.comparison = None
+
+    def add_targets(self) -> list[HitRef]:
+        """Products "add the second one" counts through: never the cart's own lines."""
+        return self.shopping_items if self.active_view.kind == "cart" else self.active_view.items
+
+    def focus_on(self, product_id: str | None) -> None:
+        self.focus_product_id = product_id
+
+    def ask(self, kind: str, data: dict[str, Any]) -> None:
+        self.pending = PendingAction(kind, data)
+
+    def pending_data(self, *kinds: str) -> dict[str, Any] | None:
+        """The waiting question's data when it is one of ``kinds``."""
+        return self.pending.data if self.pending is not None and self.pending.kind in kinds else None
+
+    def end_pending(self, *kinds: str) -> None:
+        """Close the waiting question, or only a question of one of ``kinds``."""
+        if self.pending is not None and (not kinds or self.pending.kind in kinds):
+            self.pending = None
+
+    def added_to_cart(self, product_id: str, sku_id: str) -> None:
+        self.pending = None
+        self.comparison = None
+        self.focus_product_id = product_id
+        self.last_added = {"product_id": product_id, "sku_id": sku_id}
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: Any) -> "ShoppingTask":
+        if not isinstance(data, dict):
+            return cls()
+        values = {key: value for key, value in data.items() if key in {f.name for f in fields(cls)}}
+        try:
+            view = values.pop("active_view", None) or {}
+            pending = values.pop("pending", None)
+            return cls(active_view=ActiveView(**view), pending=PendingAction(**pending) if pending else None, **values)
+        except TypeError:  # A record from an older shape starts a fresh task.
+            return cls()
 
 
 # Retain the latest N user/assistant messages to bound context-token growth.
@@ -80,9 +145,17 @@ class AgentSession:
     user_id: str | None = None
     user_profile: dict[str, Any] = field(default_factory=dict)
     history: list[Message] = field(default_factory=list)
-    # Lightweight context accumulated across turns; see individual tool contracts.
+    # Session summary and other plain values; the shopping state lives in ``task``.
     working_memory: dict[str, Any] = field(default_factory=dict)
     history_window: int = DEFAULT_HISTORY_WINDOW
+    task: ShoppingTask = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.task = ShoppingTask.from_dict(self.working_memory.pop("task", None))
+
+    def persisted_memory(self) -> dict[str, Any]:
+        """Working memory in the JSON shape the session store saves."""
+        return {**self.working_memory, "task": self.task.to_dict()}
 
     def add_user(self, content: str) -> None:
         self._append(Message(role="user", content=content))
@@ -138,42 +211,34 @@ class AgentSession:
             int(self.working_memory.get("summary_updated_at_turn") or 0) + len(overflow)
         )
 
-    def set(self, key: str, value: Any) -> None:
-        self.working_memory[key] = value
-
-    def get(self, key: str, default: Any = None) -> Any:
-        return self.working_memory.get(key, default)
-
-    # Typed accessors around the WorkingMemory contract.
-
     def remember_search(
         self,
         parsed_dict: dict[str, Any],
         hits: list[HitRef],
         keep_seen: bool = False,
     ) -> None:
-        """recommend 每次成功检索后调用：把本轮结构化意图 + 命中写进工作记忆，
-        供下一轮 refine/compare/product_detail 复用。
+        """recommend 每次成功检索后调用：记下本轮结构化意图和结果列表。
 
         keep_seen: "看更多"传 True，在同一批搜索里累计已展示商品；其他检索都算新的一批。"""
-        self.working_memory["last_parsed_query"] = parsed_dict
-        self.working_memory["last_hits"] = hits
-        self.working_memory.pop("last_search_multi", None)
-        seen = list(self.recall_seen()) if keep_seen else []
+        task = self.task
+        seen = list(task.seen_product_ids) if keep_seen else []
         for hit in hits:
             product_id = hit.get("product_id")
             if product_id and product_id not in seen:
                 seen.append(product_id)
-        self.working_memory["seen_product_ids"] = seen
+        task.show("search", hits)
+        task.constraints = parsed_dict
+        task.multi_search = False
+        task.seen_product_ids = seen
 
     def recall_seen(self) -> list[str]:
         """当前这批搜索里已经展示过的商品 ID，"看更多"靠它去重。"""
-        return self.working_memory.get("seen_product_ids") or []
+        return self.task.seen_product_ids
 
-    def recall_parsed(self) -> dict[str, Any] | None:
+    def recall_parsed(self) -> Any:
         """Return the previous structured retrieval intent, if any."""
-        return self.working_memory.get("last_parsed_query")
+        return self.task.constraints
 
     def recall_hits(self) -> list[HitRef]:
-        """Return product references from the previous turn."""
-        return self.working_memory.get("last_hits") or []
+        """Return the products currently on screen, in display order."""
+        return self.task.active_view.items

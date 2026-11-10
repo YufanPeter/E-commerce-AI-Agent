@@ -124,7 +124,7 @@ def test_new_search_resets_what_counts_as_seen():
 def test_section_after_multi_need_search_is_searched_on_its_own(tool_setup):
     service, refine = tool_setup(["a", "c"])
     session = _session_after_first_batch(["a"])
-    session.set("last_search_multi", True)
+    session.task.multi_search = True
     refine.run("防晒", session, {"more_label": "防晒"})
 
     assert service.calls[-1]["query"] == "防晒"

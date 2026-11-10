@@ -35,6 +35,7 @@ from pydantic import BaseModel, Field
 from agent import memory_service
 from api import products as products_router
 from catalog_config import PROFILE
+from i18n import en as english
 from i18n import is_english, t
 from store.cart_store import CartNotFoundError, CartStockError, CartStore
 from store.order_store import OrderStore
@@ -826,20 +827,21 @@ def generate_title(req: TitleRequest) -> dict[str, str]:
     user_text = (req.user_text or "").strip()
     if not user_text:
         raise HTTPException(status_code=400, detail="user_text 不能为空")
-    if is_english():
-        return {"title": " ".join(user_text.split()[:7])[:70]}
+    words_title = " ".join(user_text.split()[:7])[:70]
+    if is_english() and not PROFILE.capabilities.llm_copy:
+        return {"title": words_title}
 
     from llm.client import get_client, get_model_id
 
-    system = (
+    system = english.TITLE_SYSTEM if is_english() else (
         "你是对话标题生成器。根据用户的购物需求，生成一个简洁的中文标题，"
         "用于历史记录列表展示。要求：① 4-8 个字；② 概括核心需求（品类+关键属性），"
         "如「油皮洗面奶」「平价蓝牙耳机」「三亚出行搭配」；③ 只输出标题本身，"
         "不要引号、标点、解释。"
     )
-    convo = f"用户：{user_text}"
+    convo = f"{'Shopper' if is_english() else '用户'}：{user_text}"
     if req.assistant_text and req.assistant_text.strip():
-        convo += f"\n助手：{req.assistant_text.strip()[:200]}"
+        convo += f"\n{'Assistant' if is_english() else '助手'}：{req.assistant_text.strip()[:200]}"
 
     try:
         client = get_client()
@@ -854,13 +856,13 @@ def generate_title(req: TitleRequest) -> dict[str, str]:
             timeout=float(os.getenv("LLM_TITLE_TIMEOUT", os.getenv("DASHSCOPE_TITLE_TIMEOUT", "8"))),
         )
         title = (resp.choices[0].message.content or "").strip()
-        title = title.strip("「」\"'。.，、 \n\t")[:12]
+        title = title.strip("「」“”\"'。.，、 \n\t")[:60 if is_english() else 12]
     except Exception as exc:  # noqa: BLE001 - return empty so the client can fall back
         logger.warning("Title generation failed: %r", exc)
         title = ""
 
     if not title:
-        title = user_text[:12]
+        title = words_title if is_english() else user_text[:12]
     return {"title": title}
 
 
@@ -936,6 +938,21 @@ def _hot_search_term(brand: str, sub_category: str) -> str:
     return f"{brand} {sub_category}" if parts[-1:] and parts[-1].isascii() else f"{brand}{sub_category}"
 
 
+# Amazon has thousands of small or generic brands, so only well-reviewed pairs are suggested.
+_HOT_PAIRS_SQL = {
+    False: (
+        "SELECT DISTINCT brand, sub_category FROM products "
+        "WHERE status='active' AND brand <> '' AND sub_category <> ''"
+    ),
+    True: (
+        "SELECT p.brand, p.sub_category FROM products p "
+        "JOIN amazon_product_metadata a ON a.product_id = p.product_id "
+        "WHERE p.status='active' AND p.brand <> '' AND a.is_generic_brand = 0 "
+        "GROUP BY p.brand, p.sub_category HAVING SUM(a.rating_number) >= 5000"
+    ),
+}
+
+
 @app.get("/suggestions")
 def get_suggestions() -> dict[str, Any]:
     """Return empty-state home categories and dynamic popular searches.
@@ -959,10 +976,8 @@ def get_suggestions() -> dict[str, Any]:
         # Real brand/subcategory combinations guaranteed to map to products.
         pairs = [
             (r["brand"], r["sub_category"])
-            for r in conn.execute(
-                "SELECT DISTINCT brand, sub_category FROM products "
-                "WHERE status='active' AND brand <> '' AND sub_category <> ''"
-            ).fetchall()
+            for r in conn.execute(_HOT_PAIRS_SQL[PROFILE.search_backend == "catalog"]).fetchall()
+            if r["brand"].isascii()
         ]
         subcats = [
             r["sub_category"]

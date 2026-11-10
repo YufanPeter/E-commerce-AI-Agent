@@ -17,7 +17,13 @@ import logging
 from typing import Any
 
 from agent.tools.llm_match import llm_pick_candidate, llm_pick_candidates
-from agent.tools.reference import resolve_by_name, resolve_indices
+from agent.tools.reference import (  # noqa: F401 - tools import every resolver from here
+    attribute_matches,
+    extract_name_query,
+    has_relative_reference,
+    resolve_by_name,
+    resolve_indices,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -26,13 +32,26 @@ def focus_index_in(hits: list[dict[str, Any]], session: Any) -> int | None:
     """当前聚焦商品（``last_focus_product_id``）在 hits 里的下标；没有则 None。
 
     「上一个 / 下一个」这类相对指代以它为锚点。"""
-    focus_id = session.get("last_focus_product_id") if session is not None else None
+    focus_id = session.task.focus_product_id if session is not None else None
     if not focus_id:
         return None
     for i, hit in enumerate(hits):
         if str(hit.get("product_id")) == str(focus_id):
             return i
     return None
+
+
+def positions_in(
+    query: str,
+    hits: list[dict[str, Any]],
+    session: Any = None,
+    slots: dict[str, Any] | None = None,
+) -> list[int]:
+    """List positions the shopper named; the orchestrator's parse wins when it sent one."""
+    target = (slots or {}).get("target")
+    if target is not None:
+        return [i for i in target["indices"] if 0 <= i < len(hits)]
+    return resolve_indices(query, len(hits), focus_index=focus_index_in(hits, session))
 
 
 def enrich_candidates(

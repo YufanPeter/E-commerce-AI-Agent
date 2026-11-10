@@ -19,7 +19,7 @@ from agent.memory_extractor import _STYLE_ALIASES, extract_preference_updates, e
 from agent.memory_inference import infer_suggestions
 from agent.memory_llm import ExtractedMemory, extract_with_llm, might_disclose
 from agent.tools.refine import parse_more_request
-from catalog_config import PROFILE
+from catalog_config import AMAZON_CATEGORIES, PROFILE
 from i18n import is_english
 from search.query_understanding import expand_brands
 from store.user_memory_store import (
@@ -80,8 +80,14 @@ if is_english():
     _SOURCE_LABELS = {"stated": "Stated in chat", "manual": "Added by you", "confirmed": "Confirmed by you", "inferred": "Inferred from activity"}
     _EFFECTS = {
         "brand_avoid": "Excluded from recommendations", "brand_like": "Preferred in ranking",
-        "budget": "Used as the default budget", "note": "Saved for reference",
+        "avoid_term": "Products stating this are left out", "budget": "Used as the default budget",
+        "price_tier": "Considered in ranking", "style": "Used as a search preference",
+        "category": "Preferred when no category is given", "attribute": "Considered in explanations",
+        "note": "Saved for reference",
     }
+    _ATTR_LABELS = {"skin_type": "Skin type", "shoe_size": "Shoe size", "clothing_size": "Clothing size", "household": "Household"}
+else:
+    _ATTR_LABELS = ATTR_LABELS
 
 
 def llm_extract_enabled() -> bool:
@@ -111,6 +117,11 @@ def item_label(item: dict[str, Any]) -> str:
         if kind in {"brand_like", "brand_avoid", "avoid_term", "category"}:
             prefix = {"brand_like": "Likes", "brand_avoid": "Avoids", "avoid_term": "Avoid", "category": "Often browses"}[kind]
             return f"{prefix} {value}"
+        if kind == "price_tier":
+            return _TIER_LABELS.get(value, value)
+        if kind == "attribute":
+            return f"{_ATTR_LABELS.get(item.get('attr'), item.get('attr'))}: {value}"
+        return value
     if kind == "budget":
         return f"{scope or '常用'}预算 {_money_range(value)}"
     if kind == "price_tier":
@@ -238,19 +249,21 @@ def build_view(store: UserMemoryStore, user_id: str) -> dict[str, Any]:
 def _update_from_extracted(memory: ExtractedMemory, text: str, session_id: str | None) -> PreferenceUpdate | None:
     common = {"session_id": session_id, "evidence": memory.quote or text, "confidence": 0.8}
     value = memory.value
+    english_copy = is_english()
     if memory.kind == "brand_like":
-        return PreferenceUpdate(field="brand_include", value=value, message=f"已记住：优先考虑 {value}", **common)
+        return PreferenceUpdate(field="brand_include", value=value, message=f"Saved: prefer {value}" if english_copy else f"已记住：优先考虑 {value}", **common)
     if memory.kind == "style":
         value = _STYLE_ALIASES.get(value, value)
-        return PreferenceUpdate(field="preference_keywords", value=value, message=f"已记住：偏好{value}", **common)
+        return PreferenceUpdate(field="preference_keywords", value=value, message=f"Saved: prefer {value}" if english_copy else f"已记住：偏好{value}", **common)
     if memory.kind == "budget":
-        return PreferenceUpdate(field="budget_max", value=float(value), message=f"已记住：常用预算 ¥{value} 以内", **common)
+        return PreferenceUpdate(field="budget_max", value=float(value), message=f"Saved: usual budget up to ${value}" if english_copy else f"已记住：常用预算 ¥{value} 以内", **common)
     attr = {"skin_type": ("美妆护肤", "skin_type"), "shoe_size": ("服饰运动", "shoe_size"), "clothing_size": ("服饰运动", "clothing_size"), "household": ("通用", "household")}.get(memory.kind)
     if attr:
+        scope = (AMAZON_CATEGORIES.get(attr[0], "General") if english_copy else attr[0])
         return PreferenceUpdate(
             field="category_attr",
-            value={"category": attr[0], "key": attr[1], "value": value},
-            message=f"已记住：{ATTR_LABELS[attr[1]]} {value}",
+            value={"category": scope, "key": attr[1], "value": value},
+            message=f"Saved: {_ATTR_LABELS[attr[1]]} {value}" if english_copy else f"已记住：{ATTR_LABELS[attr[1]]} {value}",
             **common,
         )
     return None
@@ -309,7 +322,7 @@ def extract_in_background(store: UserMemoryStore, user_id: str, text: str, sessi
 
 
 def _english_memory_update(
-    store: UserMemoryStore, user_id: str, text: str, session_id: str | None, source: str,
+    store: UserMemoryStore, user_id: str, text: str, session_id: str | None, source: str, keep_as_note: bool = False,
 ) -> list[dict[str, Any]]:
     clean = re.sub(r"^\s*remember(?: that)?\s+", "", text.strip(), flags=re.I).rstrip(".!?")
     brand = re.fullmatch(r"i (?:usually |always )?(like|prefer|avoid|never buy) (.{1,55})", clean, re.I)
@@ -325,7 +338,7 @@ def _english_memory_update(
         value = {"budget_min": float(budget[1]) if budget[2] else None, "budget_max": float(budget[2] or budget[1])}
         if value["budget_min"] is not None and value["budget_min"] > value["budget_max"]:
             return []
-    elif source == "manual" and clean:
+    elif keep_as_note and clean:
         field = "preference_note"
         existing = store.get_preference(user_id).preference_note
         value = f"{existing}; {clean}" if existing else clean
@@ -337,12 +350,24 @@ def _english_memory_update(
     return [event] if event else []
 
 
+def _tell_english(store: UserMemoryStore, user_id: str, clean: str) -> dict[str, Any]:
+    """Rules, then the model; anything still unstructured is kept as a note."""
+    before = {row["item_id"] for row in store.list_items(user_id)}
+    events = _english_memory_update(store, user_id, clean, None, source="manual")
+    if not events and clean and PROFILE.capabilities.llm_memory and llm_extract_enabled():
+        events = _apply_extracted(store, user_id, extract_with_llm(clean), clean, None)
+    if not events and any(row["item_id"] not in before and row["status"] == SUGGESTED for row in store.list_items(user_id)):
+        return {"updates": [], "message": "This would hide some products, so please confirm it above."}
+    if not events:
+        events = _english_memory_update(store, user_id, clean, None, source="manual", keep_as_note=True)
+    return {"updates": events, "message": "Memory saved." if events else "No change to saved memory."}
+
+
 def tell(store: UserMemoryStore, user_id: str, text: str) -> dict[str, Any]:
     """用户在记忆页直接说一句话。规则 → 模型 → 都没听出结构就原样记成备注。"""
     clean = (text or "").strip()
     if is_english():
-        events = _english_memory_update(store, user_id, clean, None, source="manual")
-        return {"updates": events, "message": "Memory saved." if events else "No change to saved memory."}
+        return _tell_english(store, user_id, clean)
     if not clean:
         return {"updates": [], "message": "没听清，再说一次？"}
     before = {row["item_id"] for row in store.list_items(user_id)}
@@ -371,7 +396,7 @@ def confirm_suggestion(store: UserMemoryStore, user_id: str, item_id: str) -> di
         return None
     event = store.apply_update(user_id, update)
     store.mark_confirmed(user_id, item_id)
-    return event or {"message": f"已记住：{item_label(item)}"}
+    return event or {"message": f"Saved: {item_label(item)}" if is_english() else f"已记住：{item_label(item)}"}
 
 
 def _update_from_item(item: dict[str, Any]) -> PreferenceUpdate | None:

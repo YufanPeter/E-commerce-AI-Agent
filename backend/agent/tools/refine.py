@@ -66,6 +66,7 @@ class RefineTool:
         if base is None:
             return self._recommend.run(query, session, dict(slots or {}))
 
+        base = base.without((slots or {}).get("constraint_ops", {}).get("clear", ()))
         merged_slots = {**(slots or {}), "base_parsed": base}
         result = self._recommend.run(query, session, merged_slots)
 

@@ -41,7 +41,7 @@ class _FakeStore:
 
 def _session_with_hits(hits):
     sess = AgentSession(session_id="t")
-    sess.set("last_hits", hits)
+    sess.task.show("search", hits)
     return sess
 
 
@@ -171,18 +171,18 @@ class TestPendingCompareClarification:
         sess = _session_with_hits(_HITS)
         res = tool.run("对比华为", sess, {})
         assert res.payload["comparison"] is None
-        assert sess.get("pending_compare") is not None
+        assert sess.task.pending_data("compare_pick") is not None
 
     def test_followup_ordinals_complete_compare(self):
         tool = CompareTool(product_store=_FakeStore(_DETAILS))
         sess = _session_with_hits(_HITS)
-        sess.set("pending_compare", {"hit_count": 3})
+        sess.task.ask("compare_pick", {"hit_count": 3})
         with patch("agent.tools.compare.build_comparison", side_effect=_fake_build):
             res = tool.run("第一个和第三个", sess, {})
         comp = res.payload["comparison"]
         assert [p["product_id"] for p in comp["products"]] == ["p1", "p3"]
         # Clear pending state after a successful comparison.
-        assert sess.get("pending_compare") is None
+        assert sess.task.pending_data("compare_pick") is None
 
     def test_selection_reply_detection(self):
         from agent.tools.compare import is_compare_selection_reply
@@ -310,7 +310,7 @@ def test_run_asks_when_llm_also_fails(monkeypatch):
     res = tool.run("对比小米这款和另一个", sess, {})
     assert res.payload["comparison"] is None
     assert "哪几款" in (res.narrative_override or "")
-    assert sess.get("pending_compare") is not None
+    assert sess.task.pending_data("compare_pick") is not None
 
 
 class TestSkuLevelComparison:

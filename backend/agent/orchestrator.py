@@ -52,7 +52,8 @@ from agent.tools.clarify import ClarifyTool
 from agent.tools.compare import CompareTool, is_compare_selection_reply
 from agent.tools.fallback import FallbackTool
 from agent.tools.product_detail import ProductDetailTool, is_detail_selection_reply
-from agent.tools.reference import has_relative_reference, resolve_by_name, resolve_indices
+from agent.tools.resolve import has_relative_reference, resolve_by_name, resolve_indices
+from agent.turn_args import cleared_constraints, routed_slots, tool_slots
 from agent.tools.recommend import RecommendTool
 from agent.tools.refine import RefineTool, parse_more_request
 
@@ -501,10 +502,10 @@ class Agent:
         # 例外：用户明确改口开新检索（“推荐几款笔记本”“有没有便宜点的平板”），这类话
         # 带检索动词、不会是规格应答，应释放 pending 交回正常路由，而不是硬塞进 cart。
         more_label = parse_more_request(query)
-        if session.get("pending_cart") or session.get("pending_add"):
+        # English turns show the waiting question to the router, which tells an answer from a new request.
+        if not is_english() and session.task.pending_data("cart_sku", "cart_pick") is not None:
             if _is_new_search_escape(query) or more_label is not None:
-                session.set("pending_cart", None)
-                session.set("pending_add", None)
+                session.task.end_pending()
                 logger.info("pending cart released: new-search escape detected")
             else:
                 decision = IntentDecision(
@@ -519,7 +520,7 @@ class Agent:
                 return decision
         # Route selection-like answers back to a pending product-detail clarification;
         # release the state when the user changes topic.
-        if session.get("pending_detail"):
+        if session.task.pending_data("detail_pick"):
             if is_detail_selection_reply(query):
                 decision = IntentDecision(
                     tool="product_detail",
@@ -531,9 +532,9 @@ class Agent:
                 trace["decision"] = decision.to_dict()
                 logger.info("router skipped: pending detail clarification → tool=product_detail")
                 return decision
-            session.set("pending_detail", None)
+            session.task.end_pending()
         # Likewise, return selection-like answers to a pending comparison.
-        if session.get("pending_compare"):
+        if session.task.pending_data("compare_pick"):
             hit_count = len(session.recall_hits())
             if is_compare_selection_reply(query, hit_count):
                 decision = IntentDecision(
@@ -546,7 +547,7 @@ class Agent:
                 trace["decision"] = decision.to_dict()
                 logger.info("router skipped: pending compare clarification → tool=compare")
                 return decision
-            session.set("pending_compare", None)
+            session.task.end_pending()
         # "看更多"的意思是确定的，走 refine 沿用上一轮条件，不用再问 router。
         if more_label is not None and session.recall_parsed():
             decision = IntentDecision(
@@ -561,21 +562,18 @@ class Agent:
             return decision
         t0 = time.perf_counter()
         try:
-            if PROFILE.capabilities.llm_routing:
-                decision = route(query, session)
-            else:
-                from agent.amazon import route_catalog
-
-                decision = route_catalog(query, session)
+            if not PROFILE.capabilities.llm_routing:
+                raise RuntimeError("model routing is disabled for this catalog")
+            decision = route(query, session)
         except Exception as exc:  # noqa: BLE001
             # On router failure, deterministic keywords preserve clear cart/checkout
             # intent; other requests use recommendation as the safe default.
             trace["router_error"] = repr(exc)
             if is_english():
-                from agent.amazon import route_catalog
+                from agent.amazon import unrouted
 
-                logger.warning("Router failed (%r), using catalog rules", exc)
-                decision = route_catalog(query, session)
+                logger.warning("Router failed (%r), searching or asking to retry", exc)
+                decision = unrouted(query, session)
             else:
                 fallback_tool = self._keyword_fallback_tool(query)
                 logger.warning(
@@ -588,8 +586,11 @@ class Agent:
                     reasoning=f"router failure, keyword fallback to {fallback_tool}",
                 )
         trace["timings"]["router_ms"] = int((time.perf_counter() - t0) * 1000)
-        decision = self._apply_post_route_guards(query, session, decision)
-        decision = self._with_knowledge_route(query, session, decision)
+        if is_english():
+            decision = self._settle_english(query, session, decision)
+        else:
+            decision = self._apply_post_route_guards(query, session, decision)
+            decision = self._with_spec_change_route(query, session, decision)
         trace["decision"] = decision.to_dict()
         logger.info(
             "router done in %dms → tool=%s",
@@ -597,16 +598,38 @@ class Agent:
         )
         return decision
 
-    def _with_knowledge_route(self, query: str, session: AgentSession, decision: IntentDecision) -> IntentDecision:
-        """Graph questions are narrow enough to detect directly, so the router enum stays small."""
-        if not is_english() or decision.tool in {"cart", "compare"}:
-            return decision
-        from agent.amazon import knowledge_route
+    def _settle_english(self, query: str, session: AgentSession, decision: IntentDecision) -> IntentDecision:
+        """Apply the router's own reading; no rule second-guesses its choice."""
+        args = decision.args or {}
+        if decision.tool not in self._tools:
+            decision = IntentDecision("recommend", decision.rewritten_query, "low", f"unregistered tool {decision.tool}", args)
+        if decision.tool == "refine" and args.get("cheaper") and "$" not in query:
+            from agent.amazon import with_cheaper_bound
 
-        tool = knowledge_route(query, session)
-        if tool not in self._tools:
+            decision = with_cheaper_bound(decision, session)
+        answering = decision.tool == "cart" and args.get("cart_action") in {"answer", "cancel"}
+        if not answering:
+            session.task.end_pending("cart_sku", "cart_pick")  # The shopper moved on.
+        return decision
+
+    def decide(self, query: str, session: AgentSession, trace: dict[str, Any]) -> tuple[IntentDecision, dict[str, Any]]:
+        """The tool for this turn and the arguments it will act on, without running it."""
+        decision = self._safe_route(query, session, trace)
+        return decision, self._slots_for(decision, query, session)
+
+    @staticmethod
+    def _slots_for(decision: IntentDecision, raw_query: str, session: AgentSession) -> dict[str, Any]:
+        if decision.args is not None:
+            return routed_slots(decision, session)
+        return tool_slots(decision.tool, raw_query, session)
+
+    def _with_spec_change_route(self, query: str, session: AgentSession, decision: IntentDecision) -> IntentDecision:
+        """"Change it to large" right after adding edits that cart line, not the search."""
+        cart = self._tools.get("cart")
+        check = getattr(cart, "is_spec_change", None)
+        if decision.tool == "cart" or check is None or not check(query, session):
             return decision
-        return IntentDecision(tool, query, "high", f"knowledge route; original={decision.tool}")
+        return IntentDecision("cart", query, "high", f"post-route guard: cart spec change; original={decision.tool}")
 
     @staticmethod
     def _apply_post_route_guards(
@@ -616,10 +639,6 @@ class Agent:
     ) -> IntentDecision:
         """Apply deterministic guards for a few high-confidence intents."""
         raw_text = query or ""
-        if is_english() and decision.tool == "refine":
-            from agent.amazon import with_cheaper_bound
-
-            decision = with_cheaper_bound(decision, query, session)
         # 「再买一次」「我买过什么」查的是订单，不能走商品检索。
         if decision.tool != "cart" and detect_order_intent(raw_text):
             return IntentDecision(
@@ -628,11 +647,24 @@ class Agent:
                 confidence="high",
                 reasoning=f"post-route guard: order history or reorder; original={decision.tool}",
             )
+        # "Any brand is fine" changes the current search; it is not a new one.
+        if (
+            decision.tool in {"recommend", "clarify", "fallback"}
+            and session.recall_parsed()
+            and cleared_constraints(raw_text)
+            and not _is_new_search_escape(raw_text)
+        ):
+            return IntentDecision(
+                tool="refine",
+                rewritten_query=query,
+                confidence="high",
+                reasoning=f"post-route guard: constraint withdrawn; original={decision.tool}",
+            )
         # 「上一个 / 下一个呢」是相对当前聚焦商品的指代，不是让我重新推荐。
         if (
             decision.tool in {"recommend", "refine", "clarify"}
             and has_relative_reference(raw_text)
-            and session.get("last_focus_product_id")
+            and session.task.focus_product_id
             and session.recall_hits()
         ):
             return IntentDecision(
@@ -642,7 +674,7 @@ class Agent:
                 reasoning=f"post-route guard: relative reference to focused product; original={decision.tool}",
             )
         # 上一轮刚出对比表，这句只是换规格（「换成 512G 的」）→ 留在 compare 重算
-        last_cmp = session.get("last_comparison")
+        last_cmp = session.task.comparison
         if last_cmp and decision.tool in {"recommend", "refine", "product_detail", "clarify"}:
             from agent.tools.compare import is_spec_switch_reply
 
@@ -691,13 +723,17 @@ class Agent:
         trace: dict[str, Any],
         raw_query: str = "",
     ) -> ToolResult:
+        if (decision.args or {}).get("unavailable"):
+            return ToolResult(tool_name="fallback", payload={"query": raw_query}, narrative_override=t("error.tool"), needs_composer=False)
         tool = self._tools[decision.tool]
         t1 = time.perf_counter()
         try:
             # Tools that resolve ordinals or demonstratives must receive the raw query;
             # a rewritten product name could otherwise change the referenced item.
-            tool_query = raw_query if decision.tool in {"compare", "product_detail"} else decision.rewritten_query
-            slots: dict[str, Any] = {}
+            slots = self._slots_for(decision, raw_query, session)
+            # A rewrite can restore the very condition the shopper just withdrew.
+            uses_raw = decision.tool in {"compare", "product_detail"} or "constraint_ops" in slots
+            tool_query = raw_query if uses_raw else decision.rewritten_query
             more_label = parse_more_request(raw_query)
             if decision.tool == "refine" and more_label is not None and session.recall_parsed():
                 slots["more_label"] = more_label
@@ -708,7 +744,7 @@ class Agent:
             tool_result = ToolResult(
                 tool_name=decision.tool,
                 payload={"query": decision.rewritten_query, "error": repr(exc)},
-                narrative_override="抱歉，系统暂时无法处理这个请求，请稍后再试或换种说法。",
+                narrative_override=t("error.tool"),
                 needs_composer=False,
             )
         trace["timings"]["tool_ms"] = int((time.perf_counter() - t1) * 1000)
@@ -890,7 +926,7 @@ class _TurnProgress:
             return
         shown_ids = {hit.get("product_id") for hit in shown}
         rest = [hit for hit in hits if hit.get("product_id") not in shown_ids]
-        session.working_memory["last_hits"] = shown + rest
+        session.task.active_view.items = shown + rest
 
     def _narrative(self) -> str:
         if self._structured:
@@ -909,14 +945,11 @@ class _TurnProgress:
         shown = [by_id[item["productId"]] for item in self._items if item["productId"] in by_id]
         shown_ids = {hit.get("product_id") for hit in shown}
         unshown_ids = {pid for pid in by_id if pid not in shown_ids}
-        if "seen_product_ids" in session.working_memory:
-            session.working_memory["seen_product_ids"] = [
-                pid for pid in session.recall_seen() if pid not in unshown_ids
-            ]
+        session.task.seen_product_ids = [pid for pid in session.recall_seen() if pid not in unshown_ids]
         if not self._items:
-            session.working_memory["last_hits"] = self._prior_hits
+            session.task.active_view.items = self._prior_hits
         elif shown:
-            session.working_memory["last_hits"] = shown
+            session.task.active_view.items = shown
 
 
 def _capture_interrupt(
@@ -961,7 +994,7 @@ def _should_prefetch(query: str, session: AgentSession) -> bool:
     """只在大概率要走检索的回合预取：pending 态（选规格/选商品）和极短指代应答不预取。"""
     if os.getenv("LLM_PREFETCH", "1").strip().lower() in {"0", "false", "no", "off"}:
         return False
-    if session.get("pending_cart") or session.get("pending_add"):
+    if session.task.pending_data("cart_sku", "cart_pick") is not None:
         return False
     text = (query or "").strip()
     if len(text) < 2:
@@ -1014,7 +1047,7 @@ def _guard_attribute_followup(
             confidence="high",
             reasoning=f"post-route guard: product attribute follow-up; original={decision.tool}",
         )
-    focus_id = session.get("last_focus_product_id")
+    focus_id = session.task.focus_product_id
     if has_question_signal and focus_id and any(hit.get("product_id") == focus_id for hit in hits):
         return IntentDecision(
             tool="product_detail",
@@ -1068,8 +1101,6 @@ def _is_new_search_escape(query: str) -> bool:
     text = (query or "").strip()
     if not text:
         return False
-    if is_english():
-        return english.NEW_SEARCH_RE.search(text) is not None
     if any(word in text for word in _DETAIL_DEICTIC_WORDS):
         return False
     return any(word in text for word in _ESCAPE_SEARCH_WORDS)

@@ -16,6 +16,8 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from i18n import en as english
+from i18n import is_english
 from llm.client import get_client, get_model_id
 from search.llm_parser import _loads_arguments
 from search.query_understanding import load_taxonomy
@@ -85,8 +87,25 @@ class ExtractedMemory:
     needs_confirm: bool
 
 
+def _tool() -> dict[str, Any]:
+    if not is_english():
+        return _TOOL
+    tool = json.loads(json.dumps(_TOOL))
+    tool["function"]["description"] = english.MEMORY_TOOL_DESCRIPTION
+    fields = tool["function"]["parameters"]["properties"]["memories"]["items"]["properties"]
+    fields["value"]["description"] = english.MEMORY_VALUE_DESCRIPTION
+    fields["quote"]["description"] = english.MEMORY_QUOTE_DESCRIPTION
+    fields["durable"]["description"] = english.MEMORY_DURABLE_DESCRIPTION
+    return tool
+
+
 def might_disclose(text: str) -> bool:
     """确定性预判，绝大多数纯购物句子不打 LLM。"""
+    if is_english():
+        return bool(
+            text and len(text) >= 4 and english.MEMORY_CUES_RE.search(text)
+            and not english.MEMORY_THIRD_PARTY_RE.search(text) and not english.MEMORY_ONE_OFF_RE.search(text)
+        )
     if not text or len(text) < 4 or any(hint in text for hint in _THIRD_PARTY_HINTS):
         return False
     if any(hint in text for hint in _ONE_OFF_HINTS):
@@ -134,10 +153,10 @@ def extract_with_llm(text: str, timeout: float = 5.0) -> list[ExtractedMemory]:
         response = get_client().chat.completions.create(
             model=get_model_id(role="fast"),
             messages=[
-                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "system", "content": english.MEMORY_SYSTEM if is_english() else _SYSTEM_PROMPT},
                 {"role": "user", "content": text},
             ],
-            tools=[_TOOL],
+            tools=[_tool()],
             tool_choice={"type": "function", "function": {"name": "record_memories"}},
             temperature=0.0,
             timeout=timeout,

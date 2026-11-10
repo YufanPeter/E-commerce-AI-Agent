@@ -24,6 +24,16 @@ def test_budget_fit_bonus_prefers_products_mostly_within_budget():
     assert [h.product_id for h in out] == ["a", "b", "c"]
 
 
+def test_budget_fit_never_moves_unconfirmed_products_above_confirmed_ones():
+    confirmed = _hit("confirmed", 0.10, 450, 500)
+    confirmed.attribute_checks = {"battery_hours >= 20": "meets"}
+    unknown = _hit("unknown", 0.95, 100, 200)
+    unknown.attribute_checks = {"battery_hours >= 20": "unknown"}
+    parsed = ParsedQuery(original_query="q", sub_category="Bluetooth Speakers", max_price=500)
+    out = RecommendTool._apply_budget_fit_bonus([confirmed, unknown], parsed)
+    assert [h.product_id for h in out] == ["confirmed", "unknown"]
+
+
 def test_card_carries_price_range_and_budget_info():
     class _Store:
         def get_products_by_ids(self, ids):
