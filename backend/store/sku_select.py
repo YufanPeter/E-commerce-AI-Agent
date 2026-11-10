@@ -10,6 +10,8 @@ import re
 from collections import OrderedDict
 from typing import Any
 
+from i18n import is_english
+
 
 def sku_to_dict(sku: Any) -> dict[str, Any]:
     if isinstance(sku, dict):
@@ -124,8 +126,49 @@ def mentioned_constraints(query: str, skus: list[dict[str, Any]]) -> dict[str, s
     return out
 
 
+_ENGLISH_SIZE_WORDS = (
+    (re.compile(r"\b(?:double|2)\s*-?\s*(?:xl|extra[- ]large)\b", re.I), "xxl"),
+    (re.compile(r"\b(?:extra|x)[- ]large\b", re.I), "xl"),
+    (re.compile(r"\b(?:extra|x)[- ]small\b", re.I), "xs"),
+    (re.compile(r"\blarge\b", re.I), "l"),
+    (re.compile(r"\bmedium\b", re.I), "m"),
+    (re.compile(r"\bsmall\b", re.I), "s"),
+)
+_ENGLISH_UNITS = (
+    (re.compile(r"\b(\d+)\s*(?:ft|feet|foot)\b", re.I), r"\1 ft"),
+    (re.compile(r"\b(\d+)\s*(?:in|inch|inches)\b", re.I), r"\1 in"),
+    (re.compile(r"\b(\d+)\s*gb\b", re.I), r"\1gb"),
+    (re.compile(r"\bgrey\b", re.I), "gray"),
+)
+
+
+def _english_value_text(text: str, *, query: bool) -> str:
+    """Canonical form so spoken and catalog spellings compare equal."""
+    result = text.casefold()
+    for pattern, replacement in _ENGLISH_UNITS:
+        result = pattern.sub(replacement, result)
+    if query:
+        for pattern, replacement in _ENGLISH_SIZE_WORDS:
+            result = pattern.sub(replacement, result)
+    return result
+
+
+def _pick_english_value(values: list[str], query: str) -> str | None:
+    text = _english_value_text(query, query=True)
+    hits = [
+        value for value in values
+        if value and re.search(rf"(?<![\w'’])(?<!\d\.){re.escape(_english_value_text(value, query=False))}(?!\w|\.\d)", text)
+    ]
+    if not hits:
+        return None
+    hits.sort(key=len, reverse=True)
+    return hits[0] if len(hits) == 1 or len(hits[0]) > len(hits[1]) else None
+
+
 def pick_dim_value(values: list[str], query: str) -> str | None:
     """在某维度的候选取值里，选出用户这句话指定的那个；选不出返回 None。"""
+    if is_english():
+        return _pick_english_value(values, query)
     q = query or ""
     q_lower = q.lower()
     exact = [v for v in values if v and (v in q or v.lower() in q_lower)]

@@ -38,6 +38,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from i18n import format_money
 from store.product_store import ProductDetail, price_display
 from store.sku_select import all_dims, select_sku, sku_label, sku_to_dict
 
@@ -250,7 +251,7 @@ def _sku_entry(sku: dict[str, Any] | None, reason: str = "") -> dict[str, Any] |
         "label": sku_label(sku),
         "options": dict(sku.get("options") or {}),
         "price": price,
-        "price_display": f"¥{price:g}",
+        "price_display": format_money(price),
         "reason": reason,
     }
 
@@ -328,7 +329,7 @@ def build_comparison(
             "title": "Product comparison",
             "products": [_product_header(detail, None, "", []) for detail in details],
             "rows": [
-                {"label": "Reference price", "values": [price_display(d.price_range) for d in details], "highlight": best},
+                {"label": "Price", "values": [price_display(d.price_range) for d in details], "highlight": best},
                 {"label": "Brand", "values": [d.brand for d in details], "highlight": None},
                 {"label": "Catalog category", "values": [d.sub_category for d in details], "highlight": None},
                 {"label": "Historical rating", "values": [f"{s['average_rating']:g}/5" for s in sources], "highlight": None},

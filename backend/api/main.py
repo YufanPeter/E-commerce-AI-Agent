@@ -36,7 +36,7 @@ from agent import memory_service
 from api import products as products_router
 from catalog_config import PROFILE
 from i18n import is_english, t
-from store.cart_store import CartNotFoundError, CartStore
+from store.cart_store import CartNotFoundError, CartStockError, CartStore
 from store.order_store import OrderStore
 from store.feedback_store import FeedbackStore
 from store.session_store import SqliteSessionStore
@@ -685,9 +685,19 @@ def mutate_cart(req: CartMutationRequest) -> dict[str, Any]:
     action = req.action
     if not PROFILE.capabilities.cart and action in {"add", "updateSpecification"}:
         raise HTTPException(status_code=409, detail=products_router.error_payload(
-            "PRODUCT_NOT_PURCHASABLE", "The Amazon snapshot has no verified purchase options or stock.", retryable=False,
+            "PRODUCT_NOT_PURCHASABLE", t("cart.unavailable"), retryable=False,
         ))
+    try:
+        _apply_cart_mutation(store, req)
+    except CartStockError as exc:
+        raise HTTPException(status_code=409, detail=products_router.error_payload(
+            "OUT_OF_STOCK", str(exc), retryable=False,
+        )) from exc
+    return _cart_response(store)
 
+
+def _apply_cart_mutation(store: CartStore, req: CartMutationRequest) -> None:
+    action = req.action
     if action == "add":
         if not req.productID:
             raise HTTPException(status_code=400, detail="productID 不能为空")
@@ -715,12 +725,14 @@ def mutate_cart(req: CartMutationRequest) -> dict[str, Any]:
         if current is None:
             raise HTTPException(status_code=404, detail="购物车商品不存在")
         quantity = req.quantity or current.quantity
-        store.remove_item(old_id)
-        store.add_product(req.productID, sku_id=req.skuID, quantity=quantity)
+        if req.skuID == current.sku_id:
+            store.set_quantity(old_id, quantity)
+        else:
+            # Add first: a rejected replacement must leave the existing line intact.
+            store.add_product(req.productID, sku_id=req.skuID, quantity=quantity)
+            store.remove_item(old_id)
     else:
         raise HTTPException(status_code=400, detail="不支持的购物车操作")
-
-    return _cart_response(store)
 
 
 @app.post("/cart/checkout")
@@ -736,7 +748,7 @@ def checkout_cart(req: CheckoutRequest) -> dict[str, Any]:
             order_user_id=user_id,
             cart_item_ids=[_cart_item_id(value) for value in req.cart_item_ids] or None,
         )
-    except CartNotFoundError as exc:
+    except (CartNotFoundError, CartStockError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     order_payload = order.to_dict()
     memory_service.record_turn(

@@ -259,6 +259,14 @@ _ACTION_STOPWORDS = (
 )
 
 
+_ENGLISH_ACTION_WORDS = re.compile(
+    r"\b(?:add|put|buy|get|grab|order|purchase|please|pls|the|a|an|this|that|these|those|it|them|one|ones|to|my|"
+    r"shopping|cart|in|into|i|want|would|like|can|could|you|me|of|and|for|\d+)\b|[,.!?]",
+    re.I,
+)
+_ENGLISH_ORDINAL_ONLY = re.compile(r"(?:first|second|third|fourth|fifth|last)?", re.I)
+
+
 def extract_name_query(query: str) -> str:
     """Extract catalog-search keywords from an add-to-cart utterance.
 
@@ -269,6 +277,9 @@ def extract_name_query(query: str) -> str:
     text = (query or "").strip()
     if not text:
         return ""
+    if is_english():
+        cleaned = " ".join(_ENGLISH_ACTION_WORDS.sub(" ", text).split())
+        return "" if _ENGLISH_ORDINAL_ONLY.fullmatch(cleaned or "") else cleaned
     for word in _ACTION_STOPWORDS:
         text = text.replace(word, " ")
     # Collapse whitespace and remove residual punctuation.

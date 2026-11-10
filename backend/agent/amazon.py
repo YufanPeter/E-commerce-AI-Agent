@@ -7,12 +7,28 @@ from typing import Any
 
 from agent.intent_router import IntentDecision
 from agent.session import AgentSession
+from i18n import en as english
 from agent.tools.base import ToolResult
+
+
+_CART_WORDS = re.compile(r"\b(cart|checkout|check out|place (?:an |the |my )?order|buy (?:it|this|that) now)\b")
+_CART_ADD = re.compile(
+    r"^(?:please\s+)?(?:add|put)\b"
+    r"|^(?:please\s+)?(?:buy|get|take|order|i'?ll take)\s+(?:\d+\s+|two\s+|three\s+)?(?:of\s+)?(?:the\s+)?"
+    r"(?:first|second|third|fourth|fifth|last|this|that|it|these|those)\b"
+)
+
+
+def _is_cart_request(text: str) -> bool:
+    return bool(
+        _CART_WORDS.search(text) or _CART_ADD.search(text) or english.ORDER_HISTORY_RE.search(text)
+        or (english.REORDER_RE.search(text) and not english.NOT_REORDER_RE.search(text))
+    )
 
 
 def route_catalog(query: str, session: AgentSession) -> IntentDecision:
     text = query.strip().lower()
-    if re.search(r"\b(cart|checkout|check out|place (?:an |the )?order|buy (?:it|this|that) now)\b", text):
+    if _is_cart_request(text):
         tool = "cart"
     elif re.search(r"\b(compare|versus|vs\.?|differences?|which is better)\b", text):
         tool = "compare"
@@ -84,7 +100,7 @@ def reply(tool_result: ToolResult) -> str | dict[str, Any]:
         price = product.get("price_display") or ""
         lead = str(product.get("title") or "This product")
         listing = f" Listing description: {description}" if description else ""
-        return f"{lead}. {price}.{listing} Current inventory and purchase options are unknown."
+        return f"{lead}. {price}.{listing} Prices and stock are simulated for this demo."
     if tool_result.tool_name == "compare":
         comparison = data.get("comparison") or {}
         if not comparison:
@@ -92,7 +108,7 @@ def reply(tool_result: ToolResult) -> str | dict[str, Any]:
         return {
             "opening": "Here are the catalog facts side by side.",
             "items": [],
-            "summary": "Prices and ratings are historical. Current availability is unknown.",
+            "summary": "Ratings are historical. Prices and stock are simulated for this demo.",
             "followup": ["Show details for the first one"],
         }
 
@@ -115,7 +131,7 @@ def reply(tool_result: ToolResult) -> str | dict[str, Any]:
     return {
         "opening": f"I found {len(items)} matching options in the Amazon catalog.",
         "items": items,
-        "summary": "Prices are historical reference prices in USD.",
+        "summary": "Prices and stock are simulated for this demo.",
         "followup": ["Compare the first and second", "Show details for the first one"] if len(items) > 1
                     else ["Show details for the first one"],
     }

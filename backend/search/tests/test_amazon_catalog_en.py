@@ -57,7 +57,8 @@ with patch("socket.socket.connect", side_effect=AssertionError("unexpected outbo
     products = c.get("/products/search", params={"q": "Smartwatches under $50, no watch bands"}).json()["products"]
     assert {p["price"]["amountMinor"] for p in products} == {2500, 4200}
     assert all(p["price"]["currency"] == "USD" and p["category"] == "Electronics"
-               and p["priceType"] == "reference" and p["availability"] == "unknown" and not p["skus"]
+               and p["priceType"] == "simulated" and p["availability"] == "inStock" and p["skus"]
+               and all(s["id"].startswith("sim_") for s in p["skus"])
                and p["reviews"][0]["nickname"] == "Amazon customer" for p in products)
     session = None
     def turn(q, tool):
@@ -76,7 +77,16 @@ with patch("socket.socket.connect", side_effect=AssertionError("unexpected outbo
     detail = turn("Show reviews for the second one", "product_detail")
     assert detail["tool_result"]["payload"]["product"]["product_id"] == ordered[0]
     assert "Easy to use." in detail["narrative"]
-    assert c.post("/cart/mutate", json={"action": "add", "productID": ordered[0]}).status_code == 409
+    added = c.post("/cart/mutate", json={"action": "add", "productID": ordered[0]}).raise_for_status().json()
+    assert len(added["cart"]["lines"]) == 1
+    too_many = c.post("/cart/mutate", json={"action": "add", "productID": ordered[0], "quantity": 5000})
+    assert too_many.status_code == 409 and too_many.json()["code"] == "OUT_OF_STOCK"
+    picking = turn("Add the second one to my cart", "cart")
+    assert "several options" in picking["narrative"]
+    colors = picking["tool_result"]["payload"]["dimensions"][0]["values"]
+    bought = turn(colors[1], "cart")
+    assert "Added" in bought["narrative"] and "$" in bought["narrative"] and "元" not in bought["narrative"]
+    assert "Order placed" in turn("Checkout", "cart")["narrative"]
     saved = c.post("/memory/english-test/tell", json={"text": "I avoid Atlas"}).raise_for_status().json()
     assert saved["view"]["groups"][0]["items"][0]["label"] == "Avoids Atlas"
     with c.stream("POST", "/chat/stream", json={"query": "Smartwatches", "user_id": "english-test"}) as stream:

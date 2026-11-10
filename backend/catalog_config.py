@@ -51,6 +51,7 @@ class CatalogProfile:
     currency: str
     search_backend: str
     requires_prebuilt_db: bool
+    source_metadata: bool
     capabilities: CatalogCapabilities
 
 
@@ -62,6 +63,7 @@ def _demo_profile() -> CatalogProfile:
         currency="CNY",
         search_backend="rag",
         requires_prebuilt_db=False,
+        source_metadata=False,
         capabilities=CatalogCapabilities(
             cart=True,
             vision=True,
@@ -87,8 +89,9 @@ def _amazon_profile() -> CatalogProfile:
         currency="USD",
         search_backend="catalog",
         requires_prebuilt_db=True,
+        source_metadata=True,
         capabilities=CatalogCapabilities(
-            cart=False,
+            cart=True,
             vision=_env_flag("CARTPILOT_AMAZON_VISION"),
             llm_copy=_env_flag("CARTPILOT_AMAZON_MODEL_COPY"),
             llm_routing=False,
@@ -99,7 +102,7 @@ def _amazon_profile() -> CatalogProfile:
             query_prefetch=False,
             inferred_memory=False,
             llm_memory=False,
-            reference_prices=True,
+            reference_prices=False,
         ),
     )
 

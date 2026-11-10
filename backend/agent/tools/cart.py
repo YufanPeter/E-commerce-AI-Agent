@@ -26,6 +26,9 @@ from agent.session import AgentSession
 from agent.tools.base import ToolResult
 from agent.tools.resolve import enrich_candidates, focus_index_in, resolve_one
 from agent.tools.reference import attribute_matches, resolve_indices, resolve_by_name, extract_name_query
+from i18n import en as english
+from i18n import format_money, is_english, t
+from store.cart_store import CartStockError
 from store.cart_store import CartNotFoundError, CartStore, DEFAULT_ADDRESS, DEMO_USER_ID
 from store.order_store import OrderStore
 from store import sku_select
@@ -63,6 +66,12 @@ def detect_order_intent(text: str) -> str | None:
     text = (text or "").strip()
     if not text:
         return None
+    if is_english():
+        if english.ORDER_HISTORY_RE.search(text):
+            return "history"
+        if english.REORDER_RE.search(text) and not english.NOT_REORDER_RE.search(text):
+            return "reorder"
+        return None
     if _ORDER_HISTORY_RE.search(text):
         return "history"
     if any(word in text for word in _REORDER_WORDS) and not any(word in text for word in _NOT_REORDER_WORDS):
@@ -71,6 +80,8 @@ def detect_order_intent(text: str) -> str | None:
 
 
 def _quantity_in(text: str) -> int | None:
+    if is_english():
+        return english.quantity_in(text or "")
     match = _QUANTITY_RE.search(text or "")
     if not match:
         return None
@@ -182,8 +193,10 @@ class CartTool:
             if action == "order_history":
                 return self._order_history(session)
             return self._view()  # view 及未知动作的安全兜底
+        except CartStockError as exc:
+            return self._plain(str(exc))
         except CartNotFoundError as exc:
-            return self._plain(str(exc) + "。要不先看看购物车或换一件？")
+            return self._plain(t("cart.error", detail=str(exc)))
 
     # ------------------------------ Action dispatch ------------------------------
 
@@ -201,6 +214,10 @@ class CartTool:
 
     def _decide(self, query: str, session: AgentSession) -> tuple[str, dict[str, Any]]:
         """Select an action, falling back to cart view when LLM dispatch fails."""
+        if is_english():
+            decided = english.cart_action(query)
+            if decided is not None:
+                return decided
         try:
             decision = dispatch_action(query, session, _ACTIONS, purpose=_PURPOSE)
             return decision.action, decision.args
@@ -286,10 +303,7 @@ class CartTool:
 
         # 5. A named but missing product must not fall back to an unrelated visible item.
         if keyword or brand_ids:
-            return self._plain(
-                f"没有找到和「{keyword or query}」匹配的商品哦，"
-                "换个说法或者先让我帮你推荐几款？"
-            )
+            return self._plain(t("cart.no_match", name=keyword or query))
 
         # 6. Default only when a single candidate exists; otherwise clarify.
         if len(last_hits) == 1:
@@ -297,10 +311,7 @@ class CartTool:
         if last_hits:
             return self._ask_which_product(last_hits, session)
 
-        return self._plain(
-            "想把哪款加进来呀？可以说「把第一个加入购物车」，"
-            "或者先让我推荐几款。"
-        )
+        return self._plain(t("cart.ask_add"))
 
     def _ask_which_product(
         self, hits: list[dict[str, Any]], session: AgentSession
@@ -311,11 +322,7 @@ class CartTool:
         ]
         session.set("pending_add", {"candidates": candidates})
         lines = [f"{i + 1}. {c['title']}" for i, c in enumerate(candidates)]
-        text = (
-            "你想加入哪一款呢？\n"
-            + "\n".join(lines)
-            + "\n告诉我序号或品牌名就行，例如「第一个」或「华为那款」。"
-        )
+        text = t("cart.which_product", lines="\n".join(lines))
         return ToolResult(
             tool_name=self.name,
             payload={"action": "ask_which_product", "candidates": candidates},
@@ -337,12 +344,12 @@ class CartTool:
         """Resolve an answer to a pending product choice, or ask again."""
         if self._is_cancel(query):
             session.set("pending_add", None)
-            return self._plain("好的，先不加了。还有什么我可以帮你的？")
+            return self._plain(t("cart.cancelled"))
 
         candidates: list[dict[str, Any]] = pending_add.get("candidates", [])
         if not candidates:
             session.set("pending_add", None)
-            return self._plain("想加哪款呢？先让我帮你推荐几款吧～")
+            return self._plain(t("cart.no_candidates"))
 
         if pending_add.get("reorder"):
             picked = resolve_one(query, _reorder_candidates(candidates))
@@ -399,7 +406,7 @@ class CartTool:
         resolution = self._build_resolution(product_id, query, source)
         skus = self._store.list_skus(product_id)
         if not skus:
-            return self._plain("这款暂时没有可购买的规格了，换一款看看？")
+            return self._plain(t("cart.no_sku"))
 
         if len(skus) == 1:
             return self._commit_add(product_id, skus[0]["sku_id"], qty, resolution=resolution)
@@ -425,7 +432,7 @@ class CartTool:
         title = self._store.product_title(product_id)
         return {
             "original_query": query,
-            "resolved_query": f"把「{title}」加入购物车",
+            "resolved_query": t("cart.resolved_query", title=title),
             "product_id": product_id,
             "title": title,
             "source": source,
@@ -437,7 +444,7 @@ class CartTool:
         """Resolve a pending SKU answer and add it, or continue clarification."""
         if self._is_cancel(query):
             session.set("pending_cart", None)
-            return self._plain("好的，先不加了。还有什么我可以帮你的？")
+            return self._plain(t("cart.cancelled"))
 
         # Restart product resolution when another brand is named during SKU selection.
         switched = self._switch_intent(query, session, [pending["product_id"]])
@@ -449,7 +456,7 @@ class CartTool:
         skus = self._store.list_skus(product_id)
         if not skus:
             session.set("pending_cart", None)
-            return self._plain("这款规格信息好像丢失了，麻烦重新说一次要加哪款～")
+            return self._plain(t("cart.sku_lost"))
 
         # Combine previous and current specification terms to narrow dimensions gradually.
         combined = f"{pending.get('spec_text', '')} {query}".strip()
@@ -489,14 +496,15 @@ class CartTool:
 
         This deterministic action uses concise local copy, avoiding another LLM call.
         """
-        line = self._store.add_product(product_id, sku_id=sku_id, quantity=qty)
+        try:
+            line = self._store.add_product(product_id, sku_id=sku_id, quantity=qty)
+        except CartStockError as exc:
+            return self._plain(str(exc))
         snapshot = self._snapshot()
-        spec = "、".join(f"{k}{v}" for k, v in line.options.items()) if line.options else ""
-        spec_text = f"（{spec}）" if spec else ""
-        text = (
-            f"已把「{line.title}」{spec_text}加入购物车，数量 {line.quantity}。"
-            f"购物车现共 {snapshot['cart']['item_count']} 件，"
-            f"合计 {snapshot['cart']['total']} 元。"
+        text = t(
+            "cart.added", title=line.title, spec=_options_suffix(line.options), quantity=line.quantity,
+            count=snapshot["cart"]["item_count"], total=snapshot["cart"]["total"],
+            money=format_money(snapshot["cart"]["total"]),
         )
         return ToolResult(
             tool_name=self.name,
@@ -524,7 +532,7 @@ class CartTool:
             return self._commit_add(product_id, skus[0]["sku_id"], 1)
 
         # Let the client render options; keep narrative copy concise.
-        text = f"已理解为把「{title}」加入购物车。这款有多个规格可选，下面选一下你想要的款式吧～"
+        text = t("cart.ask_spec", title=title)
         # Ordered dimensions produce stable chips; retain ``options`` for compatibility.
         dimensions = [{"name": dim, "values": values} for dim, values in dims.items()]
         return ToolResult(
@@ -579,63 +587,58 @@ class CartTool:
 
     @staticmethod
     def _is_cancel(query: str) -> bool:
+        if is_english():
+            return english.CANCEL_RE.search(query) is not None
         return any(word in query for word in _CANCEL_WORDS)
 
     def _set_quantity(self, args: dict[str, Any]) -> ToolResult:
         line = self._target_line(args.get("cart_index"))
         qty = _as_int(args.get("quantity"), default=None)
         if qty is None:
-            return self._plain("要改成几件呢？比如「第一件改成 2 个」。")
+            return self._plain(t("cart.ask_quantity"))
         updated = self._store.set_quantity(line.cart_item_id, qty)
         snapshot = self._snapshot()
+        total = snapshot["cart"]["total"]
         if updated is None:
-            hint = f"已把「{line.title}」从购物车移除。"
+            hint = t("cart.quantity_removed", title=line.title)
         else:
-            hint = f"已把「{updated.title}」数量改为 {updated.quantity}。"
-        return ToolResult(
-            tool_name=self.name,
-            payload={"action": "set_quantity", **snapshot},
-            composer_hint=hint + f"请确认并带出当前合计 {snapshot['cart']['total']} 元。",
-        )
+            hint = t("cart.quantity_set", title=updated.title, quantity=updated.quantity)
+        return self._reported({"action": "set_quantity", **snapshot}, hint + t("cart.confirm_total", total=total, money=format_money(total)))
 
     def _remove(self, args: dict[str, Any]) -> ToolResult:
         line = self._target_line(args.get("cart_index"))
         self._store.remove_item(line.cart_item_id)
         snapshot = self._snapshot()
-        return ToolResult(
-            tool_name=self.name,
-            payload={"action": "remove", "removed": line.to_dict(), **snapshot},
-            composer_hint=(
-                f"已把「{line.title}」从购物车删除。"
-                f"请确认并带出当前还剩 {snapshot['cart']['item_count']} 件、"
-                f"合计 {snapshot['cart']['total']} 元。"
-            ),
+        total = snapshot["cart"]["total"]
+        return self._reported(
+            {"action": "remove", "removed": line.to_dict(), **snapshot},
+            t("cart.removed", title=line.title, count=snapshot["cart"]["item_count"], total=total, money=format_money(total)),
         )
 
     def _view(self) -> ToolResult:
         snapshot = self._snapshot()
         if not snapshot["cart"]["lines"]:
-            return self._plain("你的购物车还是空的，先让我帮你推荐几款吧～")
-        return ToolResult(
-            tool_name=self.name,
-            payload={"action": "view", **snapshot},
-            composer_hint=(
-                "请用自然口吻汇报购物车：逐件说商品名、数量、小计，"
-                f"最后给出合计 {snapshot['cart']['total']} 元，并询问是否下单。"
-            ),
+            return self._plain(t("cart.empty"))
+        total = snapshot["cart"]["total"]
+        rows = "\n".join(
+            f"{i + 1}. {line['title'][:60]} × {line['quantity']} — {format_money(line['unit_price'] * line['quantity'])}"
+            for i, line in enumerate(snapshot["cart"]["lines"])
+        ) if is_english() else ""
+        return self._reported(
+            {"action": "view", **snapshot},
+            t("cart.view", rows=rows, total=total, money=format_money(total)),
         )
 
     def _checkout(self, args: dict[str, Any], session: AgentSession) -> ToolResult:
         address = args.get("address") or DEFAULT_ADDRESS
-        order = self._store.build_order(address=address, order_user_id=self._order_user(session))
-        return ToolResult(
-            tool_name=self.name,
-            payload={"action": "checkout", "order": order.to_dict()},
-            composer_hint=(
-                f"下单成功！订单号 {order.order_id}，共 {order.to_dict()['item_count']} 件、"
-                f"合计 {order.total} 元，寄往：{order.address}。"
-                "请用愉快的口吻确认下单完成。"
-            ),
+        try:
+            order = self._store.build_order(address=address, order_user_id=self._order_user(session))
+        except CartStockError as exc:
+            return self._plain(str(exc))
+        return self._reported(
+            {"action": "checkout", "order": order.to_dict()},
+            t("cart.ordered", order_id=order.order_id, count=order.to_dict()["item_count"], total=order.total,
+              money=format_money(order.total), address=order.address),
         )
 
     # ------------------------------ 买过的东西 ------------------------------
@@ -649,11 +652,15 @@ class CartTool:
         user_id = self._order_user(session)
         orders = self._orders.list_orders(user_id)
         if not orders:
-            return self._plain("还没有找到你的下单记录，告诉我想买什么，我帮你找。")
+            return self._plain(t("cart.no_orders"))
 
         quantity = _quantity_in(query)
-        wants_whole_order = any(word in query for word in _WHOLE_ORDER_WORDS)
-        named = _REORDER_FILLER_RE.sub("", query).strip(" ，,。.！!？?")
+        wants_whole_order = (
+            bool(english.WHOLE_ORDER_RE.search(query)) if is_english()
+            else any(word in query for word in _WHOLE_ORDER_WORDS)
+        )
+        filler = english.REORDER_FILLER_RE if is_english() else _REORDER_FILLER_RE
+        named = filler.sub("", query).strip(" ，,。.！!？?")
         candidates = self._orders.recent_products(user_id)
 
         if not named:
@@ -671,8 +678,8 @@ class CartTool:
             matched = [candidates[picked]] if picked is not None else []
         if matched:
             return self._commit_reorder(matched[0], quantity, session)
-        titles = "、".join(line["title"][:14] for line in candidates[:3])
-        return self._plain(f"你的订单里没找到「{named}」，最近买过的有：{titles}。想再买哪个？")
+        titles = _join([line["title"][:30 if is_english() else 14] for line in candidates[:3]])
+        return self._plain(t("cart.reorder_not_found", name=named, titles=titles))
 
     def _ask_which_reorder(
         self,
@@ -683,21 +690,22 @@ class CartTool:
         candidates = lines[:5]
         session.set("pending_add", {"candidates": candidates, "reorder": True, "quantity": quantity})
         rows = [
-            f"{i + 1}. {line['title'][:24]}{_spec_suffix(line)} · 上次 ¥{line['unit_price']:g}"
+            t("cart.reorder_row", index=i + 1, title=line["title"][:40 if is_english() else 24],
+              spec=_spec_suffix(line), price=format_money(line["unit_price"]))
             for i, line in enumerate(candidates)
         ]
         return ToolResult(
             tool_name=self.name,
             payload={"action": "ask_which_product", "candidates": candidates},
-            narrative_override="你想再买哪一个？\n" + "\n".join(rows) + "\n说序号或商品名就行。",
+            narrative_override=t("cart.which_reorder", rows="\n".join(rows)),
             needs_composer=False,
         )
 
     def _price_note(self, previous: float, current: float) -> str:
         if abs(previous - current) < 0.01:
-            return f"现价 ¥{current:g}，和上次一样"
-        direction = "便宜" if current < previous else "贵"
-        return f"现价 ¥{current:g}，比上次{direction} ¥{abs(current - previous):g}"
+            return t("cart.price_same", price=format_money(current))
+        key = "cart.price_lower" if current < previous else "cart.price_higher"
+        return t(key, price=format_money(current), diff=format_money(abs(current - previous)))
 
     def _commit_reorder(
         self,
@@ -709,23 +717,23 @@ class CartTool:
         product_id = line["product_id"]
         try:
             added = self._store.add_product(product_id, sku_id=line["sku_id"], quantity=qty)
-        except CartNotFoundError:
+        except (CartNotFoundError, CartStockError):
             # 上次的规格下架了：商品还在就让用户重新选规格，不擅自换成别的规格
             if self._store.list_skus(product_id):
                 result = self._begin_add(product_id, qty, session, "", source="reorder")
-                prefix = f"上次买的{_spec_suffix(line) or '规格'}已经下架了。"
+                prefix = t("cart.reorder_spec_gone", spec=_spec_suffix(line) or t("cart.spec_word"))
                 return dataclasses.replace(result, narrative_override=prefix + (result.narrative_override or ""))
-            return self._plain(f"「{line['title'][:20]}」已经下架了，要帮你找类似的吗？")
+            return self._plain(t("cart.reorder_delisted", title=line["title"][:40 if is_english() else 20]))
         session.set("last_focus_product_id", product_id)
         snapshot = self._snapshot()
         current = next(
             (s["price"] for s in self._store.list_skus(product_id) if s["sku_id"] == line["sku_id"]),
             added.unit_price,
         )
-        text = (
-            f"已把上次买的「{line['title'][:24]}」{_spec_suffix(line)}×{qty} 加入购物车，"
-            f"{self._price_note(float(line['unit_price']), float(current))}。"
-            f"购物车合计 {snapshot['cart']['total']:g} 元，要直接下单吗？"
+        text = t(
+            "cart.reordered", title=line["title"][:40 if is_english() else 24], spec=_spec_suffix(line), quantity=qty,
+            note=self._price_note(float(line["unit_price"]), float(current)),
+            total=f"{snapshot['cart']['total']:g}", money=format_money(snapshot["cart"]["total"]),
         )
         return ToolResult(
             tool_name=self.name,
@@ -747,32 +755,35 @@ class CartTool:
                 added.append(
                     self._store.add_product(line["product_id"], sku_id=line["sku_id"], quantity=int(line["quantity"])).to_dict()
                 )
-            except CartNotFoundError:
+            except (CartNotFoundError, CartStockError):
                 skipped.append(line["title"][:16])
         if not added:
-            return self._plain("上一单的商品都已经下架了，要帮你找类似的吗？")
+            return self._plain(t("cart.whole_order_gone"))
         snapshot = self._snapshot()
         previous = round(sum(float(l["unit_price"]) * int(l["quantity"]) for l in order["lines"]), 2)
-        text = f"已把上一单的 {len(added)} 件商品加入购物车，购物车合计 {snapshot['cart']['total']:g} 元（上一单 {previous:g} 元）。"
+        text = t(
+            "cart.whole_order_added", count=len(added), total=f"{snapshot['cart']['total']:g}",
+            money=format_money(snapshot["cart"]["total"]), previous=f"{previous:g}", previous_money=format_money(previous),
+        )
         if skipped:
-            text += f"其中「{'、'.join(skipped)}」已下架，没有加入。"
+            text += t("cart.whole_order_skipped", titles=_join(skipped))
         return ToolResult(
             tool_name=self.name,
             payload={"action": "reorder", "added_lines": added, **snapshot},
-            narrative_override=text + "要直接下单吗？",
+            narrative_override=text + t("cart.ask_checkout"),
             needs_composer=False,
         )
 
     def _order_history(self, session: AgentSession) -> ToolResult:
         orders = self._orders.list_orders(self._order_user(session), limit=5)
         if not orders:
-            return self._plain("你还没有下过单，先看看想买什么吧～")
+            return self._plain(t("cart.no_history"))
         rows: list[str] = []
         hits: list[dict[str, str]] = []
         for order in orders:
-            names = "、".join(f"{line['title'][:14]}×{line['quantity']}" for line in order["lines"][:3])
-            more = f" 等 {len(order['lines'])} 件" if len(order["lines"]) > 3 else ""
-            rows.append(f"{order['created_at'][:10]}：{names}{more}，共 ¥{order['total']:g}")
+            names = _join([f"{line['title'][:40 if is_english() else 14]}×{line['quantity']}" for line in order["lines"][:3]])
+            more = t("cart.history_more", count=len(order["lines"])) if len(order["lines"]) > 3 else ""
+            rows.append(t("cart.history_row", date=order["created_at"][:10], names=names, more=more, total=format_money(order["total"])))
             for line in order["lines"]:
                 if all(hit["product_id"] != line["product_id"] for hit in hits):
                     hits.append({"product_id": line["product_id"], "title": line["title"]})
@@ -781,7 +792,7 @@ class CartTool:
         return ToolResult(
             tool_name=self.name,
             payload={"action": "order_history", "orders": orders},
-            narrative_override="你最近的订单：\n" + "\n".join(rows) + "\n想再买哪个，直接告诉我。",
+            narrative_override=t("cart.history", rows="\n".join(rows)),
             needs_composer=False,
         )
 
@@ -791,10 +802,10 @@ class CartTool:
         """Resolve a cart ordinal to a line, defaulting to the first line."""
         lines = self._store.list_items()
         if not lines:
-            raise CartNotFoundError("购物车是空的")
+            raise CartNotFoundError(t("cart.error.empty"))
         i = (int(cart_index) - 1) if cart_index is not None else 0
         if not (0 <= i < len(lines)):
-            raise CartNotFoundError(f"购物车里没有第 {cart_index} 件")
+            raise CartNotFoundError(t("cart.error.no_index", index=cart_index))
         return lines[i]
 
     def _snapshot(self) -> dict[str, Any]:
@@ -806,6 +817,12 @@ class CartTool:
                 "total": round(sum(line.subtotal for line in lines), 2),
             }
         }
+
+    def _reported(self, payload: dict[str, Any], text: str) -> ToolResult:
+        """Deterministic English copy, or a hint the Chinese composer turns into prose."""
+        if is_english():
+            return ToolResult(tool_name=self.name, payload=payload, narrative_override=text, needs_composer=False)
+        return ToolResult(tool_name=self.name, payload=payload, composer_hint=text)
 
     def _plain(self, text: str) -> ToolResult:
         return ToolResult(
@@ -833,7 +850,19 @@ def _reorder_candidates(lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def _spec_suffix(line: dict[str, Any]) -> str:
     options = line.get("options") or {}
-    return f"（{'、'.join(str(v) for v in options.values())}）" if options else ""
+    return t("cart.spec_suffix", spec=_join([str(v) for v in options.values()])) if options else ""
+
+
+def _options_suffix(options: dict[str, Any]) -> str:
+    if not options:
+        return ""
+    if is_english():
+        return t("cart.spec_suffix", spec=", ".join(f"{k}: {v}" for k, v in options.items()))
+    return t("cart.spec_suffix", spec="、".join(f"{k}{v}" for k, v in options.items()))
+
+
+def _join(parts: list[str]) -> str:
+    return (", " if is_english() else "、").join(parts)
 
 
 def _as_int(value: Any, default: Any) -> Any:

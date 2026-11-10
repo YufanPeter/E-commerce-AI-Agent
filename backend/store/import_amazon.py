@@ -20,6 +20,7 @@ from urllib.parse import urlsplit
 from catalog_config import AMAZON_CATEGORIES, AMAZON_DATA_DIR, AMAZON_DB_PATH
 from store.attribute_rules import ATTRIBUTE_RULES_VERSION, extract_attributes
 from store.import_product_data import DEFAULT_INIT_SQL, import_product, init_database, load_json
+from store.synthesize_commerce import load_rules, synthesize_skus
 
 
 SCHEMA = DEFAULT_INIT_SQL.with_name("amazon_catalog.sql")
@@ -112,6 +113,7 @@ def build_amazon_catalog(data_dir: Path, db_path: Path, taxonomy_path: Path = TA
     manifest = load_json(data_dir / "image_manifest.json")
     taxonomy = load_json(taxonomy_path)
     nodes = {node["path"]: node for node in taxonomy["nodes"]}
+    variant_rules = load_rules()
     product_paths = sorted(data_dir.glob("*/data/*.json"))
     if not product_paths or len(product_paths) != len(manifest) or len(product_paths) != report["summary"]["products"]:
         raise ValueError("Product files, image manifest, and sample report disagree")
@@ -151,12 +153,13 @@ def build_amazon_catalog(data_dir: Path, db_path: Path, taxonomy_path: Path = TA
                          json.dumps(node["accessory_for"], ensure_ascii=False)),
                     )
                 for path, product in zip(product_paths, products):
-                    _insert_product(conn, path, product, data_dir, nodes, brands, duplicates, manifest, exchange_rate)
+                    _insert_product(conn, path, product, data_dir, nodes, brands, duplicates, manifest, exchange_rate, variant_rules)
                 build_info = {
                     "schema_version": "amazon-catalog-v2",
                     "taxonomy_version": taxonomy["version"],
                     "attribute_rules_version": ATTRIBUTE_RULES_VERSION,
                     "dataset": "amazon_dense_10k",
+                    "commerce_source": variant_rules["version"],
                     "product_count": str(len(products)),
                 }
                 conn.executemany("INSERT INTO catalog_build_info VALUES (?, ?)", build_info.items())
@@ -188,6 +191,7 @@ def _insert_product(
     duplicates: dict[str, str],
     manifest: dict[str, str],
     exchange_rate: Decimal,
+    variant_rules: dict[str, Any],
 ) -> None:
     source = product["source"]
     pid, node = product["product_id"], nodes[source["cell"]]
@@ -221,11 +225,19 @@ def _insert_product(
          product["brand"], int(brand.casefold() in _GENERIC_BRANDS), node["group"], node["role"], node["audience"],
          duplicates.get(pid), int(len(description) < SHORT_DESCRIPTION_CHARS)),
     )
-    for row in extract_attributes(category, product["title"], description):
+    attributes = extract_attributes(category, product["title"], description)
+    for row in attributes:
         conn.execute(
             "INSERT OR IGNORE INTO product_attributes VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (pid, row["attribute"], row["value"], row["status"], row["evidence_field"],
              row["evidence_start"], row["evidence_end"], row["provenance"]),
+        )
+    observed_colors = [row["value"].title() for row in attributes if row["attribute"] == "color"]
+    for sku in synthesize_skus(source["parent_asin"], node["label"], float(usd), observed_colors, variant_rules):
+        conn.execute(
+            "INSERT INTO product_skus (sku_id, product_id, properties_json, price, stock_qty) VALUES (?, ?, ?, ?, ?)",
+            (sku["sku_id"], pid, json.dumps(sku["properties"], ensure_ascii=False, separators=(",", ":")),
+             sku["price"], sku["stock_qty"]),
         )
 
 
@@ -258,9 +270,12 @@ def coverage_report(db_path: Path) -> dict[str, Any]:
                GROUP BY p.category, a.attribute, a.status"""
         ).fetchall()
         taxonomy = conn.execute("SELECT COUNT(DISTINCT sub_category) FROM products").fetchone()[0]
+        skus, sold_out = conn.execute("SELECT COUNT(*), SUM(stock_qty = 0) FROM product_skus").fetchone()
     finally:
         conn.close()
-    report: dict[str, Any] = {"sub_categories": taxonomy, "attributes": {}}
+    report: dict[str, Any] = {
+        "sub_categories": taxonomy, "skus": skus, "out_of_stock_share": round(sold_out / skus, 3), "attributes": {},
+    }
     for category, attribute, status, count in rows:
         entry = report["attributes"].setdefault(category, {}).setdefault(attribute, {})
         entry[status] = round(count / totals[category], 3)

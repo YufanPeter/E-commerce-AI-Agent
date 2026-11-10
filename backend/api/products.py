@@ -281,7 +281,7 @@ def product_payload(detail: ProductDetail, image_base: str | None = None) -> dic
         "updatedAt": None,
     }
     if detail.catalog_source is not None:
-        payload.update(priceType="reference", catalogSource=detail.catalog_source)
+        payload.update(priceType="simulated", catalogSource=detail.catalog_source)
     return payload
 
 
