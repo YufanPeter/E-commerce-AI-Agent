@@ -3,7 +3,6 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from agent.amazon import knowledge_route
 from agent.tools.knowledge import KnowledgeTool, _guide_text
 from graph.build_graph import attribute_rows, own_device, similar_pairs
 from graph.extract import Product
@@ -14,7 +13,7 @@ from search.catalog_understanding import _devices_named, _named_values
 
 def _session(hits=None):
     return SimpleNamespace(
-        recall_hits=lambda: hits or [], recall_parsed=lambda: {}, get=lambda _key: None,
+        recall_hits=lambda: hits or [], recall_parsed=lambda: {}, task=SimpleNamespace(focus_product_id=None),
         remember_search=lambda *args, **kwargs: None,
     )
 
@@ -87,49 +86,6 @@ def test_guides_only_keep_supplied_facts():
     assert "- Comfort: Check the fit." in _guide_text(guide)
 
 
-def test_knowledge_questions_are_recognized():
-    shown = _session([{"product_id": "p", "title": "Watch"}])
-    assert knowledge_route("What should I look for in a coffee machine?", _session()) == "buying_guide"
-    assert knowledge_route("What bands fit this watch?", shown) == "accessories"
-    assert knowledge_route("Something similar but cheaper", shown) == "similar"
-    assert knowledge_route("Something similar but cheaper", _session()) is None
-    assert knowledge_route("I'd like that one", shown) is None
-    assert knowledge_route("watch bands for Apple Watch", shown) is None
-
-
-@pytest.mark.parametrize("query", [
-    "Find me earbuds similar to AirPods under $50",
-    "earbuds similar to AirPods",
-    "vegan leather alternatives",
-    "alternatives to Nike",
-    "a phone case for travel that will last",
-    "covers for my couch that last",
-    "phone case for this trip",
-    "Something similar under $30",
-    "Is this similar in size?",
-    "I'd like that one",
-])
-def test_ordinary_requests_stay_with_the_router(query):
-    assert knowledge_route(query, _session([{"product_id": "p", "title": "Watch"}])) is None
-
-
-@pytest.mark.parametrize("query, tool", [
-    ("Something similar but cheaper", "similar"),
-    ("Show me similar ones", "similar"),
-    ("similar to the first one", "similar"),
-    ("Any alternatives?", "similar"),
-    ("alternatives to this", "similar"),
-    ("something like the second one", "similar"),
-    ("What bands fit this watch?", "accessories"),
-    ("What bands fit the first one?", "accessories"),
-    ("a case for the second one please", "accessories"),
-    ("accessories for it", "accessories"),
-    ("straps that work with this one", "accessories"),
-])
-def test_questions_about_a_shown_product_use_the_graph(query, tool):
-    assert knowledge_route(query, _session([{"product_id": "p", "title": "Watch"}])) == tool
-
-
 def test_query_signals_come_from_the_ontology_and_device_rules():
     assert _named_values("comfortable earbuds with good battery life", ("battery_life", "comfort")) == ["battery_life"]
     assert "iphone_15" in _devices_named("case for iPhone 15")
@@ -166,7 +122,7 @@ def test_similar_but_cheaper_prices_come_from_the_catalog(monkeypatch):
     monkeypatch.setattr("agent.tools.knowledge._card_with_evidence", lambda hit, query: {"product_id": hit.product_id})
     graph = SimpleNamespace(similar=lambda pid, limit: ["dear", "cheap"])
     tool = KnowledgeTool("similar", _Recommend(_service(graph, {"focus": 50.0, "dear": 80.0, "cheap": 20.0})))
-    result = tool.run("Something similar but cheaper", _session([{"product_id": "focus", "title": "Watch"}]), {})
+    result = tool.run("Something similar but cheaper", _session([{"product_id": "focus", "title": "Watch"}]), {"cheaper": True})
     assert [card["product_id"] for card in result.payload["products"]] == ["cheap"]
 
 
@@ -174,7 +130,7 @@ def test_similar_searches_normally_when_the_graph_is_down():
     recommend = _Recommend(_service(None, {"focus": 50.0}))
     session = _session([{"product_id": "focus", "title": "Watch"}])
     session.recall_parsed = lambda: {"sub_category": "Smartwatches"}
-    KnowledgeTool("similar", recommend).run("Something similar but cheaper", session, {})
+    KnowledgeTool("similar", recommend).run("Something similar but cheaper", session, {"cheaper": True})
     assert recommend.searched == ["Smartwatches under $49.99"]
 
 
@@ -184,3 +140,13 @@ def test_unconfirmed_accessories_say_so(monkeypatch):
     tool = KnowledgeTool("accessories", _Recommend(_service(graph, {"band": 9.0})))
     result = tool.run("What bands fit this watch?", _session([{"product_id": "w", "title": "Watch"}]), {})
     assert "don't confirm" in result.payload["opening"]
+
+
+def test_follow_ups_refine_the_accessories_on_screen(monkeypatch):
+    monkeypatch.setattr("agent.tools.knowledge._card_with_evidence", lambda hit, query: {"product_id": hit.product_id})
+    graph = SimpleNamespace(accessories=lambda pid, limit: AccessoryMatches(("band",), None, False))
+    session = _session([{"product_id": "w", "title": "Watch"}])
+    remembered = []
+    session.remember_search = lambda parsed, hits, **kwargs: remembered.append(parsed)
+    KnowledgeTool("accessories", _Recommend(_service(graph, {"band": 9.0}))).run("What bands fit this watch?", session, {})
+    assert remembered[0]["sub_category"] == "L"  # "Cheaper ones" now means cheaper bands, not cheaper watches.

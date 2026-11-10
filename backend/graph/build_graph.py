@@ -25,6 +25,7 @@ from graph.extract import (
     RELATIONS, Product, cache_key, load_cache, load_ontology, load_products, validate_claims,
 )
 from store.attribute_rules import DESCRIPTION, TITLE, _DEVICES, extract_multi
+from store.attribute_verification import YES, AttributeVerifier, Candidate, candidate, spending_guard
 
 
 TAXONOMY_PATH = Path(__file__).resolve().parents[1] / "db" / "amazon_taxonomy.json"
@@ -43,6 +44,9 @@ _WRITEBACK = {
 _DESCRIPTION_FIELD = "rag_knowledge.marketing_description"
 _EVIDENCE_FIELDS = {"title": "title", "description": _DESCRIPTION_FIELD}
 _SOURCE_OF_FIELD = {"title": "title", _DESCRIPTION_FIELD: "description"}
+# Model rows that audited below the 95% needed to state a fact to shoppers. They are kept
+# as evidence, but only 'observed' rows reach filters, detail pages and comparison tables.
+_RANK_ONLY_ATTRIBUTES = frozenset({"free_of"})
 _HOST_CUE = re.compile(r"\b(?:for|with|fits?|supports?|compatible|replacement)\b[\s\w/&,+-]*$", re.I)
 
 
@@ -156,25 +160,75 @@ def similar_pairs(
     return pairs
 
 
+def _quote_span(claim: dict[str, Any], products: dict[str, Product]) -> tuple[int, int] | None:
+    text = products[claim["product_id"]].text_of(claim["source"]) or ""
+    match = re.search(r"\s+".join(re.escape(word) for word in claim["quote"].split()), text, re.I)
+    return (match.start(), match.end()) if match else None
+
+
+def _is_listing_fact(claim: dict[str, Any]) -> bool:
+    return claim["relation"] in _WRITEBACK and claim["source"] in _EVIDENCE_FIELDS
+
+
+def _claim_candidate(claim: dict[str, Any], products: dict[str, Product]) -> Candidate:
+    product, span = products[claim["product_id"]], _quote_span(claim, products)
+    attribute = _WRITEBACK[claim["relation"]]
+    if span is None:
+        return candidate(attribute, claim["value"], product.label, product.title, claim["quote"], 0, len(claim["quote"]))
+    return candidate(attribute, claim["value"], product.label, product.title, product.text_of(claim["source"]) or "", *span)
+
+
+def verified_claims(
+    claims: Sequence[dict[str, Any]], products: dict[str, Product], verifier: AttributeVerifier,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Split claims into those that may be published and those the check refused.
+
+    Only listing facts are checked; review claims stay soft signals. Refused claims carry
+    the verdict, so they can be kept for audits.
+    """
+    facts = {index: _claim_candidate(claim, products) for index, claim in enumerate(claims) if _is_listing_fact(claim)}
+    verdicts = verifier.verdicts(list(facts.values()))
+    kept, refused = [], []
+    for index, claim in enumerate(claims):
+        verdict = verdicts[facts[index]] if index in facts else YES
+        if verdict == YES:
+            kept.append(claim)
+        else:
+            refused.append({**claim, "verdict": verdict})
+    return kept, refused
+
+
 def attribute_rows(claims: Iterable[dict[str, Any]], products: dict[str, Product]) -> list[tuple[Any, ...]]:
     """Listing-sourced claims in ``product_attributes`` form, located by their exact quote."""
     rows: list[tuple[Any, ...]] = []
     for claim in claims:
-        attribute, field = _WRITEBACK.get(claim["relation"]), _EVIDENCE_FIELDS.get(claim["source"])
-        if attribute is None or field is None:
+        if not _is_listing_fact(claim):
             continue
-        text = products[claim["product_id"]].text_of(claim["source"]) or ""
-        match = re.search(r"\s+".join(re.escape(word) for word in claim["quote"].split()), text, re.I)
-        if match:
-            rows.append((claim["product_id"], attribute, claim["value"], "observed", field, match.start(), match.end(), LLM_PROVENANCE))
+        span = _quote_span(claim, products)
+        if span:
+            attribute = _WRITEBACK[claim["relation"]]
+            status = "ambiguous" if attribute in _RANK_ONLY_ATTRIBUTES else "observed"
+            rows.append((claim["product_id"], attribute, claim["value"], status,
+                         _EVIDENCE_FIELDS[claim["source"]], *span, LLM_PROVENANCE))
     return rows
 
 
-def write_attributes(db_path: Path, rows: Sequence[tuple[Any, ...]]) -> None:
+def rejection_rows(refused: Iterable[dict[str, Any]], products: dict[str, Product]) -> list[tuple[Any, ...]]:
+    rows: list[tuple[Any, ...]] = []
+    for claim in refused:
+        start, end = _quote_span(claim, products) or (0, 0)
+        rows.append((claim["product_id"], _WRITEBACK[claim["relation"]], claim["value"], claim["verdict"],
+                     _EVIDENCE_FIELDS[claim["source"]], start, end, LLM_PROVENANCE))
+    return rows
+
+
+def write_attributes(db_path: Path, rows: Sequence[tuple[Any, ...]], rejected: Sequence[tuple[Any, ...]] = ()) -> None:
     """Replace earlier model rows; a rule-extracted value keeps its own evidence."""
     with closing(sqlite3.connect(db_path)) as conn, conn:
         conn.execute("DELETE FROM product_attributes WHERE provenance = ?", (LLM_PROVENANCE,))
+        conn.execute("DELETE FROM attribute_rejections WHERE provenance = ?", (LLM_PROVENANCE,))
         conn.executemany("INSERT OR IGNORE INTO product_attributes VALUES (?, ?, ?, ?, ?, ?, ?, ?)", rows)
+        conn.executemany("INSERT OR IGNORE INTO attribute_rejections VALUES (?, ?, ?, ?, ?, ?, ?, ?)", rejected)
 
 
 def product_vectors(index_dir: Path = AMAZON_INDEX_DIR) -> tuple[list[str], np.ndarray]:
@@ -273,12 +327,16 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", type=Path, default=AMAZON_DB_PATH)
     parser.add_argument("--no-attributes", action="store_true", help="Leave product_attributes untouched.")
+    parser.add_argument("--off-peak", action="store_true", help="Pause verification during double-priced hours.")
+    parser.add_argument("--min-balance", type=float, default=2.0, help="Stop verification when the CNY balance reaches this.")
     args = parser.parse_args()
 
     ontology, products = load_ontology(), load_products(args.db)
     by_id = {product.product_id: product for product in products}
     catalog = load_catalog_rows(args.db)
-    claims = valid_claims(load_cache(), products, ontology)
+    verifier = AttributeVerifier(before_chunk=spending_guard(args.off_peak, args.min_balance))
+    claims, refused = verified_claims(valid_claims(load_cache(), products, ontology), by_id, verifier)
+    print(f"verified claims: kept={len(claims)} refused={len(refused)}", flush=True)
     taken = {(c["product_id"], c["value"]) for c in claims if c["relation"] == "COMPATIBLE_WITH"}
     claims += rule_device_claims(args.db, by_id, taken)
     ids, vectors = product_vectors()
@@ -293,7 +351,7 @@ def main() -> None:
         load_graph(driver, catalog, claims, similar, devices, catalog_digest(), ontology["version"])
     if not args.no_attributes:
         rows = attribute_rows(claims, by_id)
-        write_attributes(args.db, rows)
+        write_attributes(args.db, rows, rejection_rows(refused, by_id))
         print(f"attribute rows written: {len(rows)}", flush=True)
 
 

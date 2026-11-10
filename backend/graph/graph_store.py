@@ -57,6 +57,8 @@ class GraphStore(Protocol):
 
     def guide(self, label: str) -> dict[str, Any] | None: ...
 
+    def claims(self, product_id: str, limit: int) -> list[dict[str, Any]]: ...
+
 
 def wanted_terms(query: GraphQuery) -> list[dict[str, Any]]:
     """Graph lookups for one query. Reported criticism of a wanted aspect counts against a product."""
@@ -100,6 +102,12 @@ WITH item, head(collect({device: d.name, source: r.source, quote: r.quote})) AS 
 WHERE $devices = [] OR match.device IS NOT NULL
 RETURN item.id AS id, match
 ORDER BY id LIMIT $limit
+"""
+
+_CLAIMS = """
+MATCH (:Product {id: $id})-[r:PRAISED_FOR|CRITICIZED_FOR]->(e:Entity)
+RETURN type(r) AS relation, e.name AS value, r.source AS source, r.quote AS quote
+ORDER BY relation, value LIMIT $limit
 """
 
 _GUIDE = "MATCH (c:Community {id: $id}) RETURN c.guide AS guide"
@@ -164,6 +172,9 @@ class Neo4jGraphStore:
             return AccessoryMatches(tuple(row["id"] for row in rows), device, True, evidence)
 
         return self._safely(AccessoryMatches(), read)
+
+    def claims(self, product_id: str, limit: int) -> list[dict[str, Any]]:
+        return self._safely([], lambda: self._read(_CLAIMS, id=product_id, limit=limit))
 
     def guide(self, label: str) -> dict[str, Any] | None:
         def read() -> dict[str, Any] | None:
