@@ -21,8 +21,9 @@ from rag.vector_index import ChromaVectorIndex, Condition, VectorIndex
 from search.catalog_understanding import merge_turn, open_vocabulary, semantic_query, understand
 from search.lexical import BM25, rrf_fuse, tokenize
 from search.query_understanding import ParsedQuery
-from search.search_service import ProductHit, SearchResult, _apply_profile_boost, _env_use_rerank
+from search.search_service import ProductHit, SearchResult, _apply_profile_boost, _env_use_rerank, confirmed_tier
 from search.where_builder import build_filters
+from store.numeric_attributes import describe, numeric_attributes, satisfies
 from store.product_store import ProductStore
 
 
@@ -37,6 +38,11 @@ _RATING_WEIGHT = 0.05
 _CONFIRMED_ATTRIBUTE_BOOST = 1.15
 _WEAK_MATCH_DISTANCE = float(os.getenv("CATALOG_WEAK_MATCH_DISTANCE", "0.47"))
 _ATTRIBUTE_SYNONYMS = {"perfume": "fragrance"}
+
+
+def _confirmed_count(checks: dict[str, str]) -> int:
+    """How many of the shopper's conditions the listing itself confirms."""
+    return sum(value in ("free", "meets") for value in checks.values())
 
 
 def _env_review_recall() -> bool:
@@ -77,9 +83,11 @@ class CatalogSearchService:
                    JOIN product_price_ranges r USING (product_id)
                    WHERE p.status = 'active' ORDER BY p.product_id"""
             ).fetchall()
+            checked = ("contains", "free_of", *numeric_attributes())
             attribute_rows = conn.execute(
                 "SELECT product_id, attribute, value FROM product_attributes "
-                "WHERE attribute IN ('contains', 'free_of') AND status = 'observed'"
+                f"WHERE attribute IN ({', '.join('?' * len(checked))}) AND status = 'observed'",
+                checked,
             ).fetchall()
         self._position = {row["product_id"]: i for i, row in enumerate(self._rows)}
         self._attributes: dict[tuple[str, str], set[str]] = {}
@@ -120,7 +128,7 @@ class CatalogSearchService:
         profile = user_profile or {}
         if profile.get("personalization_enabled") is False:
             profile = {}
-        intent = merge_turn(understand(query, self._vocabulary), base, profile)
+        intent = merge_turn(understand(query, self._vocabulary, base=base), base, profile)
         tokens = list(dict.fromkeys(t for t in tokenize(intent.retrieval_query) if t not in _STOP and not t.isdigit()))
         if not (tokens or intent.sub_category or intent.category or intent.brand_include):
             intent = replace(intent, needs_clarification=True)
@@ -135,17 +143,27 @@ class CatalogSearchService:
             return SearchResult(replace(intent, unavailable_terms=[query]), [], 0, 0)
         evidence = self._review_evidence(reviews, eligible)
         graph_hits = self._graph_recall(intent)
-        fused = rrf_fuse([lexical, [c.product_id for c in products], list(evidence), [h.product_id for h in graph_hits]])
+        fused = rrf_fuse([
+            lexical, [c.product_id for c in products], list(evidence), [h.product_id for h in graph_hits],
+            self._confirmed_recall(eligible, intent),
+        ])
         pool = [pid for pid in fused if pid in eligible and self._passes_title_check(pid, intent)]
-        checks = {pid: self._attribute_checks(pid, intent.excluded_attributes) for pid in pool}
+        avoided = [str(term).casefold() for term in profile.get("avoid_terms") or []]
+        avoid_signals = [
+            {"kind": "avoid_term", "value": term} for term in avoided
+            if any(_ATTRIBUTE_SYNONYMS.get(term, term) in self._attributes.get((pid, "contains"), set()) for pid in pool)
+        ]
+        checks = {pid: self._attribute_checks(pid, intent, avoided) for pid in pool}
         pool = [pid for pid in pool if checks[pid] is not None]
 
         distances = {c.product_id: c.distance for c in products}
         claims = {h.product_id: h.evidence for h in graph_hits}
         hits = self._ranked_hits(pool, text, distances, evidence, checks, claims)
         hits, signals = _apply_profile_boost(hits, intent, profile)
+        # A listing that confirms the shopper's conditions answers better than silence.
+        hits.sort(key=lambda hit: -confirmed_tier(hit, intent))
         hits = self._without_duplicates(hits)[:top_k_products]
-        return SearchResult(intent, hits, len(fused), len(pool), personalization=signals)
+        return SearchResult(intent, hits, len(fused), len(pool), personalization=[*signals, *avoid_signals])
 
     # ----- eligibility -----------------------------------------------------------------
 
@@ -180,17 +198,40 @@ class CatalogSearchService:
         wanted = set(self._vocabulary.expand([intent.sub_category])) if intent.sub_category else set()
         return title_type in wanted or title_type not in self._vocabulary.accessory_labels
 
-    def _attribute_checks(self, product_id: str, excluded: list[str]) -> dict[str, str] | None:
-        """``None`` means the listing states a rejected ingredient; absent evidence stays unknown."""
+    def _attribute_checks(self, product_id: str, intent: ParsedQuery, avoided: list[str] = ()) -> dict[str, str] | None:
+        """``None`` means the listing contradicts a condition; absent evidence stays unknown.
+
+        A rejected ingredient is "free" when the listing says so, and a measured limit is
+        "meets" when a stated value satisfies it. ``avoided`` comes from saved memory and
+        applies across categories, so it only removes products that state the ingredient.
+        """
         contains = self._attributes.get((product_id, "contains"), set())
         free_of = self._attributes.get((product_id, "free_of"), set())
+        if any(_ATTRIBUTE_SYNONYMS.get(term, term) in contains for term in avoided):
+            return None
         checks: dict[str, str] = {}
-        for term in excluded:
+        for term in intent.excluded_attributes:
             canonical = _ATTRIBUTE_SYNONYMS.get(term, term)
             if canonical in contains:
                 return None
             checks[term] = "free" if canonical in free_of else "unknown"
+        for constraint in intent.numeric:
+            met = satisfies(self._attributes.get((product_id, constraint["attribute"]), ()), constraint["op"], constraint["value"])
+            if met is False:
+                return None
+            checks[describe(constraint)] = "meets" if met else "unknown"
         return checks
+
+    def _confirmed_recall(self, eligible: set[str], intent: ParsedQuery) -> list[str]:
+        """Products whose listing confirms a condition, so a deep match is not left out of the pool."""
+        if not (intent.excluded_attributes or intent.numeric) or not (intent.sub_category or intent.category):
+            return []
+        ranked = []
+        for product_id in eligible:
+            confirmed = _confirmed_count(self._attribute_checks(product_id, intent) or {})
+            if confirmed:
+                ranked.append((-confirmed, -self._rows[self._position[product_id]]["rating_number"], product_id))
+        return [product_id for *_, product_id in sorted(ranked)[:_CHANNEL_SIZE]]
 
     # ----- recall ----------------------------------------------------------------------
 
@@ -282,7 +323,9 @@ class CatalogSearchService:
         evidence: dict[str, list[RetrievedChunk]], checks: dict[str, dict[str, str] | None],
         claims: dict[str, tuple[dict[str, Any], ...]],
     ) -> list[ProductHit]:
-        rerank = self._rerank_scores(text, pool[:_RERANK_POOL])
+        # Confirmed products deeper in the fused list are reranked too, or they would all score zero.
+        confirmed_later = [pid for pid in pool[_RERANK_POOL:] if _confirmed_count(checks[pid] or {})]
+        rerank = self._rerank_scores(text, pool[:_RERANK_POOL] + confirmed_later[:_RERANK_POOL])
         hits = []
         for rank, product_id in enumerate(pool, start=1):
             row = self._rows[self._position[product_id]]
@@ -319,4 +362,5 @@ class CatalogSearchService:
             row["base_price"], score, distance, rerank_score, [listing, *reviews],
             min_price=row["min_price"], max_price=row["max_price"], sku_count=row["sku_count"],
             attribute_checks=checks, graph_evidence=claims,
+            rating={"average": row["average_rating"], "count": row["rating_number"]} if row["rating_number"] else None,
         )

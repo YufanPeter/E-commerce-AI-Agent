@@ -3,6 +3,8 @@
 import re
 from unittest.mock import patch
 
+import pytest
+
 from search import catalog_understanding as cu
 from search.query_understanding import ParsedQuery
 
@@ -37,6 +39,23 @@ def test_rules_read_type_budget_exclusions_and_brand():
     assert parsed.sub_category == "Headphones"
     assert parsed.max_price == 80 and parsed.brand_include == ["Sony"]
     assert parsed.sub_category_exclude == ["Smartwatch Bands"] and parsed.excluded_attributes == ["alcohol"]
+
+
+@pytest.mark.parametrize("query, minimum, maximum", [
+    ("Bluetooth speaker with at least 20 hours of battery life", None, None),
+    ("over 100W charger under $30", None, 30),
+    ("power bank over 20,000mAh under 40", None, 40),
+    ("at least 30 SPF sunscreen under $20", None, 20),
+    ("headphones over $50", 50, None),
+])
+def test_measurements_are_not_budgets(query, minimum, maximum):
+    parsed = cu.parse_rules(query, VOCABULARY)
+    assert (parsed.min_price, parsed.max_price) == (minimum, maximum)
+
+
+def test_model_budget_must_not_be_a_measurement():
+    assert cu._stated_price(20, "speaker with at least 20 hours of battery") is None
+    assert cu._stated_price(30, "100W charger under 30") == 30
 
 
 def test_device_name_beside_a_catalog_type_is_not_out_of_catalog():

@@ -26,6 +26,7 @@ import re
 import sqlite3
 from dataclasses import asdict, dataclass, field, fields, replace
 from functools import lru_cache
+from typing import Collection
 from pathlib import Path
 from catalog_config import DEFAULT_DB_PATH
 
@@ -66,6 +67,10 @@ class ParsedQuery:
     aspects: list[str] = field(default_factory=list)
     use_cases: list[str] = field(default_factory=list)
     compatible_with: list[str] = field(default_factory=list)
+    # Limits on measured attributes: {"attribute": "battery_hours", "op": ">=", "value": 20.0}.
+    numeric: list[dict[str, object]] = field(default_factory=list)
+    # Standalone search words written by the model; empty when rules parsed the turn.
+    search_text: str = ""
 
     @property
     def hard_filters(self) -> dict[str, object]:
@@ -96,6 +101,22 @@ class ParsedQuery:
         allowed = {f.name for f in fields(cls)}
         return cls(**{k: v for k, v in data.items() if k in allowed})
 
+    def without(self, cleared: "Collection[str]") -> "ParsedQuery":
+        """Forget withdrawn constraints ("budget", "brand") so a later turn cannot inherit them."""
+        changes: dict[str, object] = {}
+        if "budget" in cleared:
+            changes.update(min_price=None, max_price=None)
+        if "brand" in cleared:
+            changes.update(brand_include=[], brand_exclude=[])
+        return replace(self, **changes) if changes else self
+
+    def switches_from(self, base: "ParsedQuery") -> bool:
+        """Whether this turn names a different category, which the old conditions don't apply to."""
+        return bool(
+            (self.sub_category and base.sub_category and self.sub_category != base.sub_category)
+            or (self.category and base.category and self.category != base.category)
+        )
+
     def merge_base(self, base: "ParsedQuery") -> "ParsedQuery":
         """Overlay the current parsed turn on the previous structured intent.
 
@@ -104,6 +125,9 @@ class ParsedQuery:
         soft preferences accumulate. Retrieval terms are merged with current terms first,
         and inherited context makes clarification unnecessary.
         """
+        if self.switches_from(base):
+            return replace(self, needs_clarification=False)
+
         def pick(cur: object, prev: object) -> object:
             return cur if cur is not None else prev
 

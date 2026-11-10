@@ -24,6 +24,7 @@ from search.llm_parser import _extract_tool_arguments, _coerce_float
 from search.query_understanding import ParsedQuery
 from store.attribute_rules import DESCRIPTION, TITLE, _DEVICES, extract_multi
 from store.import_amazon import TAXONOMY_PATH, brand_key
+from store.numeric_attributes import numeric_attributes, rule_constraints, stated_constraint, unit_pattern
 from store.product_store import english_brand_named
 
 
@@ -35,13 +36,14 @@ _NEGATIVE = re.compile(
     r"(?:(?:[\w'-]+\s+){0,3}(?:or|nor)\s+)?$",
     re.I,
 )
-_AMOUNT = r"(\d+(?:,\d{3})*(?:\.\d{1,2})?)"
+# A number followed by a unit measures the product, not the budget ("at least 20 hours", "over 100W").
+_NOT_A_PRICE = r"(?![.,]?\d)(?!\s*-?\s*" + unit_pattern() + ")"
+_AMOUNT = r"(\d+(?:,\d{3})*(?:\.\d{1,2})?)" + _NOT_A_PRICE
 _RANGE = re.compile(r"\bbetween\s+\$?\s*" + _AMOUNT + r"\s+(?:and|to)\s+\$?\s*" + _AMOUNT, re.I)
 _MAX = re.compile(r"\b(?:under|below|up to|at most|less than|no more than|within|budget(?:\s+(?:of|to|is|at|around))?)\s*\$?\s*" + _AMOUNT, re.I)
 _MIN = re.compile(r"\b(?:over|above|at least|more than|from)\s*\$?\s*" + _AMOUNT, re.I)
+_PRICE_LIKE_NUMBER = re.compile(r"(?<![\d.,])" + _AMOUNT, re.I)
 _OTHER_CURRENCY = re.compile(r"[€£¥￥]|\b(?:EUR|GBP|CAD|CNY|RMB)\b", re.I)
-_NO_BUDGET = re.compile(r"\b(?:no budget|any price|no price limit|clear (?:the )?budget)\b", re.I)
-_ANY_BRAND = re.compile(r"\b(?:any brand|all brands|clear (?:the )?brand filter)\b", re.I)
 _BRAND_CUE = re.compile(r"\b(only|by|no|not|exclude|avoid|without|except)\s+", re.I)
 _ATTRIBUTES = r"alcohol|fragrance|perfume|parabens?|sulfates?|silicones?|oil|phthalates?|gluten|soy|nuts?|latex|bpa|dyes?"
 _ATTRIBUTE_NEGATED = re.compile(
@@ -216,6 +218,7 @@ def parse_rules(query: str, vocabulary: CatalogVocabulary) -> ParsedQuery:
         aspects=_named_values(query, vocabulary.aspects),
         use_cases=_named_values(query, vocabulary.use_cases),
         compatible_with=_devices_named(query),
+        numeric=rule_constraints(query),
     )
 
 
@@ -223,6 +226,7 @@ def _tool_schema(vocabulary: CatalogVocabulary) -> dict[str, Any]:
     types = vocabulary.product_types
     categories = list(vocabulary.categories)
     strings = {"type": "array", "items": {"type": "string"}}
+    measured = numeric_attributes()
     return {
         "type": "function",
         "function": {
@@ -246,11 +250,28 @@ def _tool_schema(vocabulary: CatalogVocabulary) -> dict[str, Any]:
                     "use_cases": {"type": "array", "items": {"type": "string", "enum": list(vocabulary.use_cases)}},
                     "compatible_with": {**strings, "description": "Devices the product must work with, as the shopper wrote them."},
                     "needs_clarification": {"type": "boolean"},
+                    "search_text": {"type": "string", "description": english.PARSER_SEARCH_TEXT_FIELD},
+                    "numeric_constraints": {
+                        "type": "array",
+                        "description": "Limits on measured attributes, converted to the attribute's unit. "
+                        + "; ".join(f"{a.name}: {a.label} in {a.unit}" for a in measured.values()),
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "attribute": {"type": "string", "enum": list(measured)},
+                                "op": {"type": "string", "enum": [">=", "<="]},
+                                "value": {"type": "number"},
+                            },
+                            "required": ["attribute", "op", "value"],
+                            "additionalProperties": False,
+                        },
+                    },
                 },
                 "required": [
                     "category", "product_type", "brand_include", "brand_exclude", "category_exclude",
                     "product_type_exclude", "max_price", "min_price", "excluded_attributes", "soft_terms",
                     "unavailable_terms", "needs_clarification", "aspects", "use_cases", "compatible_with",
+                    "search_text", "numeric_constraints",
                 ],
                 "additionalProperties": False,
             },
@@ -272,12 +293,14 @@ def _named_brands(values: Any, query: str, vocabulary: CatalogVocabulary) -> lis
 
 
 def _stated_price(value: Any, query: str) -> float | None:
-    """Reject prices invented from model numbers; a query without digits spells the amount out."""
+    """Reject prices invented from model numbers or measurements; a query without digits spells the amount out."""
     number = _coerce_float(value)
     if number is None or number < 0:
         return None
-    digits = {float(raw.replace(",", "")) for raw in re.findall(r"\d[\d,]*(?:\.\d+)?", query)}
-    return number if not digits or number in digits else None
+    if not re.search(r"\d", query):
+        return number
+    amounts = {float(match[1].replace(",", "")) for match in _PRICE_LIKE_NUMBER.finditer(query)}
+    return number if number in amounts else None
 
 
 def _rejected_terms(values: Any, query: str) -> list[str]:
@@ -307,6 +330,8 @@ def _from_model(query: str, args: dict[str, Any], vocabulary: CatalogVocabulary)
         str(term).strip() for term in args.get("unavailable_terms") or []
         if str(term).strip() and str(term).strip().lower() in query.lower() and str(term).strip() not in types
     ]
+    excluded_attributes = _rejected_terms(args.get("excluded_attributes"), query)
+    brand_exclude = _named_brands(args.get("brand_exclude"), query, vocabulary)
     return ParsedQuery(
         original_query=query,
         category=category,
@@ -314,39 +339,29 @@ def _from_model(query: str, args: dict[str, Any], vocabulary: CatalogVocabulary)
         category_exclude=[c for c in args.get("category_exclude") or [] if c in categories],
         sub_category_exclude=list(dict.fromkeys(excluded_types)),
         brand_include=_named_brands(args.get("brand_include"), query, vocabulary),
-        brand_exclude=_named_brands(args.get("brand_exclude"), query, vocabulary),
+        brand_exclude=brand_exclude,
         min_price=_stated_price(args.get("min_price"), query),
         max_price=_stated_price(args.get("max_price"), query),
         soft_terms=[str(term) for term in args.get("soft_terms") or []],
         retrieval_query=query,
         needs_clarification=bool(args.get("needs_clarification")),
         unavailable_terms=unavailable if not product_type else [],
-        excluded_attributes=_rejected_terms(args.get("excluded_attributes"), query),
+        excluded_attributes=excluded_attributes,
         aspects=[value for value in args.get("aspects") or [] if value in vocabulary.aspects],
         use_cases=[value for value in args.get("use_cases") or [] if value in vocabulary.use_cases],
         compatible_with=[device for value in args.get("compatible_with") or [] for device in _devices_named(str(value))],
+        numeric=[c for c in (stated_constraint(raw, query) for raw in args.get("numeric_constraints") or []) if c],
+        search_text=_without_rejections(str(args.get("search_text") or ""), [*excluded_attributes, *brand_exclude]),
     )
 
 
-def _reconcile(model: ParsedQuery, rules: ParsedQuery) -> ParsedQuery:
-    """Trust the model for meaning, and rules for anything it left out."""
-    product_type = model.sub_category or rules.sub_category
-    return replace(
-        model,
-        sub_category=product_type,
-        category=None if product_type else (model.category or rules.category),
-        sub_category_exclude=[t for t in dict.fromkeys(model.sub_category_exclude + rules.sub_category_exclude) if t != product_type],
-        brand_include=model.brand_include or rules.brand_include,
-        brand_exclude=list(dict.fromkeys(model.brand_exclude + rules.brand_exclude)),
-        min_price=model.min_price if model.min_price is not None else rules.min_price,
-        max_price=model.max_price if model.max_price is not None else rules.max_price,
-        excluded_attributes=list(dict.fromkeys(model.excluded_attributes + rules.excluded_attributes)),
-        aspects=model.aspects or rules.aspects,
-        use_cases=model.use_cases or rules.use_cases,
-        compatible_with=list(dict.fromkeys(model.compatible_with + rules.compatible_with)),
-        unavailable_terms=list(dict.fromkeys(rules.unavailable_terms + model.unavailable_terms)),
-        needs_clarification=model.needs_clarification and not (product_type or model.category or rules.category),
-    )
+def _without_rejections(text: str, rejected: list[str]) -> str:
+    """Search words must not name what the shopper rejected; similarity would pull it back in."""
+    for term in rejected:
+        text = re.sub(
+            rf"\b(?:(?:without|no|not|non|avoid|free of)[- ]+)?{re.escape(term)}s?(?:[- ]free)?\b", " ", text, flags=re.I,
+        )
+    return " ".join(text.split())
 
 
 def _audience_gap(parsed: ParsedQuery, vocabulary: CatalogVocabulary) -> ParsedQuery:
@@ -361,11 +376,12 @@ def _audience_gap(parsed: ParsedQuery, vocabulary: CatalogVocabulary) -> ParsedQ
 
 
 @lru_cache(maxsize=1024)
-def _call_model(query: str, vocabulary_id: int, timeout: float) -> str:
+def _call_model(query: str, vocabulary_id: int, timeout: float, previous: str = "") -> str:
     vocabulary = _VOCABULARIES[vocabulary_id]
+    message = f"Previous search: {previous}\nMessage: {query}" if previous else query
     response = get_client().chat.completions.create(
         model=get_model_id(role="fast"),
-        messages=[{"role": "system", "content": english.PARSER_SYSTEM}, {"role": "user", "content": query}],
+        messages=[{"role": "system", "content": english.PARSER_SYSTEM}, {"role": "user", "content": message}],
         tools=[_tool_schema(vocabulary)],
         tool_choice={"type": "function", "function": {"name": "extract_search_intent"}},
         temperature=0.1,
@@ -377,39 +393,53 @@ def _call_model(query: str, vocabulary_id: int, timeout: float) -> str:
 _VOCABULARIES: dict[int, CatalogVocabulary] = {}
 
 
-def understand(query: str, vocabulary: CatalogVocabulary, timeout: float = 6.0) -> ParsedQuery:
-    """Parse one turn. A model failure degrades to rules instead of failing the search."""
-    rules = parse_rules(query, vocabulary)
-    parsed = rules
+def understand(
+    query: str, vocabulary: CatalogVocabulary, timeout: float = 6.0, base: ParsedQuery | None = None,
+) -> ParsedQuery:
+    """Parse one turn with the model; rules run only when it is off or fails.
+
+    ``base`` is the previous search; the model sees its words so ``search_text`` stands alone.
+    Model output is checked against the query and catalog, never patched with rule output.
+    """
+    parsed = None
     if PROFILE.capabilities.llm_query_parsing:
         _VOCABULARIES[id(vocabulary)] = vocabulary
+        previous = semantic_query(base) if base is not None else ""
         try:
-            arguments = json.loads(_call_model(" ".join(query.split()), id(vocabulary), timeout))
-            parsed = _reconcile(_from_model(query, arguments, vocabulary), rules)
+            arguments = json.loads(_call_model(" ".join(query.split()), id(vocabulary), timeout, previous))
+            parsed = _from_model(query, arguments, vocabulary)
         except Exception as exc:  # noqa: BLE001 - every model failure has the same rule fallback
             logger.warning("Catalog query parsing fell back to rules: %r", exc)
-    return _audience_gap(parsed, vocabulary)
+    return _audience_gap(parsed or parse_rules(query, vocabulary), vocabulary)
 
 
 def merge_turn(current: ParsedQuery, base: ParsedQuery | None, profile: dict[str, Any]) -> ParsedQuery:
     """Overlay this turn on the previous search and the saved shopper profile."""
     query = current.original_query
     product_type, category, excluded_types = current.sub_category, current.category, current.sub_category_exclude
-    switch = bool(base and ((product_type and product_type != base.sub_category) or (category and category != base.category)))
-    if base and not switch:
-        product_type = product_type or base.sub_category
-        category = category or base.category
-        excluded_types = list(dict.fromkeys(base.sub_category_exclude + excluded_types))
+    switched = bool(base and ((product_type and product_type != base.sub_category) or (category and category != base.category)))
+    carried = None if switched else base  # Conditions from another category do not apply here.
+    if carried:
+        product_type = product_type or carried.sub_category
+        category = category or carried.category
+        excluded_types = list(dict.fromkeys(carried.sub_category_exclude + excluded_types))
+    # Withdrawn conditions ("any brand is fine") are already gone from ``base``: the router reads
+    # them and the refine tool clears them before searching.
     minimum, maximum = current.min_price, current.max_price
-    if not _NO_BUDGET.search(query):
-        minimum = minimum if minimum is not None else (base.min_price if base else profile.get("budget_min"))
-        maximum = maximum if maximum is not None else (base.max_price if base else profile.get("budget_max"))
+    minimum = minimum if minimum is not None else (carried.min_price if carried else profile.get("budget_min"))
+    maximum = maximum if maximum is not None else (carried.max_price if carried else profile.get("budget_max"))
+    # A new bound that contradicts an inherited one replaces it ("over $100", then "cheaper, under $60").
+    if current.max_price is not None and current.min_price is None and minimum is not None and minimum > maximum:
+        minimum = None
+    if current.min_price is not None and current.max_price is None and maximum is not None and maximum < minimum:
+        maximum = None
+    stated = {(c["attribute"], c["op"]) for c in current.numeric}
+    numeric = [c for c in (carried.numeric if carried else []) if (c["attribute"], c["op"]) not in stated] + current.numeric
     included, excluded = list(current.brand_include), list(current.brand_exclude)
-    if not _ANY_BRAND.search(query):
-        denied = {brand.casefold() for brand in excluded}
-        if not included:
-            included = [brand for brand in (base.brand_include if base else []) if brand.casefold() not in denied]
-        excluded += list(base.brand_exclude if base else profile.get("brand_exclude") or [])
+    denied = {brand.casefold() for brand in excluded}
+    if not included:
+        included = [brand for brand in (carried.brand_include if carried else []) if brand.casefold() not in denied]
+    excluded += list(carried.brand_exclude if carried else profile.get("brand_exclude") or [])
     allowed = {brand.casefold() for brand in included}
     return replace(
         current,
@@ -420,14 +450,15 @@ def merge_turn(current: ParsedQuery, base: ParsedQuery | None, profile: dict[str
         brand_exclude=[brand for brand in dict.fromkeys(excluded) if brand.casefold() not in allowed],
         min_price=minimum,
         max_price=maximum,
-        retrieval_query=f"{query} {base.retrieval_query}" if base and not switch else query,
+        retrieval_query=current.search_text or _carried_query(query, carried),
+        numeric=numeric,
         needs_clarification=current.needs_clarification and not (
             product_type or category or included or minimum is not None or maximum is not None
         ),
-        excluded_attributes=list(dict.fromkeys((base.excluded_attributes if base and not switch else []) + current.excluded_attributes)),
-        aspects=list(dict.fromkeys((base.aspects if base and not switch else []) + current.aspects)),
-        use_cases=list(dict.fromkeys((base.use_cases if base and not switch else []) + current.use_cases)),
-        compatible_with=list(dict.fromkeys((base.compatible_with if base and not switch else []) + current.compatible_with)),
+        excluded_attributes=list(dict.fromkeys((carried.excluded_attributes if carried else []) + current.excluded_attributes)),
+        aspects=list(dict.fromkeys((carried.aspects if carried else []) + current.aspects)),
+        use_cases=list(dict.fromkeys((carried.use_cases if carried else []) + current.use_cases)),
+        compatible_with=list(dict.fromkeys((carried.compatible_with if carried else []) + current.compatible_with)),
     )
 
 
@@ -435,13 +466,27 @@ _PRICE_PHRASES = (_RANGE, _MAX, _MIN)
 _NEGATED_PHRASE = re.compile(r"\b(?:no|not|without|exclude|excluding|avoid|except|instead of|don'?t want)\b[^,.;]*", re.I)
 
 
-def semantic_query(parsed: ParsedQuery) -> str:
-    """Text for embedding and reranking: what is wanted, without budgets or rejections."""
-    text = parsed.retrieval_query or parsed.original_query
+def _wanted_words(text: str) -> list[str]:
+    """What the shopper is looking for, without budgets, rejections or withdrawn conditions."""
     for pattern in _PRICE_PHRASES:
         text = pattern.sub(" ", text)
     text = _NEGATED_PHRASE.sub(" ", text)
-    words = list(dict.fromkeys(re.sub(r"[,.;]+", " ", text).split()))
+    return list(dict.fromkeys(re.sub(r"[,.;]+", " ", text).split()))
+
+
+def _carried_query(query: str, carried: ParsedQuery | None) -> str:
+    """Search text for this turn. Earlier budgets and exclusions live in the structured fields."""
+    if carried is None:
+        return query
+    return " ".join(dict.fromkeys(_wanted_words(query) + _wanted_words(carried.retrieval_query)))
+
+
+def semantic_query(parsed: ParsedQuery) -> str:
+    """Text for embedding and reranking: what is wanted, without budgets or rejections."""
+    if parsed.search_text:
+        words = parsed.search_text.split()
+    else:
+        words = _wanted_words(parsed.retrieval_query or parsed.original_query)
     if parsed.sub_category and parsed.sub_category.lower() not in " ".join(words).lower():
         words.insert(0, parsed.sub_category)
     return " ".join(words)

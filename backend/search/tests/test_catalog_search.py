@@ -80,6 +80,11 @@ def store(tmp_path_factory):
                 "INSERT INTO product_attributes VALUES (?, ?, 'alcohol', 'observed', 'description', 0, 1, 'rule')",
                 (f"amz_{product}", attribute),
             )
+        for product, hours in (("B000000001", "10.0"), ("B000000002", "48.0")):  # B000000003 states none.
+            conn.execute(
+                "INSERT INTO product_attributes VALUES (?, 'battery_hours', ?, 'observed', 'description', 0, 1, 'rule')",
+                (f"amz_{product}", hours),
+            )
     return ProductStore(db)
 
 
@@ -114,6 +119,25 @@ def test_rejected_attribute_uses_catalog_evidence(store):
     assert "B000000001" not in checks
     assert checks["B000000002"] == {"alcohol": "free"} and checks["B000000003"] == {"alcohol": "unknown"}
     assert _ids(result)[0] == "B000000002"
+
+
+def test_confirmed_products_outrank_unknown_ones_beyond_the_rerank_pool(store, monkeypatch):
+    monkeypatch.setenv("USE_RERANK", "1")
+    monkeypatch.setattr("search.catalog_search._RERANK_POOL", 1)
+    # The reranker prefers the unconfirmed watch, and the confirmed one starts outside the rerank pool.
+    order = ["amz_B000000003", "amz_B000000002"]
+    service = CatalogSearchService(store, FakeIndex([_chunk("B000000003")]), FakeIndex(), reranker=FakeReranker(order))
+    assert _ids(service.search("smartwatches without alcohol"))[:2] == ["B000000002", "B000000003"]
+
+
+def test_measured_limits_drop_stated_misses_and_rank_stated_matches_first(store, monkeypatch):
+    monkeypatch.setenv("USE_RERANK", "1")
+    order = ["amz_B000000003", "amz_B000000001", "amz_B000000002"]
+    service = CatalogSearchService(store, FakeIndex(), FakeIndex(), reranker=FakeReranker(order))
+    result = service.search("smartwatches with at least 20 hours of battery")
+    assert result.parsed.min_price is None
+    assert _ids(result) == ["B000000002", "B000000003"]  # 10 hours is stated, so that watch is out.
+    assert [hit.attribute_checks for hit in result.hits] == [{"battery_hours >= 20": "meets"}, {"battery_hours >= 20": "unknown"}]
 
 
 def test_review_recall_excludes_low_ratings_and_adds_evidence(store):

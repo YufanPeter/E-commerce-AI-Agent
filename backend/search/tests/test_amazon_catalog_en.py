@@ -51,6 +51,27 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 from api.main import app
 
+from dataclasses import replace
+import agent.orchestrator as orchestrator
+from agent.intent_router import IntentDecision, english_args
+
+# The router is a model call; this fake returns what it reads from each message, so the
+# test covers the API, orchestrator and tools without the network.
+READINGS = {
+    "Find smartwatches under $80, no watch bands": ("recommend", {}),
+    "Under $50": ("refine", {}),
+    "Compare the second and first": ("compare", {"positions": [2, 1]}),
+    "Show reviews for the second one": ("product_detail", {"positions": [2]}),
+    "Add the second one to my cart": ("cart", {"cart_action": "add", "positions": [2]}),
+    "Checkout": ("cart", {"cart_action": "checkout"}),
+}
+
+def fake_route(query, session, timeout=6.0):
+    tool, args = READINGS.get(query, ("cart", {"cart_action": "answer"}) if session.task.pending else ("recommend", {}))
+    return IntentDecision(tool, query, "high", "fake router", english_args(args))
+
+orchestrator.route = fake_route
+orchestrator.PROFILE = replace(orchestrator.PROFILE, capabilities=replace(orchestrator.PROFILE.capabilities, llm_routing=True))
 c = TestClient(app)
 with patch("socket.socket.connect", side_effect=AssertionError("unexpected outbound network")):
     assert c.get("/health").status_code == 200
@@ -97,7 +118,7 @@ with patch("socket.socket.connect", side_effect=AssertionError("unexpected outbo
 """
     backend = Path(__file__).resolve().parents[2]
     env = {**os.environ, "PYTHONPATH": str(backend), "CARTPILOT_CATALOG": "amazon",
-           "CARTPILOT_AMAZON_DB": str(db), "CARTPILOT_AMAZON_MODEL_COPY": "0", "CARTPILOT_AMAZON_LLM": "0", "USE_RERANK": "0", "CARTPILOT_GRAPH": "0",
+           "CARTPILOT_AMAZON_DB": str(db), "CARTPILOT_AMAZON_LLM": "0", "USE_RERANK": "0", "CARTPILOT_GRAPH": "0",
            "CARTPILOT_AMAZON_VISION": "0", "BACKEND_WARMUP": "0", "PYTHONDONTWRITEBYTECODE": "1"}
     result = subprocess.run([sys.executable, "-c", check], env=env, capture_output=True, text=True, timeout=20)
     assert result.returncode == 0, result.stdout + result.stderr
