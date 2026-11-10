@@ -767,6 +767,9 @@ def _personalization_hint(signals: list[dict[str, Any]], session: AgentSession) 
 def _card_with_evidence(h: ProductHit, query: str) -> dict[str, Any]:
     """商品卡片 + 给 composer 写解说用的证据（前端不用证据字段）。"""
     card = _to_product_card(h)
+    checks = getattr(h, "attribute_checks", None)
+    if checks:
+        card["attribute_checks"] = dict(checks)
     evidence = card_evidence(h, query)
     if evidence:
         card["evidence"] = evidence

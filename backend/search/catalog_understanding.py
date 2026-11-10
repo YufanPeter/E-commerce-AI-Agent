@@ -59,6 +59,7 @@ class CatalogVocabulary:
     audiences: dict[str, str]
     patterns: dict[str, re.Pattern[str]]
     brands: dict[str, str]
+    accessory_labels: frozenset[str] = frozenset()
 
     @property
     def product_types(self) -> list[str]:
@@ -100,16 +101,19 @@ def _compile(terms: list[str]) -> re.Pattern[str]:
 
 def load_vocabulary(conn: sqlite3.Connection) -> CatalogVocabulary:
     rows = conn.execute(
-        "SELECT label, category, catalog_group, audience, terms_json FROM catalog_taxonomy ORDER BY label"
+        "SELECT label, category, catalog_group, audience, terms_json, product_role FROM catalog_taxonomy ORDER BY label"
     ).fetchall()
     taxonomy = json.loads(TAXONOMY_PATH.read_text(encoding="utf-8"))
     labels, audiences, members, patterns = {}, {}, {}, {}
+    accessories: set[str] = set()
     # Groups go first so an equally long match prefers the broader type.
     for group, terms in taxonomy["groups"].items():
         patterns[group] = _compile(terms)
     for row in rows:
-        label, category, group, audience, terms = tuple(row)
+        label, category, group, audience, terms, role = tuple(row)
         labels[label] = category
+        if role == "accessory":
+            accessories.add(label)
         if audience:
             audiences[label] = audience
         if group:
@@ -127,6 +131,7 @@ def load_vocabulary(conn: sqlite3.Connection) -> CatalogVocabulary:
         audiences=audiences,
         patterns=patterns,
         brands={brand_key(row[0]): row[0] for row in brand_rows},
+        accessory_labels=frozenset(accessories),
     )
 
 
@@ -388,6 +393,22 @@ def merge_turn(current: ParsedQuery, base: ParsedQuery | None, profile: dict[str
         ),
         excluded_attributes=list(dict.fromkeys((base.excluded_attributes if base and not switch else []) + current.excluded_attributes)),
     )
+
+
+_PRICE_PHRASES = (_RANGE, _MAX, _MIN)
+_NEGATED_PHRASE = re.compile(r"\b(?:no|not|without|exclude|excluding|avoid|except|instead of|don'?t want)\b[^,.;]*", re.I)
+
+
+def semantic_query(parsed: ParsedQuery) -> str:
+    """Text for embedding and reranking: what is wanted, without budgets or rejections."""
+    text = parsed.retrieval_query or parsed.original_query
+    for pattern in _PRICE_PHRASES:
+        text = pattern.sub(" ", text)
+    text = _NEGATED_PHRASE.sub(" ", text)
+    words = list(dict.fromkeys(re.sub(r"[,.;]+", " ", text).split()))
+    if parsed.sub_category and parsed.sub_category.lower() not in " ".join(words).lower():
+        words.insert(0, parsed.sub_category)
+    return " ".join(words)
 
 
 def open_vocabulary(store: Any) -> CatalogVocabulary:

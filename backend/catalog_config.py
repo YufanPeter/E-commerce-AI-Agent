@@ -11,6 +11,10 @@ AMAZON_DATA_DIR = PROJECT_ROOT / "amazon_dense_10k"
 AMAZON_DB_PATH = Path(
     os.environ.get("CARTPILOT_AMAZON_DB") or STORAGE_DIR / "amazon" / "v2" / "catalog.sqlite3"
 ).expanduser().resolve()
+AMAZON_INDEX_DIR = Path(os.environ.get("CARTPILOT_AMAZON_INDEX", AMAZON_DB_PATH.parent / "chroma"))
+AMAZON_PRODUCT_COLLECTION = "amazon_products_v1"
+AMAZON_REVIEW_COLLECTION = "amazon_reviews_v1"
+
 AMAZON_CATEGORIES = {
     "美妆护肤": "Beauty & Personal Care",
     "数码电子": "Electronics",

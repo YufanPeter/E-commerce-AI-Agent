@@ -80,6 +80,8 @@ class ProductHit:
     min_price: float | None = None
     max_price: float | None = None
     sku_count: int = 0
+    # Rejected attribute → "free" (listing says so) or "unknown" (listing is silent).
+    attribute_checks: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -828,9 +830,9 @@ def get_search_service() -> SearchService:
     from catalog_config import PROFILE
 
     if PROFILE.search_backend == "catalog":
-        from search.amazon_search import AmazonSearchService
+        from search.catalog_search import CatalogSearchService
 
-        return AmazonSearchService()
+        return CatalogSearchService()
     return SearchService()
 
 
