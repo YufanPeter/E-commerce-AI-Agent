@@ -54,11 +54,11 @@ def run(export_json: str | None = None) -> dict[str, Any]:
     for case in cases:
         query = case["query"]
         expected = case["expected"]
-        last_hits = case.get("last_hits") or []
+        last_hits = case.recall_hits() or []
 
         session = AgentSession(session_id=f"eval_{case['qid']}")
         if last_hits:
-            session.set("last_hits", last_hits)
+            session.task.show("search", last_hits)
 
         decision = route(query, session)
         predicted = decision.tool

@@ -1,0 +1,884 @@
+{
+ "description": "English routing cases for the Amazon catalog. 'state' sets up the conversation: 'list' shows the speakers fixture as search results, 'focus' is a 1-based position in it, 'cart_view' puts the cart on screen, 'last_added' means the T-shirt was just added, 'pending' is a question waiting for an answer, 'history' is earlier messages. 'expect' lists checked fields: 'tool' is a list of acceptable tools; positions are 1-based; unlisted fields are not checked.",
+ "fixtures": {
+  "speakers": [
+   [
+    "amz_B08JGPNLCY",
+    "Anker Soundcore 2 Bluetooth Speaker Bundle with Official Travel Case"
+   ],
+   [
+    "amz_B09MMWM2Y8",
+    "JBL FLIP 5, Waterproof Portable Bluetooth Speaker, Gray"
+   ],
+   [
+    "amz_B08MQF8J2R",
+    "Tribit (Upgrade) Home Bluetooth Speaker, 25W Powerful & Premium Sound with LCD Time Display"
+   ],
+   [
+    "amz_B00XJXR1J8",
+    "Sony SRSX55/BLK Powerful Portable Bluetooth Speaker (Black)"
+   ],
+   [
+    "amz_B081H6JDPP",
+    "Bose Home Speaker 450"
+   ]
+  ],
+  "tshirt": [
+   "amz_B0921Z1N86",
+   "Champion mens Cp15"
+  ],
+  "cart": [
+   [
+    "amz_B08JGPNLCY",
+    "Anker Soundcore 2 Bluetooth Speaker Bundle with Official Travel Case"
+   ],
+   [
+    "amz_B0921Z1N86",
+    "Champion mens Cp15"
+   ]
+  ]
+ },
+ "cases": [
+  {
+   "id": "first-search",
+   "message": "Bluetooth speakers under $50",
+   "state": {},
+   "expect": {
+    "tool": [
+     "recommend"
+    ]
+   }
+  },
+  {
+   "id": "first-vague",
+   "message": "just browsing",
+   "state": {},
+   "expect": {
+    "tool": [
+     "clarify"
+    ]
+   }
+  },
+  {
+   "id": "first-offtopic",
+   "message": "what's the weather tomorrow in Seattle",
+   "state": {},
+   "expect": {
+    "tool": [
+     "fallback"
+    ]
+   }
+  },
+  {
+   "id": "first-guide",
+   "message": "What should I look for in a coffee machine?",
+   "state": {},
+   "expect": {
+    "tool": [
+     "buying_guide"
+    ]
+   }
+  },
+  {
+   "id": "first-history",
+   "message": "what did I buy last time?",
+   "state": {},
+   "expect": {
+    "tool": [
+     "cart"
+    ],
+    "cart_action": "order_history"
+   }
+  },
+  {
+   "id": "first-reorder-whole",
+   "message": "buy my whole last order again",
+   "state": {},
+   "expect": {
+    "tool": [
+     "cart"
+    ],
+    "cart_action": "reorder",
+    "whole_order": true
+   }
+  },
+  {
+   "id": "first-reorder-one",
+   "message": "order that Anker speaker again",
+   "state": {},
+   "expect": {
+    "tool": [
+     "cart"
+    ],
+    "cart_action": "reorder",
+    "whole_order": false
+   }
+  },
+  {
+   "id": "first-view-cart",
+   "message": "show my cart",
+   "state": {},
+   "expect": {
+    "tool": [
+     "cart"
+    ],
+    "cart_action": "view"
+   }
+  },
+  {
+   "id": "first-checkout",
+   "message": "check out please",
+   "state": {},
+   "expect": {
+    "tool": [
+     "cart"
+    ],
+    "cart_action": "checkout"
+   }
+  },
+  {
+   "id": "refine-budget",
+   "message": "Under $30",
+   "state": {
+    "list": true
+   },
+   "expect": {
+    "tool": [
+     "refine"
+    ],
+    "clear": [],
+    "cheaper": false
+   }
+  },
+  {
+   "id": "refine-any-brand",
+   "message": "Any brand is fine",
+   "state": {
+    "list": true,
+    "history": [
+     [
+      "user",
+      "Bluetooth speakers, no Sony"
+     ]
+    ]
+   },
+   "expect": {
+    "tool": [
+     "refine"
+    ],
+    "clear": [
+     "brand"
+    ]
+   }
+  },
+  {
+   "id": "refine-no-budget",
+   "message": "budget doesn't matter",
+   "state": {
+    "list": true
+   },
+   "expect": {
+    "tool": [
+     "refine"
+    ],
+    "clear": [
+     "budget"
+    ]
+   }
+  },
+  {
+   "id": "refine-cheaper",
+   "message": "show me cheaper ones",
+   "state": {
+    "list": true
+   },
+   "expect": {
+    "tool": [
+     "refine"
+    ],
+    "cheaper": true
+   }
+  },
+  {
+   "id": "refine-feature",
+   "message": "only waterproof ones",
+   "state": {
+    "list": true
+   },
+   "expect": {
+    "tool": [
+     "refine"
+    ]
+   }
+  },
+  {
+   "id": "new-search-with-list",
+   "message": "Find coffee mugs",
+   "state": {
+    "list": true
+   },
+   "expect": {
+    "tool": [
+     "recommend"
+    ]
+   }
+  },
+  {
+   "id": "new-search-switch",
+   "message": "now show me over-ear headphones",
+   "state": {
+    "list": true
+   },
+   "expect": {
+    "tool": [
+     "recommend",
+     "refine"
+    ]
+   }
+  },
+  {
+   "id": "detail-ordinal",
+   "message": "Tell me about the second one",
+   "state": {
+    "list": true
+   },
+   "expect": {
+    "tool": [
+     "product_detail"
+    ],
+    "positions": [
+     2
+    ]
+   }
+  },
+  {
+   "id": "detail-name",
+   "message": "Does the JBL one float?",
+   "state": {
+    "list": true
+   },
+   "expect": {
+    "tool": [
+     "product_detail"
+    ],
+    "positions": [
+     2
+    ]
+   }
+  },
+  {
+   "id": "detail-fifth",
+   "message": "the 5th one looks nice, more details",
+   "state": {
+    "list": true
+   },
+   "expect": {
+    "tool": [
+     "product_detail"
+    ],
+    "positions": [
+     5
+    ]
+   }
+  },
+  {
+   "id": "detail-battery",
+   "message": "How long does the battery last on the third one?",
+   "state": {
+    "list": true
+   },
+   "expect": {
+    "tool": [
+     "product_detail"
+    ],
+    "positions": [
+     3
+    ]
+   }
+  },
+  {
+   "id": "detail-model-number",
+   "message": "is the Flip 5 loud enough for a party?",
+   "state": {
+    "list": true
+   },
+   "expect": {
+    "tool": [
+     "product_detail"
+    ],
+    "positions": [
+     2
+    ]
+   }
+  },
+  {
+   "id": "detail-focus-it",
+   "message": "what do reviewers complain about?",
+   "state": {
+    "list": true,
+    "focus": 2
+   },
+   "expect": {
+    "tool": [
+     "product_detail"
+    ],
+    "positions": [
+     2
+    ]
+   }
+  },
+  {
+   "id": "detail-next",
+   "message": "what about the next one?",
+   "state": {
+    "list": true,
+    "focus": 2
+   },
+   "expect": {
+    "tool": [
+     "product_detail"
+    ],
+    "positions": [
+     3
+    ]
+   }
+  },
+  {
+   "id": "detail-previous",
+   "message": "and the previous one?",
+   "state": {
+    "list": true,
+    "focus": 2
+   },
+   "expect": {
+    "tool": [
+     "product_detail"
+    ],
+    "positions": [
+     1
+    ]
+   }
+  },
+  {
+   "id": "compare-ordinals",
+   "message": "Compare the first and third",
+   "state": {
+    "list": true
+   },
+   "expect": {
+    "tool": [
+     "compare"
+    ],
+    "positions": [
+     1,
+     3
+    ]
+   }
+  },
+  {
+   "id": "compare-names",
+   "message": "which is better, the Anker or the Bose?",
+   "state": {
+    "list": true
+   },
+   "expect": {
+    "tool": [
+     "compare"
+    ],
+    "positions": [
+     1,
+     5
+    ]
+   }
+  },
+  {
+   "id": "compare-last-two",
+   "message": "compare the last two",
+   "state": {
+    "list": true
+   },
+   "expect": {
+    "tool": [
+     "compare"
+    ],
+    "positions": [
+     4,
+     5
+    ]
+   }
+  },
+  {
+   "id": "add-ordinal",
+   "message": "Add the third one to my cart",
+   "state": {
+    "list": true
+   },
+   "expect": {
+    "tool": [
+     "cart"
+    ],
+    "cart_action": "add",
+    "positions": [
+     3
+    ]
+   }
+  },
+  {
+   "id": "add-quantity",
+   "message": "add 2 of the first one",
+   "state": {
+    "list": true
+   },
+   "expect": {
+    "tool": [
+     "cart"
+    ],
+    "cart_action": "add",
+    "positions": [
+     1
+    ],
+    "quantity": 2
+   }
+  },
+  {
+   "id": "add-name",
+   "message": "I'll take the Tribit",
+   "state": {
+    "list": true
+   },
+   "expect": {
+    "tool": [
+     "cart"
+    ],
+    "cart_action": "add",
+    "positions": [
+     3
+    ]
+   }
+  },
+  {
+   "id": "add-model-number",
+   "message": "add the JBL Flip 5",
+   "state": {
+    "list": true
+   },
+   "expect": {
+    "tool": [
+     "cart"
+    ],
+    "cart_action": "add",
+    "positions": [
+     2
+    ],
+    "quantity": null
+   }
+  },
+  {
+   "id": "add-focus",
+   "message": "add it to my cart",
+   "state": {
+    "list": true,
+    "focus": 2
+   },
+   "expect": {
+    "tool": [
+     "cart"
+    ],
+    "cart_action": "add",
+    "positions": [
+     2
+    ]
+   }
+  },
+  {
+   "id": "add-buy-now",
+   "message": "I want to buy the Sony",
+   "state": {
+    "list": true
+   },
+   "expect": {
+    "tool": [
+     "cart"
+    ],
+    "cart_action": "add",
+    "positions": [
+     4
+    ]
+   }
+  },
+  {
+   "id": "similar-cheaper",
+   "message": "something similar to the second one but cheaper",
+   "state": {
+    "list": true
+   },
+   "expect": {
+    "tool": [
+     "similar"
+    ],
+    "positions": [
+     2
+    ],
+    "cheaper": true
+   }
+  },
+  {
+   "id": "similar-plain",
+   "message": "show me speakers like the Bose",
+   "state": {
+    "list": true
+   },
+   "expect": {
+    "tool": [
+     "similar"
+    ],
+    "positions": [
+     5
+    ],
+    "cheaper": false
+   }
+  },
+  {
+   "id": "accessories",
+   "message": "what accessories go with the first one?",
+   "state": {
+    "list": true
+   },
+   "expect": {
+    "tool": [
+     "accessories"
+    ],
+    "positions": [
+     1
+    ]
+   }
+  },
+  {
+   "id": "cart-remove",
+   "message": "remove the second item",
+   "state": {
+    "list": true,
+    "cart_view": true
+   },
+   "expect": {
+    "tool": [
+     "cart"
+    ],
+    "cart_action": "remove",
+    "cart_item": 2
+   }
+  },
+  {
+   "id": "cart-set-quantity",
+   "message": "change the quantity of the first item to 3",
+   "state": {
+    "list": true,
+    "cart_view": true
+   },
+   "expect": {
+    "tool": [
+     "cart"
+    ],
+    "cart_action": "set_quantity",
+    "cart_item": 1,
+    "quantity": 3
+   }
+  },
+  {
+   "id": "cart-checkout",
+   "message": "place the order",
+   "state": {
+    "list": true,
+    "cart_view": true
+   },
+   "expect": {
+    "tool": [
+     "cart"
+    ],
+    "cart_action": "checkout"
+   }
+  },
+  {
+   "id": "cart-add-from-list",
+   "message": "also add the JBL",
+   "state": {
+    "list": true,
+    "cart_view": true
+   },
+   "expect": {
+    "tool": [
+     "cart"
+    ],
+    "cart_action": "add",
+    "positions": [
+     2
+    ]
+   }
+  },
+  {
+   "id": "spec-named",
+   "message": "change it to large",
+   "state": {
+    "list": true,
+    "last_added": true
+   },
+   "expect": {
+    "tool": [
+     "cart"
+    ],
+    "cart_action": "change_spec",
+    "size_step": 0
+   }
+  },
+  {
+   "id": "spec-up",
+   "message": "one size up",
+   "state": {
+    "list": true,
+    "last_added": true
+   },
+   "expect": {
+    "tool": [
+     "cart"
+    ],
+    "cart_action": "change_spec",
+    "size_step": 1
+   }
+  },
+  {
+   "id": "spec-down",
+   "message": "make it a size smaller",
+   "state": {
+    "list": true,
+    "last_added": true
+   },
+   "expect": {
+    "tool": [
+     "cart"
+    ],
+    "cart_action": "change_spec",
+    "size_step": -1
+   }
+  },
+  {
+   "id": "spec-color",
+   "message": "switch to the gray one",
+   "state": {
+    "list": true,
+    "last_added": true
+   },
+   "expect": {
+    "tool": [
+     "cart"
+    ],
+    "cart_action": "change_spec"
+   }
+  },
+  {
+   "id": "after-add-quantity",
+   "message": "actually make that 2",
+   "state": {
+    "list": true,
+    "last_added": true
+   },
+   "expect": {
+    "tool": [
+     "cart"
+    ],
+    "cart_action": "set_quantity",
+    "quantity": 2
+   }
+  },
+  {
+   "id": "pending-answer",
+   "message": "medium, white",
+   "state": {
+    "list": true,
+    "pending": "cart_sku"
+   },
+   "expect": {
+    "tool": [
+     "cart"
+    ],
+    "cart_action": "answer"
+   }
+  },
+  {
+   "id": "pending-answer-size",
+   "message": "XL",
+   "state": {
+    "list": true,
+    "pending": "cart_sku"
+   },
+   "expect": {
+    "tool": [
+     "cart"
+    ],
+    "cart_action": "answer"
+   }
+  },
+  {
+   "id": "pending-cancel",
+   "message": "never mind",
+   "state": {
+    "list": true,
+    "pending": "cart_sku"
+   },
+   "expect": {
+    "tool": [
+     "cart"
+    ],
+    "cart_action": "cancel"
+   }
+  },
+  {
+   "id": "pending-new-search",
+   "message": "actually show me hoodies instead",
+   "state": {
+    "list": true,
+    "pending": "cart_sku"
+   },
+   "expect": {
+    "tool": [
+     "recommend"
+    ]
+   }
+  },
+  {
+   "id": "pending-view-cart",
+   "message": "what's in my cart?",
+   "state": {
+    "list": true,
+    "pending": "cart_sku"
+   },
+   "expect": {
+    "tool": [
+     "cart"
+    ],
+    "cart_action": "view"
+   }
+  },
+  {
+   "id": "pending-pick",
+   "message": "the second one",
+   "state": {
+    "list": true,
+    "pending": "cart_pick"
+   },
+   "expect": {
+    "tool": [
+     "cart"
+    ],
+    "cart_action": "answer"
+   }
+  },
+  {
+   "id": "graph-similar-named-outside",
+   "message": "Find me earbuds similar to AirPods under $50",
+   "state": {
+    "list": true
+   },
+   "expect": {
+    "tool": [
+     "recommend"
+    ]
+   }
+  },
+  {
+   "id": "graph-alternatives-material",
+   "message": "vegan leather wallet alternatives",
+   "state": {},
+   "expect": {
+    "tool": [
+     "recommend"
+    ]
+   }
+  },
+  {
+   "id": "graph-last-not-similar",
+   "message": "a phone case for travel that will last",
+   "state": {},
+   "expect": {
+    "tool": [
+     "recommend"
+    ]
+   }
+  },
+  {
+   "id": "graph-size-question",
+   "message": "Is this similar in size to the JBL?",
+   "state": {
+    "list": true,
+    "focus": 1
+   },
+   "expect": {
+    "tool": [
+     "product_detail",
+     "compare"
+    ]
+   }
+  },
+  {
+   "id": "graph-any-alternatives",
+   "message": "Any alternatives?",
+   "state": {
+    "list": true,
+    "focus": 4
+   },
+   "expect": {
+    "tool": [
+     "similar"
+    ],
+    "positions": [
+     4
+    ]
+   }
+  },
+  {
+   "id": "graph-case-for-it",
+   "message": "a carrying case for the second one please",
+   "state": {
+    "list": true
+   },
+   "expect": {
+    "tool": [
+     "accessories"
+    ],
+    "positions": [
+     2
+    ]
+   }
+  },
+  {
+   "id": "pending-size-up",
+   "message": "one size up",
+   "state": {
+    "list": true,
+    "pending": "cart_sku"
+   },
+   "expect": {
+    "tool": [
+     "cart"
+    ],
+    "cart_action": "answer",
+    "size_step": 1
+   }
+  },
+  {
+   "id": "refine-any-price-any-brand",
+   "message": "Any price, any brand",
+   "state": {
+    "list": true
+   },
+   "expect": {
+    "tool": [
+     "refine"
+    ],
+    "clear": [
+     "brand",
+     "budget"
+    ]
+   }
+  }
+ ]
+}
