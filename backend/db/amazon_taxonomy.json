@@ -12,7 +12,7 @@
    "screen protectors?"
   ],
   "Phone Cases": [
-   "(?:phone|iphone|smartphone) cases?"
+   "(?:phone|iphone|smartphone|galaxy|pixel)(?: [\\w+]+){0,3}? cases?"
   ],
   "Cables": [
    "cables?"

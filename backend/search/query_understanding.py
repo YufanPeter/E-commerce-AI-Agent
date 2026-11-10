@@ -60,6 +60,8 @@ class ParsedQuery:
     # 用户点名、但商品库里没有的品牌或品类（「三星手机」「扫地机器人」）。
     # 非空时检索直接返回空结果，由话术坦诚说明，而不是拿相近的商品顶替。
     unavailable_terms: list[str] = field(default_factory=list)
+    # Rejected ingredients or properties, checked against catalog attributes after recall.
+    excluded_attributes: list[str] = field(default_factory=list)
 
     @property
     def hard_filters(self) -> dict[str, object]:
@@ -129,6 +131,7 @@ class ParsedQuery:
             retrieval_query=retrieval_query,
             needs_clarification=False,
             unavailable_terms=list(self.unavailable_terms or []),
+            excluded_attributes=union(self.excluded_attributes, base.excluded_attributes),
         )
 
 
@@ -188,7 +191,7 @@ def load_taxonomy(db_path: Path = DEFAULT_DB_PATH) -> dict[str, object]:
     and expands canonical brands to stored variants. It is cached once per process.
     """
     if not db_path.exists():
-        return {"sub_to_cat": {}, "brands": [], "brand_expand": {}, "titles": [], "catalog_text": "", "brand_subs": {}}
+        return {"sub_to_cat": {}, "brands": [], "brand_expand": {}, "titles": [], "catalog_text": "", "brand_subs": {}, "groups": {}}
 
     with sqlite3.connect(db_path) as conn:
         rows = conn.execute(
@@ -199,6 +202,15 @@ def load_taxonomy(db_path: Path = DEFAULT_DB_PATH) -> dict[str, object]:
             descriptions = conn.execute("SELECT marketing_description FROM product_descriptions").fetchall()
         except sqlite3.Error:
             descriptions = []
+        try:
+            group_rows = conn.execute(
+                "SELECT catalog_group, label FROM catalog_taxonomy WHERE catalog_group IS NOT NULL"
+            ).fetchall()
+        except sqlite3.Error:
+            group_rows = []
+    groups: dict[str, list[str]] = {}
+    for group, label in group_rows:
+        groups.setdefault(group, []).append(label)
 
     sub_to_cat: dict[str, str] = {}
     raw_brands: set[str] = set()
@@ -243,7 +255,14 @@ def load_taxonomy(db_path: Path = DEFAULT_DB_PATH) -> dict[str, object]:
         "titles": [(title, sub) for title, sub in title_rows],
         "catalog_text": catalog_text,
         "brand_subs": {brand: sorted(subs) for brand, subs in brand_subs.items()},
+        "groups": groups,
     }
+
+
+def expand_sub_categories(names: list[str]) -> list[str]:
+    """Expand catalog groups to their leaf labels for ``$in`` and ``$nin``."""
+    groups: dict[str, list[str]] = load_taxonomy()["groups"]  # type: ignore[assignment]
+    return list(dict.fromkeys(label for name in names for label in groups.get(name, [name])))
 
 
 def expand_brands(canonical_brands: list[str]) -> list[str]:

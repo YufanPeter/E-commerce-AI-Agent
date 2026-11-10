@@ -565,17 +565,23 @@ class Agent:
         except Exception as exc:  # noqa: BLE001
             # On router failure, deterministic keywords preserve clear cart/checkout
             # intent; other requests use recommendation as the safe default.
-            fallback_tool = self._keyword_fallback_tool(query)
-            logger.warning(
-                "Router failed (%r), keyword fallback → %s", exc, fallback_tool
-            )
             trace["router_error"] = repr(exc)
-            decision = IntentDecision(
-                tool=fallback_tool,
-                rewritten_query=query,
-                confidence="low",
-                reasoning=f"router failure, keyword fallback to {fallback_tool}",
-            )
+            if is_english():
+                from agent.amazon import route_catalog
+
+                logger.warning("Router failed (%r), using catalog rules", exc)
+                decision = route_catalog(query, session)
+            else:
+                fallback_tool = self._keyword_fallback_tool(query)
+                logger.warning(
+                    "Router failed (%r), keyword fallback → %s", exc, fallback_tool
+                )
+                decision = IntentDecision(
+                    tool=fallback_tool,
+                    rewritten_query=query,
+                    confidence="low",
+                    reasoning=f"router failure, keyword fallback to {fallback_tool}",
+                )
         trace["timings"]["router_ms"] = int((time.perf_counter() - t0) * 1000)
         decision = self._apply_post_route_guards(query, session, decision)
         trace["decision"] = decision.to_dict()
@@ -593,6 +599,10 @@ class Agent:
     ) -> IntentDecision:
         """Apply deterministic guards for a few high-confidence intents."""
         raw_text = query or ""
+        if is_english() and decision.tool == "refine":
+            from agent.amazon import with_cheaper_bound
+
+            decision = with_cheaper_bound(decision, query, session)
         # 「再买一次」「我买过什么」查的是订单，不能走商品检索。
         if decision.tool != "cart" and detect_order_intent(raw_text):
             return IntentDecision(
@@ -1041,6 +1051,8 @@ def _is_new_search_escape(query: str) -> bool:
     text = (query or "").strip()
     if not text:
         return False
+    if is_english():
+        return english.NEW_SEARCH_RE.search(text) is not None
     if any(word in text for word in _DETAIL_DEICTIC_WORDS):
         return False
     return any(word in text for word in _ESCAPE_SEARCH_WORDS)

@@ -233,7 +233,7 @@ class ProductStore:
                 brand = row["brand"]
                 if is_english():
                     # A partial or common-word hit would hijack phrases like "the first one".
-                    if _english_brand_named(brand.lower(), t):
+                    if english_brand_named(brand.lower(), t):
                         matched.append(brand)
                     continue
                 for tok in brand.lower().split():
@@ -448,7 +448,7 @@ _COMMON_WORD_BRANDS = {
 }
 
 
-def _english_brand_named(brand: str, text: str) -> bool:
+def english_brand_named(brand: str, text: str) -> bool:
     if len(brand) < 3 or brand in _COMMON_WORD_BRANDS:
         return False
     return re.search(rf"(?<![\w]){re.escape(brand)}(?![\w])", text) is not None

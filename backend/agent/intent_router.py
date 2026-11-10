@@ -21,6 +21,8 @@ from typing import Any
 
 from agent.session import AgentSession
 from llm.cache import TTLCache
+from i18n import en as english
+from i18n import is_english
 from llm.client import get_client, get_model_id
 
 
@@ -132,6 +134,30 @@ SYSTEM_PROMPT = """你是电商导购 Agent 的路由器，唯一职责是把用
 """
 
 
+def _tool_schema() -> dict[str, Any]:
+    """The routing function with field descriptions in the catalog's language."""
+    if not is_english():
+        return _TOOL_SCHEMA
+    function = _TOOL_SCHEMA["function"]
+    properties = function["parameters"]["properties"]
+    return {
+        "type": "function",
+        "function": {
+            **function,
+            "description": "Route the shopper's message to the right tool.",
+            "parameters": {
+                **function["parameters"],
+                "properties": {
+                    "tool": {**properties["tool"], "description": english.ROUTER_TOOL_FIELD},
+                    "rewritten_query": {**properties["rewritten_query"], "description": english.ROUTER_REWRITE_FIELD},
+                    "confidence": {**properties["confidence"], "description": "How certain the routing is; use low when unclear."},
+                    "reasoning": {**properties["reasoning"], "description": "One short sentence."},
+                },
+            },
+        },
+    }
+
+
 # 首轮路由缓存：没有对话历史时，路由结果只取决于 query 本身，
 # 同一句话（demo 热词 / 用户重试）不必再打一次 LLM。
 _FIRST_TURN_CACHE: TTLCache[IntentDecision] = TTLCache(maxsize=512)
@@ -167,10 +193,10 @@ def _route_uncached(query: str, session: AgentSession, timeout: float) -> Intent
         response = client.chat.completions.create(
             model=get_model_id(role="fast"),
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": english.ROUTER_SYSTEM if is_english() else SYSTEM_PROMPT},
                 {"role": "user", "content": user_content},
             ],
-            tools=[_TOOL_SCHEMA],
+            tools=[_tool_schema()],
             tool_choice={"type": "function", "function": {"name": "route_to_tool"}},
             temperature=0.1,
             timeout=timeout,
@@ -211,6 +237,10 @@ def _route_uncached(query: str, session: AgentSession, timeout: float) -> Intent
 
 def _build_user_content(query: str, session: AgentSession) -> str:
     """Combine the current query with recent conversation context."""
+    if is_english():
+        if not session.history:
+            return f"Current query: {query}"
+        return f"Recent conversation:\n{session.recent_text(n=4)}\n\nCurrent query: {query}"
     if not session.history:
         return f"当前 query：{query}"
     return (

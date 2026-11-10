@@ -12,7 +12,7 @@ ingredient exclusions remain postfilters, while structured category exclusions u
 
 from typing import Any
 
-from search.query_understanding import ParsedQuery, expand_brands
+from search.query_understanding import ParsedQuery, expand_brands, expand_sub_categories
 
 
 def build_chroma_where(parsed: ParsedQuery) -> dict[str, Any] | None:
@@ -28,11 +28,12 @@ def build_chroma_where(parsed: ParsedQuery) -> dict[str, Any] | None:
     if parsed.category:
         clauses.append({"category": parsed.category})
     if parsed.sub_category:
-        clauses.append({"sub_category": parsed.sub_category})
+        labels = expand_sub_categories([parsed.sub_category])
+        clauses.append({"sub_category": labels[0] if len(labels) == 1 else {"$in": labels}})
 
     # Exclude structured categories during recall so disallowed items never enter candidates.
     if parsed.sub_category_exclude:
-        clauses.append({"sub_category": {"$nin": list(parsed.sub_category_exclude)}})
+        clauses.append({"sub_category": {"$nin": expand_sub_categories(list(parsed.sub_category_exclude))}})
     if parsed.category_exclude:
         clauses.append({"category": {"$nin": list(parsed.category_exclude)}})
 

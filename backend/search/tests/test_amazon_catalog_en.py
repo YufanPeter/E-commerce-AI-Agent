@@ -97,7 +97,7 @@ with patch("socket.socket.connect", side_effect=AssertionError("unexpected outbo
 """
     backend = Path(__file__).resolve().parents[2]
     env = {**os.environ, "PYTHONPATH": str(backend), "CARTPILOT_CATALOG": "amazon",
-           "CARTPILOT_AMAZON_DB": str(db), "CARTPILOT_AMAZON_MODEL_COPY": "0",
+           "CARTPILOT_AMAZON_DB": str(db), "CARTPILOT_AMAZON_MODEL_COPY": "0", "CARTPILOT_AMAZON_LLM": "0",
            "CARTPILOT_AMAZON_VISION": "0", "BACKEND_WARMUP": "0", "PYTHONDONTWRITEBYTECODE": "1"}
     result = subprocess.run([sys.executable, "-c", check], env=env, capture_output=True, text=True, timeout=20)
     assert result.returncode == 0, result.stdout + result.stderr

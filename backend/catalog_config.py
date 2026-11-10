@@ -31,6 +31,7 @@ class CatalogCapabilities:
     vision: bool
     llm_copy: bool
     llm_routing: bool
+    llm_query_parsing: bool
     query_decomposition: bool
     llm_target_resolution: bool
     image_similarity: bool
@@ -69,6 +70,7 @@ def _demo_profile() -> CatalogProfile:
             vision=True,
             llm_copy=True,
             llm_routing=True,
+            llm_query_parsing=True,
             query_decomposition=True,
             llm_target_resolution=True,
             image_similarity=True,
@@ -82,6 +84,7 @@ def _demo_profile() -> CatalogProfile:
 
 
 def _amazon_profile() -> CatalogProfile:
+    llm = _env_flag("CARTPILOT_AMAZON_LLM", "1")
     return CatalogProfile(
         id="amazon",
         db_path=AMAZON_DB_PATH,
@@ -94,8 +97,9 @@ def _amazon_profile() -> CatalogProfile:
             cart=True,
             vision=_env_flag("CARTPILOT_AMAZON_VISION"),
             llm_copy=_env_flag("CARTPILOT_AMAZON_MODEL_COPY"),
-            llm_routing=False,
-            query_decomposition=False,
+            llm_routing=llm,
+            llm_query_parsing=llm,
+            query_decomposition=llm,
             llm_target_resolution=False,
             image_similarity=False,
             vector_evidence=False,

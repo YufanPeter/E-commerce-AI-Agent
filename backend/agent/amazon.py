@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import re
 from typing import Any
 
@@ -45,15 +46,21 @@ def route_catalog(query: str, session: AgentSession) -> IntentDecision:
         tool = "fallback"
     else:
         tool = "recommend"
-    rewritten = query
-    if tool == "refine" and "cheaper" in text and "$" not in text:
-        from store.product_store import ProductStore
+    decision = IntentDecision(tool=tool, rewritten_query=query, confidence="high", reasoning="English catalog routing")
+    return with_cheaper_bound(decision, query, session) if tool == "refine" else decision
 
-        hits = ProductStore().get_products_by_ids([h["product_id"] for h in session.recall_hits()])
-        if hits:
-            bound = max(0, min(h.base_price for h in hits) - 0.01)
-            rewritten = f"Under ${bound:.2f}"
-    return IntentDecision(tool=tool, rewritten_query=rewritten, confidence="high", reasoning="English catalog routing")
+
+def with_cheaper_bound(decision: IntentDecision, query: str, session: AgentSession) -> IntentDecision:
+    """Turn "cheaper" into a price limit below everything just shown."""
+    if "cheaper" not in query.lower() or "$" in query:
+        return decision
+    from store.product_store import ProductStore
+
+    hits = ProductStore().get_products_by_ids([hit["product_id"] for hit in session.recall_hits()])
+    if not hits:
+        return decision
+    bound = max(0, min(hit.base_price for hit in hits) - 0.01)
+    return replace(decision, rewritten_query=f"Under ${bound:.2f}")
 
 
 class CatalogMessageTool:
