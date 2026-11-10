@@ -14,48 +14,14 @@ from tempfile import TemporaryDirectory
 from typing import Any, Callable
 
 from catalog_config import AMAZON_CATEGORIES, AMAZON_DATA_DIR, STORAGE_DIR
+from store.attribute_rules import DESCRIPTION, NUMBER, SEP, TITLE, VOLUME, Rule, bounded, milliliters, rule
+from store import attribute_rules
 
 
 SCHEMA_VERSION = "amazon-labels-v1"
 DEFAULT_CASES = Path(__file__).with_name("amazon_label_cases.json")
 DEFAULT_OUT = STORAGE_DIR / "amazon" / "labels-v1"
-TITLE = "title"
-DESCRIPTION = "rag_knowledge.marketing_description"
-NUMBER = r"(?P<value>\d+(?:\.\d+)?)"
-SEP = r"\s*[:=–-]?\s*"
 TANK = r"(?:water\s+(?:tank|reservoir))"
-VOLUME = NUMBER + r"\s*(?:[-–]\s*)?(?P<unit>fl\.?\s*oz\.?|fluid ounces?|oz\.?|ounces?|mL|millilit(?:er|re)s?|L|lit(?:er|re)s?)\b"
-NEGATION = re.compile(r"\b(?:no|not|without|lacks?|not rated(?: for)?)(?:\s+(?:a|an|the|have|with|any))*\s*$", re.I)
-
-
-@dataclass(frozen=True)
-class Rule:
-    pattern: re.Pattern[str]
-    normalize: Callable[[re.Match[str]], str | int | float | None]
-    fields: tuple[str, ...]
-
-
-def rule(pattern: str, normalize: Callable[[re.Match[str]], str | int | float | None],
-         fields: tuple[str, ...] = (TITLE, DESCRIPTION)) -> Rule:
-    return Rule(re.compile(pattern, re.I), normalize, fields)
-
-
-def bounded(lo: float, hi: float) -> Callable[[re.Match[str]], float | None]:
-    def get(match: re.Match[str]) -> float | None:
-        value = float(match["value"])
-        return value if lo <= value <= hi else None
-    return get
-
-
-def milliliters(match: re.Match[str]) -> float | None:
-    unit = match["unit"].casefold().strip(".")
-    value = Decimal(match["value"])
-    if unit == "l" or unit.startswith(("liter", "litre")):
-        value *= 1000
-    elif unit != "ml" and not unit.startswith("millilit"):
-        # In the context of a water reservoir, oz describes fluid volume.
-        value *= Decimal("29.5735295625")
-    return float(round(value, 1)) if 25 <= value <= 10000 else None
 
 
 def width(match: re.Match[str]) -> str:
@@ -168,28 +134,7 @@ def read_catalog(source: Path) -> tuple[list[SourceProduct], str]:
 
 
 def extract_field(item: SourceProduct, rules: tuple[Rule, ...]) -> dict[str, Any]:
-    observations: dict[str | int | float, dict[str, Any]] = {}
-    for entry in rules:
-        for field in entry.fields:
-            text = item.text[field]
-            for match in entry.pattern.finditer(text):
-                context = text[max(0, match.start() - 32):match.start()]
-                if NEGATION.search(context):
-                    continue
-                if match[0][0].isdigit() and re.search(r"\b\d+(?:\.\d+)?\s*(?:[-–]|to)\s*$", context, re.I):
-                    continue
-                value = entry.normalize(match)
-                if value is None or value in observations:
-                    continue
-                observations[value] = {
-                    "value": value,
-                    "evidence": {"field": field, "start": match.start(), "end": match.end(), "text": match[0]},
-                }
-    if len(observations) == 1:
-        return {"status": "observed", **next(iter(observations.values()))}
-    if observations:
-        return {"status": "ambiguous", "value": None, "observations": list(observations.values())}
-    return {"status": "unknown", "value": None}
+    return attribute_rules.extract_field(item.text, rules)
 
 
 _QA = {

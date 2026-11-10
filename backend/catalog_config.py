@@ -9,7 +9,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 STORAGE_DIR = PROJECT_ROOT / "backend" / "storage"
 AMAZON_DATA_DIR = PROJECT_ROOT / "amazon_dense_10k"
 AMAZON_DB_PATH = Path(
-    os.environ.get("CARTPILOT_AMAZON_DB") or STORAGE_DIR / "amazon" / "catalog_en.sqlite3"
+    os.environ.get("CARTPILOT_AMAZON_DB") or STORAGE_DIR / "amazon" / "v2" / "catalog.sqlite3"
 ).expanduser().resolve()
 AMAZON_CATEGORIES = {
     "美妆护肤": "Beauty & Personal Care",

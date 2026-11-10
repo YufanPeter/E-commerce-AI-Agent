@@ -9,6 +9,12 @@ import sys
 from store.import_amazon import build_amazon_catalog
 
 
+CELLS = {
+    "Smartwatches": "Electronics > Wearable Technology > Smartwatches",
+    "Smartwatch Bands": "Cell Phones & Accessories > Accessories > Smartwatch Accessories > Smartwatch Bands",
+}
+
+
 def test_english_amazon_catalog_turns(tmp_path):
     source = tmp_path / "source"
     data = source / "electronics" / "data"
@@ -28,7 +34,7 @@ def test_english_amazon_catalog_turns(tmp_path):
             "product_id": pid, "title": title, "brand": brand, "category": "数码电子",
             "base_price": round(usd * 7.2, 2), "image_path": "",
             "source": {"dataset": "amazon_reviews_2023", "parent_asin": asin, "image_url": url,
-                       "cell": f"Electronics > Wearable Technology > {cell}", "amazon_category": "Electronics",
+                       "cell": CELLS[cell], "amazon_category": "Electronics",
                        "price_usd": usd, "average_rating": 4.5, "rating_number": 30},
             "rag_knowledge": {"marketing_description": f"Listing details for the {title}.",
                               "user_reviews": [{"nickname": "Amazon 用户", "content": "Easy to use.", "rating": 4}]},
