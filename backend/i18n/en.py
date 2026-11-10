@@ -155,7 +155,9 @@ ROUTER_TOOL_FIELD = (
 )
 ROUTER_REWRITE_FIELD = (
     "A standalone English query using recent context, or the original text when none is needed. "
-    "After 'smartwatches under $80', 'Under $50' becomes 'smartwatches under $50'."
+    "After 'smartwatches under $80', 'Under $50' becomes 'smartwatches under $50'. "
+    "Keep the shopper's price words: 'around $50', 'roughly 30 bucks' and 'a $50 moisturizer' are approximate, "
+    "so never turn them into 'under $50'."
 )
 ROUTER_ARG_FIELDS = {
     "positions": "1-based numbers of the shown products the message refers to, by ordinal, name, brand or model, in the "
@@ -202,7 +204,10 @@ Rules:
 11. aspects lists qualities the shopper wants, and use_cases lists where or how the product will be used. Choose only from the enums and leave them empty when nothing fits: "comfortable earbuds for long flights" gives comfort and travel.
 12. compatible_with lists devices the product must work with, as the shopper wrote them: "case for iPhone 15" gives iPhone 15.
 13. A "Previous search" line may come before the message. Use it only to write search_text when the message refines that search. Every other field describes this message alone; earlier conditions are carried separately.
+14. A limit goes in min_price or max_price: "under $50" gives max_price 50, and "$40-60" or "between $40 and $60" gives both. An approximate or bare price goes in price_target with both limits null: "around $50", "about 50 bucks" and "a $50 moisturizer" give price_target 50.
 """
+
+PARSER_PRICE_TARGET_FIELD = "A price in USD the shopper gives as approximate or without a limit word, such as 'around $50' or 'a $50 moisturizer'."
 
 PARSER_SEARCH_TEXT_FIELD = (
     "Short English search words for what the shopper wants: the product, and the properties and uses they want "
@@ -260,6 +265,7 @@ COMPOSER_SYSTEM = f"""You are CartPilot, a knowledgeable shopping assistant who 
 Other rules:
 - Follow hint when one is given, and keep any compatibility caveat from it in the opening.
 - Cards already show prices, so do not repeat them in product lines.
+- parsed.price_target means the shopper asked for around that price, and min_price to max_price is the range searched. Call it "around $X", never a limit.
 - If groups are in the payload, name each need in the opening and write 分组｜<need> before its products.
 - If hits is empty: 开场｜ says honestly that nothing matched and suggests a specific way to widen the search. No product lines. 追问 lines offer those wider searches."""
 

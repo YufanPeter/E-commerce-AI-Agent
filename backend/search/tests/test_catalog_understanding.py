@@ -53,6 +53,48 @@ def test_measurements_are_not_budgets(query, minimum, maximum):
     assert (parsed.min_price, parsed.max_price) == (minimum, maximum)
 
 
+AROUND_50 = (37.5, 62.5, 50)
+
+
+@pytest.mark.parametrize("query, expected", [
+    ("moisturizer around $50", AROUND_50),
+    ("moisturizer for about 50 bucks", AROUND_50),
+    ("a $50 moisturizer", AROUND_50),
+    ("moisturizer, budget around 50", AROUND_50),
+    ("moisturizer ~$50", AROUND_50),
+    ("$50-ish moisturizer", AROUND_50),
+    ("moisturizer $40-60", (40, 60, None)),
+    ("moisturizer $40 to $60", (40, 60, None)),
+    ("moisturizer 40-60 dollars", (40, 60, None)),
+    ("moisturizer under $50", (None, 50, None)),
+    ("speaker with 20-30 hours of battery", (None, None, None)),
+    ("speaker with around 20 hours of battery", (None, None, None)),
+])
+def test_rules_tell_targets_from_limits(query, expected):
+    parsed = cu.parse_rules(query, VOCABULARY)
+    assert (parsed.min_price, parsed.max_price, parsed.price_target) == expected
+
+
+def test_model_target_becomes_a_window_even_when_copied_into_a_limit():
+    for extra in ({}, {"max_price": 50}):
+        parsed = cu._from_model("moisturizer around $50", {"price_target": 50, **extra}, VOCABULARY)
+        assert (parsed.min_price, parsed.max_price, parsed.price_target) == AROUND_50
+    ranged = cu._from_model("moisturizer $40-60", {"min_price": 40, "max_price": 60}, VOCABULARY)
+    assert (ranged.min_price, ranged.max_price, ranged.price_target) == (40, 60, None)
+    invented = cu._from_model("moisturizer around $50", {"price_target": 45}, VOCABULARY)
+    assert (invented.min_price, invented.max_price, invented.price_target) == (None, None, None)
+
+
+def test_target_window_is_replaced_whole_and_kept_otherwise():
+    base = ParsedQuery("moisturizer around $50", sub_category="Smartwatches", min_price=37.5, max_price=62.5, price_target=50)
+    cheaper = cu.merge_turn(ParsedQuery("Under $40", max_price=40.0), base, {})
+    assert (cheaper.min_price, cheaper.max_price, cheaper.price_target) == (None, 40, None)
+    kept = cu.merge_turn(ParsedQuery("with GPS"), base, {})
+    assert (kept.min_price, kept.max_price, kept.price_target) == AROUND_50
+    assert base.without(["budget"]).price_target is None
+    assert cu.semantic_query(cu.parse_rules("moisturizer around $50", VOCABULARY)) == "moisturizer"
+
+
 def test_model_budget_must_not_be_a_measurement():
     assert cu._stated_price(20, "speaker with at least 20 hours of battery") is None
     assert cu._stated_price(30, "100W charger under 30") == 30

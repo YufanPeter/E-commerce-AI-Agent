@@ -52,6 +52,8 @@ class ParsedQuery:
     sub_category_exclude: list[str] = field(default_factory=list)
     max_price: float | None = None
     min_price: float | None = None
+    # A price the shopper gave as approximate ("around $50"); min/max then hold the window.
+    price_target: float | None = None
     brand_include: list[str] = field(default_factory=list)
     brand_exclude: list[str] = field(default_factory=list)
     negative_ingredients: list[str] = field(default_factory=list)
@@ -105,7 +107,7 @@ class ParsedQuery:
         """Forget withdrawn constraints ("budget", "brand") so a later turn cannot inherit them."""
         changes: dict[str, object] = {}
         if "budget" in cleared:
-            changes.update(min_price=None, max_price=None)
+            changes.update(min_price=None, max_price=None, price_target=None)
         if "brand" in cleared:
             changes.update(brand_include=[], brand_exclude=[])
         return replace(self, **changes) if changes else self

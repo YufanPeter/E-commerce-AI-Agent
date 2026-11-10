@@ -270,7 +270,7 @@ def _trim_payload_for_llm(payload: dict[str, Any]) -> dict[str, Any]:
     parsed = (payload.get("debug") or {}).get("parsed") or payload.get("parsed") or {}
     trimmed["parsed"] = {
         k: parsed.get(k)
-        for k in ("category", "sub_category", "sub_category_exclude", "max_price", "min_price", "brand_include", "brand_exclude", "negative_ingredients")
+        for k in ("category", "sub_category", "sub_category_exclude", "max_price", "min_price", "price_target", "brand_include", "brand_exclude", "negative_ingredients")
         if parsed.get(k)
     }
     # Product lists use ``products`` in the new format and ``hits`` in the old format.

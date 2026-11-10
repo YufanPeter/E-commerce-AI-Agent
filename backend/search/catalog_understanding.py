@@ -39,9 +39,29 @@ _NEGATIVE = re.compile(
 # A number followed by a unit measures the product, not the budget ("at least 20 hours", "over 100W").
 _NOT_A_PRICE = r"(?![.,]?\d)(?!\s*-?\s*" + unit_pattern() + ")"
 _AMOUNT = r"(\d+(?:,\d{3})*(?:\.\d{1,2})?)" + _NOT_A_PRICE
+_DOLLARS = r"\s*(?:dollars?|bucks|usd)\b"
 _RANGE = re.compile(r"\bbetween\s+\$?\s*" + _AMOUNT + r"\s+(?:and|to)\s+\$?\s*" + _AMOUNT, re.I)
-_MAX = re.compile(r"\b(?:under|below|up to|at most|less than|no more than|within|budget(?:\s+(?:of|to|is|at|around))?)\s*\$?\s*" + _AMOUNT, re.I)
+# "$40-60", "$40 to $60", "40-60 dollars". A currency mark is required: "20-30 hours" is no budget.
+_DASH_RANGE = re.compile(
+    r"\$\s*" + _AMOUNT + r"\s*(?:-|–|to)\s*\$?\s*" + _AMOUNT
+    + r"|(?<![\w.$])" + _AMOUNT + r"\s*(?:-|–|to)\s*" + _AMOUNT + _DOLLARS,
+    re.I,
+)
+_MAX = re.compile(r"\b(?:under|below|up to|at most|less than|no more than|within|budget(?:\s+(?:of|to|is|at))?)\s*\$?\s*" + _AMOUNT, re.I)
 _MIN = re.compile(r"\b(?:over|above|at least|more than|from)\s*\$?\s*" + _AMOUNT, re.I)
+_APPROX = r"(?:around|about|approximately|approx\.?|roughly|close to)"
+# "around $50", "about 50 bucks", "budget around 50", "~$50", "$50-ish".
+_AROUND = re.compile(
+    r"\b" + _APPROX + r"\s*\$\s*" + _AMOUNT
+    + r"|\b" + _APPROX + r"\s*" + _AMOUNT + _DOLLARS
+    + r"|\bbudget\s+(?:of\s+|is\s+)?" + _APPROX + r"\s*\$?\s*" + _AMOUNT
+    + r"|~\s*\$?\s*" + _AMOUNT
+    + r"|\$\s*" + _AMOUNT + r"\s*-?\s*ish\b",
+    re.I,
+)
+# A price with no cue ("$50 moisturizer", "for 50 bucks") is a target, not a ceiling.
+_BARE_PRICE = re.compile(r"\$\s*" + _AMOUNT + r"|(?<![\w.$])" + _AMOUNT + _DOLLARS, re.I)
+_AROUND_TOLERANCE = 0.25
 _PRICE_LIKE_NUMBER = re.compile(r"(?<![\d.,])" + _AMOUNT, re.I)
 _OTHER_CURRENCY = re.compile(r"[€£¥￥]|\b(?:EUR|GBP|CAD|CNY|RMB)\b", re.I)
 _BRAND_CUE = re.compile(r"\b(only|by|no|not|exclude|avoid|without|except)\s+", re.I)
@@ -162,6 +182,33 @@ def _amount(match: re.Match[str] | None, group: int = 1) -> float | None:
     return float(match[group].replace(",", "")) if match else None
 
 
+def _amounts(match: re.Match[str]) -> list[float]:
+    """The numbers an alternation matched, whichever branch it took."""
+    return [float(value.replace(",", "")) for value in match.groups() if value is not None]
+
+
+def price_window(target: float) -> tuple[float, float]:
+    """"Around $50" allows a quarter either way, $37.50 to $62.50, instead of a hard $50 cap."""
+    return round(target * (1 - _AROUND_TOLERANCE), 2), round(target * (1 + _AROUND_TOLERANCE), 2)
+
+
+def _rule_prices(query: str) -> tuple[float | None, float | None, float | None]:
+    """(min, max, target). Ranges win, then stated limits, then an approximate or bare price."""
+    for pattern in (_RANGE, _DASH_RANGE):
+        match = pattern.search(query)
+        if match:
+            low, high = sorted(_amounts(match)[:2])
+            return low, high, None
+    low, high = _amount(_MIN.search(query)), _amount(_MAX.search(query))
+    if low is not None or high is not None:
+        return low, high, None
+    match = _AROUND.search(query) or _BARE_PRICE.search(query)
+    if match is None:
+        return None, None, None
+    target = _amounts(match)[0]
+    return (*price_window(target), target)
+
+
 def _explicit_brands(query: str, vocabulary: CatalogVocabulary) -> tuple[list[str], list[str]]:
     included, excluded = [], []
     names = sorted(vocabulary.brands.values(), key=len, reverse=True)
@@ -196,7 +243,7 @@ def parse_rules(query: str, vocabulary: CatalogVocabulary) -> ParsedQuery:
     """Deterministic parse; also the complete fallback when no model is available."""
     product_type, excluded_types, outside = vocabulary.match_types(query)
     category = next((name for name in vocabulary.categories if name.casefold() in query.casefold()), None)
-    bounds = _RANGE.search(query)
+    min_price, max_price, price_target = _rule_prices(query)
     included, excluded = _explicit_brands(query, vocabulary)
     if not included and product_type:
         included = _brand_before_type(query, product_type, vocabulary)
@@ -210,8 +257,9 @@ def parse_rules(query: str, vocabulary: CatalogVocabulary) -> ParsedQuery:
         sub_category_exclude=excluded_types,
         brand_include=included,
         brand_exclude=excluded,
-        min_price=_amount(bounds) if bounds else _amount(_MIN.search(query)),
-        max_price=_amount(bounds, 2) if bounds else _amount(_MAX.search(query)),
+        min_price=min_price,
+        max_price=max_price,
+        price_target=price_target,
         retrieval_query=query,
         unavailable_terms=unavailable,
         excluded_attributes=_excluded_attributes(query),
@@ -243,6 +291,7 @@ def _tool_schema(vocabulary: CatalogVocabulary) -> dict[str, Any]:
                     "product_type_exclude": {"type": "array", "items": {"type": "string", "enum": types}},
                     "max_price": {"type": ["number", "null"], "description": "Upper budget in USD."},
                     "min_price": {"type": ["number", "null"], "description": "Lower budget in USD."},
+                    "price_target": {"type": ["number", "null"], "description": english.PARSER_PRICE_TARGET_FIELD},
                     "excluded_attributes": {**strings, "description": "Ingredients or properties the user rejects, as single nouns such as alcohol."},
                     "soft_terms": {**strings, "description": "Wanted properties that are preferences, not filters."},
                     "unavailable_terms": {**strings, "description": "The user's own words for a product type absent from the enum."},
@@ -269,7 +318,7 @@ def _tool_schema(vocabulary: CatalogVocabulary) -> dict[str, Any]:
                 },
                 "required": [
                     "category", "product_type", "brand_include", "brand_exclude", "category_exclude",
-                    "product_type_exclude", "max_price", "min_price", "excluded_attributes", "soft_terms",
+                    "product_type_exclude", "max_price", "min_price", "price_target", "excluded_attributes", "soft_terms",
                     "unavailable_terms", "needs_clarification", "aspects", "use_cases", "compatible_with",
                     "search_text", "numeric_constraints",
                 ],
@@ -332,6 +381,13 @@ def _from_model(query: str, args: dict[str, Any], vocabulary: CatalogVocabulary)
     ]
     excluded_attributes = _rejected_terms(args.get("excluded_attributes"), query)
     brand_exclude = _named_brands(args.get("brand_exclude"), query, vocabulary)
+    min_price, max_price = _stated_price(args.get("min_price"), query), _stated_price(args.get("max_price"), query)
+    price_target = _stated_price(args.get("price_target"), query)
+    # A target also copied into a bound ("around $50" as max 50) is still approximate.
+    if price_target is not None and {min_price, max_price} <= {None, price_target}:
+        min_price, max_price = price_window(price_target)
+    else:
+        price_target = None
     return ParsedQuery(
         original_query=query,
         category=category,
@@ -340,8 +396,9 @@ def _from_model(query: str, args: dict[str, Any], vocabulary: CatalogVocabulary)
         sub_category_exclude=list(dict.fromkeys(excluded_types)),
         brand_include=_named_brands(args.get("brand_include"), query, vocabulary),
         brand_exclude=brand_exclude,
-        min_price=_stated_price(args.get("min_price"), query),
-        max_price=_stated_price(args.get("max_price"), query),
+        min_price=min_price,
+        max_price=max_price,
+        price_target=price_target,
         soft_terms=[str(term) for term in args.get("soft_terms") or []],
         retrieval_query=query,
         needs_clarification=bool(args.get("needs_clarification")),
@@ -425,9 +482,16 @@ def merge_turn(current: ParsedQuery, base: ParsedQuery | None, profile: dict[str
         excluded_types = list(dict.fromkeys(carried.sub_category_exclude + excluded_types))
     # Withdrawn conditions ("any brand is fine") are already gone from ``base``: the router reads
     # them and the refine tool clears them before searching.
+    # A saved budget is a ranking signal (``_apply_profile_boost``), never a filter: a usual
+    # skincare budget must not hide every pair of headphones without telling the shopper.
+    states_price = current.min_price is not None or current.max_price is not None
+    # A window around an earlier target is one condition: "cheaper, under $40" after
+    # "around $50" replaces it whole instead of keeping its $37.50 floor.
+    priced = None if states_price and carried and carried.price_target is not None else carried
     minimum, maximum = current.min_price, current.max_price
-    minimum = minimum if minimum is not None else (carried.min_price if carried else profile.get("budget_min"))
-    maximum = maximum if maximum is not None else (carried.max_price if carried else profile.get("budget_max"))
+    minimum = minimum if minimum is not None else (priced.min_price if priced else None)
+    maximum = maximum if maximum is not None else (priced.max_price if priced else None)
+    target = current.price_target if states_price else (carried.price_target if carried else None)
     # A new bound that contradicts an inherited one replaces it ("over $100", then "cheaper, under $60").
     if current.max_price is not None and current.min_price is None and minimum is not None and minimum > maximum:
         minimum = None
@@ -450,6 +514,7 @@ def merge_turn(current: ParsedQuery, base: ParsedQuery | None, profile: dict[str
         brand_exclude=[brand for brand in dict.fromkeys(excluded) if brand.casefold() not in allowed],
         min_price=minimum,
         max_price=maximum,
+        price_target=target,
         retrieval_query=current.search_text or _carried_query(query, carried),
         numeric=numeric,
         needs_clarification=current.needs_clarification and not (
@@ -462,7 +527,7 @@ def merge_turn(current: ParsedQuery, base: ParsedQuery | None, profile: dict[str
     )
 
 
-_PRICE_PHRASES = (_RANGE, _MAX, _MIN)
+_PRICE_PHRASES = (_RANGE, _DASH_RANGE, _MAX, _MIN, _AROUND, _BARE_PRICE)
 _NEGATED_PHRASE = re.compile(r"\b(?:no|not|without|exclude|excluding|avoid|except|instead of|don'?t want)\b[^,.;]*", re.I)
 
 

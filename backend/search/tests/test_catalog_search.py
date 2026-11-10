@@ -105,6 +105,14 @@ def test_vector_candidates_cannot_escape_sql_filters(store):
     assert set(_ids(service.search("smartwatches under $50"))) == {"B000000001", "B000000002"}
 
 
+def test_saved_budget_ranks_but_never_filters(store):
+    service = CatalogSearchService(store, FakeIndex(), FakeIndex(), reranker=FakeReranker([]))
+    result = service.search("smartwatches", user_profile={"budget_max": 30})
+    assert result.parsed.max_price is None
+    assert {"B000000001", "B000000002", "B000000003"} <= set(_ids(result))  # $42 and $65 stay visible.
+    assert any(signal["kind"] == "budget" for signal in result.personalization)
+
+
 def test_accessories_and_mislabeled_titles_stay_out_of_primary_results(store):
     service = CatalogSearchService(store, FakeIndex([_chunk("B000000004")]), FakeIndex(), reranker=FakeReranker([]))
     found = _ids(service.search("smartwatches"))

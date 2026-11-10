@@ -233,6 +233,15 @@ def test_category_switch_clears_what_no_longer_applies():
     assert merged.retrieval_query == "coffee machine"
 
 
+def test_saved_budget_is_not_a_search_bound():
+    profile = {"budget_min": 10, "budget_max": 30}
+    first = merge_turn(_parsed("headphones", sub_category="Headphones"), None, profile)
+    assert (first.min_price, first.max_price) == (None, None)
+    base = _parsed("smartwatches", sub_category="Smartwatches", max_price=80.0)
+    switched = merge_turn(_parsed("headphones", sub_category="Headphones"), base, profile)
+    assert switched.max_price is None
+
+
 def test_same_category_keeps_conditions():
     base = _parsed("headphones", sub_category="Headphones", max_price=80.0, brand_exclude=["Sony"])
     merged = merge_turn(_parsed("with noise cancelling"), base, {})
