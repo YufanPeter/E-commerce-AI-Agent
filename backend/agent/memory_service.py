@@ -255,6 +255,14 @@ def _update_from_extracted(memory: ExtractedMemory, text: str, session_id: str |
     if memory.kind == "style":
         value = _STYLE_ALIASES.get(value, value)
         return PreferenceUpdate(field="preference_keywords", value=value, message=f"Saved: prefer {value}" if english_copy else f"已记住：偏好{value}", **common)
+    if memory.kind == "budget" and memory.scope:
+        # "I usually spend about $30 on skincare" is a skincare budget, not one for everything.
+        return PreferenceUpdate(
+            field="category_budget",
+            value={"category": memory.scope, "budget_min": None, "budget_max": float(value)},
+            message=f"Saved: usual {memory.scope} budget up to ${value}" if english_copy else f"已记住：{memory.scope}预算 ¥{value} 以内",
+            **common,
+        )
     if memory.kind == "budget":
         return PreferenceUpdate(field="budget_max", value=float(value), message=f"Saved: usual budget up to ${value}" if english_copy else f"已记住：常用预算 ¥{value} 以内", **common)
     attr = {"skin_type": ("美妆护肤", "skin_type"), "shoe_size": ("服饰运动", "shoe_size"), "clothing_size": ("服饰运动", "clothing_size"), "household": ("通用", "household")}.get(memory.kind)

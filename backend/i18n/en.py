@@ -414,4 +414,11 @@ Examples:
 "We have two kids so I buy snacks in small packs" -> household: two kids.
 "I've used Anker for years and won't switch" -> brand_like: Anker.
 "I'm allergic to fragrance" -> avoid_term: fragrance.
-"Recommend a light laptop" -> empty list, a one-time need."""
+"I usually spend about $30 on skincare" -> budget: 30, category Beauty & Personal Care.
+"My budget is usually $200" -> budget: 200, category null.
+"Recommend a light laptop" -> empty list, a one-time need.
+"My budget is $50 for this moisturizer" -> empty list, a budget for this purchase."""
+MEMORY_CATEGORY_DESCRIPTION = (
+    "For a budget that only covers one kind of product, its top-level category: 'skincare' is Beauty & Personal Care. "
+    "null when the budget covers everything, and for every other kind of memory."
+)

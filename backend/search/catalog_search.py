@@ -159,11 +159,17 @@ class CatalogSearchService:
         distances = {c.product_id: c.distance for c in products}
         claims = {h.product_id: h.evidence for h in graph_hits}
         hits = self._ranked_hits(pool, text, distances, evidence, checks, claims)
-        hits, signals = _apply_profile_boost(hits, intent, profile)
+        # A product type names no category, but a remembered budget is kept per category.
+        hits, signals = _apply_profile_boost(hits, replace(intent, category=intent.category or self._category_of(intent.sub_category)), profile)
         # A listing that confirms the shopper's conditions answers better than silence.
         hits.sort(key=lambda hit: -confirmed_tier(hit, intent))
         hits = self._without_duplicates(hits)[:top_k_products]
         return SearchResult(intent, hits, len(fused), len(pool), personalization=[*signals, *avoid_signals])
+
+    def _category_of(self, product_type: str | None) -> str | None:
+        """Top-level category of a leaf or group label."""
+        leaves = self._vocabulary.expand([product_type]) if product_type else []
+        return self._vocabulary.labels.get(leaves[0]) if leaves else None
 
     # ----- eligibility -----------------------------------------------------------------
 

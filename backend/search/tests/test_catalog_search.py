@@ -113,6 +113,15 @@ def test_saved_budget_ranks_but_never_filters(store):
     assert any(signal["kind"] == "budget" for signal in result.personalization)
 
 
+def test_category_budget_applies_to_product_types_in_that_category(store):
+    service = CatalogSearchService(store, FakeIndex(), FakeIndex(), reranker=FakeReranker([]))
+    budgets = {"budget_max": 500, "category_specific": {"Electronics": {"budget_max": 30}}}
+    used = [s for s in service.search("smartwatches", user_profile=budgets).personalization if s["kind"] == "budget"]
+    assert [(s["scope"], s["value"]) for s in used] == [("Electronics", "-30.0")]
+    other = {"category_specific": {"Beauty & Personal Care": {"budget_max": 30}}}
+    assert not [s for s in service.search("smartwatches", user_profile=other).personalization if s["kind"] == "budget"]
+
+
 def test_accessories_and_mislabeled_titles_stay_out_of_primary_results(store):
     service = CatalogSearchService(store, FakeIndex([_chunk("B000000004")]), FakeIndex(), reranker=FakeReranker([]))
     found = _ids(service.search("smartwatches"))
