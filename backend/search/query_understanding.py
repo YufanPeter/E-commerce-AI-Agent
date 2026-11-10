@@ -62,6 +62,10 @@ class ParsedQuery:
     unavailable_terms: list[str] = field(default_factory=list)
     # Rejected ingredients or properties, checked against catalog attributes after recall.
     excluded_attributes: list[str] = field(default_factory=list)
+    # Knowledge-graph signals; they only propose candidates, never filter.
+    aspects: list[str] = field(default_factory=list)
+    use_cases: list[str] = field(default_factory=list)
+    compatible_with: list[str] = field(default_factory=list)
 
     @property
     def hard_filters(self) -> dict[str, object]:
@@ -132,6 +136,9 @@ class ParsedQuery:
             needs_clarification=False,
             unavailable_terms=list(self.unavailable_terms or []),
             excluded_attributes=union(self.excluded_attributes, base.excluded_attributes),
+            aspects=union(self.aspects, base.aspects),
+            use_cases=union(self.use_cases, base.use_cases),
+            compatible_with=union(self.compatible_with, base.compatible_with),
         )
 
 

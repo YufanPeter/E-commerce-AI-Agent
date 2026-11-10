@@ -27,6 +27,18 @@ def _is_cart_request(text: str) -> bool:
     )
 
 
+def knowledge_route(query: str, session: AgentSession) -> str | None:
+    """The tool for a graph-shaped question; the first two need a product on screen."""
+    if english.GUIDE_RE.search(query):
+        return "buying_guide"
+    if not session.recall_hits():
+        return None
+    if english.ACCESSORY_RE.search(query):
+        return "accessories"
+    # The graph tool cannot apply a stated budget, so those requests go to normal routing.
+    return "similar" if english.SIMILAR_RE.search(query) and not english.EXPLICIT_PRICE_RE.search(query) else None
+
+
 def route_catalog(query: str, session: AgentSession) -> IntentDecision:
     text = query.strip().lower()
     if _is_cart_request(text):
@@ -129,14 +141,15 @@ def reply(tool_result: ToolResult) -> str | dict[str, Any]:
         return "I didn't find a matching product in this catalog. Try a broader search or adjust the budget."
     items = []
     for card in products:
-        details = next((str(ev.get("text") or "").strip() for ev in (card.get("evidence") or {}).get("points", [])
-                        if ev.get("text")), "")
+        details = (data.get("item_notes") or {}).get(card["product_id"]) or next(
+            (str(ev.get("text") or "").strip() for ev in (card.get("evidence") or {}).get("points", []) if ev.get("text")), "",
+        )
         items.append({
             "productId": card["product_id"],
             "description": details[:240] or f"From {card['brand']} in {card['sub_category']}.",
         })
     return {
-        "opening": f"I found {len(items)} matching options in the Amazon catalog.",
+        "opening": data.get("opening") or f"I found {len(items)} matching options in the Amazon catalog.",
         "items": items,
         "summary": "Prices and stock are simulated for this demo.",
         "followup": ["Compare the first and second", "Show details for the first one"] if len(items) > 1

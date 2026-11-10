@@ -22,6 +22,7 @@ from i18n import en as english
 from llm.client import get_client, get_model_id
 from search.llm_parser import _extract_tool_arguments, _coerce_float
 from search.query_understanding import ParsedQuery
+from store.attribute_rules import DESCRIPTION, TITLE, _DEVICES, extract_multi
 from store.import_amazon import TAXONOMY_PATH, brand_key
 from store.product_store import english_brand_named
 
@@ -50,6 +51,8 @@ _WOMEN = re.compile(r"\b(?:women'?s?|woman'?s?|ladies|lady'?s?|female)\b", re.I)
 _MEN = re.compile(r"(?<![a-z])(?:men'?s?|man'?s|gents?|male)\b", re.I)
 _LABEL_AUDIENCE = re.compile(r"^(?:Novelty )?(?:Men's|Women's)\s+")
 
+ONTOLOGY_PATH = TAXONOMY_PATH.with_name("amazon_graph_ontology.json")
+
 
 @dataclass(frozen=True)
 class CatalogVocabulary:
@@ -60,6 +63,8 @@ class CatalogVocabulary:
     patterns: dict[str, re.Pattern[str]]
     brands: dict[str, str]
     accessory_labels: frozenset[str] = frozenset()
+    aspects: tuple[str, ...] = ()
+    use_cases: tuple[str, ...] = ()
 
     @property
     def product_types(self) -> list[str]:
@@ -99,6 +104,20 @@ def _compile(terms: list[str]) -> re.Pattern[str]:
     return re.compile(r"(?<![\w-])(?:" + "|".join(terms) + r")(?![\w-])", re.I)
 
 
+def _ontology_values(kind: str) -> tuple[str, ...]:
+    ontology = json.loads(ONTOLOGY_PATH.read_text(encoding="utf-8"))
+    return tuple(sorted({value for category in ontology["categories"].values() for value in category[kind]}))
+
+
+def _named_values(query: str, values: tuple[str, ...]) -> list[str]:
+    text = query.casefold()
+    return [value for value in values if re.search(rf"\b{re.escape(value.replace('_', ' '))}\b", text)]
+
+
+def _devices_named(text: str) -> list[str]:
+    return [str(item["value"]) for item in extract_multi({TITLE: text, DESCRIPTION: ""}, _DEVICES)]
+
+
 def load_vocabulary(conn: sqlite3.Connection) -> CatalogVocabulary:
     rows = conn.execute(
         "SELECT label, category, catalog_group, audience, terms_json, product_role FROM catalog_taxonomy ORDER BY label"
@@ -132,6 +151,8 @@ def load_vocabulary(conn: sqlite3.Connection) -> CatalogVocabulary:
         patterns=patterns,
         brands={brand_key(row[0]): row[0] for row in brand_rows},
         accessory_labels=frozenset(accessories),
+        aspects=_ontology_values("aspect"),
+        use_cases=_ontology_values("use_case"),
     )
 
 
@@ -192,6 +213,9 @@ def parse_rules(query: str, vocabulary: CatalogVocabulary) -> ParsedQuery:
         retrieval_query=query,
         unavailable_terms=unavailable,
         excluded_attributes=_excluded_attributes(query),
+        aspects=_named_values(query, vocabulary.aspects),
+        use_cases=_named_values(query, vocabulary.use_cases),
+        compatible_with=_devices_named(query),
     )
 
 
@@ -218,12 +242,15 @@ def _tool_schema(vocabulary: CatalogVocabulary) -> dict[str, Any]:
                     "excluded_attributes": {**strings, "description": "Ingredients or properties the user rejects, as single nouns such as alcohol."},
                     "soft_terms": {**strings, "description": "Wanted properties that are preferences, not filters."},
                     "unavailable_terms": {**strings, "description": "The user's own words for a product type absent from the enum."},
+                    "aspects": {"type": "array", "items": {"type": "string", "enum": list(vocabulary.aspects)}},
+                    "use_cases": {"type": "array", "items": {"type": "string", "enum": list(vocabulary.use_cases)}},
+                    "compatible_with": {**strings, "description": "Devices the product must work with, as the shopper wrote them."},
                     "needs_clarification": {"type": "boolean"},
                 },
                 "required": [
                     "category", "product_type", "brand_include", "brand_exclude", "category_exclude",
                     "product_type_exclude", "max_price", "min_price", "excluded_attributes", "soft_terms",
-                    "unavailable_terms", "needs_clarification",
+                    "unavailable_terms", "needs_clarification", "aspects", "use_cases", "compatible_with",
                 ],
                 "additionalProperties": False,
             },
@@ -295,6 +322,9 @@ def _from_model(query: str, args: dict[str, Any], vocabulary: CatalogVocabulary)
         needs_clarification=bool(args.get("needs_clarification")),
         unavailable_terms=unavailable if not product_type else [],
         excluded_attributes=_rejected_terms(args.get("excluded_attributes"), query),
+        aspects=[value for value in args.get("aspects") or [] if value in vocabulary.aspects],
+        use_cases=[value for value in args.get("use_cases") or [] if value in vocabulary.use_cases],
+        compatible_with=[device for value in args.get("compatible_with") or [] for device in _devices_named(str(value))],
     )
 
 
@@ -311,6 +341,9 @@ def _reconcile(model: ParsedQuery, rules: ParsedQuery) -> ParsedQuery:
         min_price=model.min_price if model.min_price is not None else rules.min_price,
         max_price=model.max_price if model.max_price is not None else rules.max_price,
         excluded_attributes=list(dict.fromkeys(model.excluded_attributes + rules.excluded_attributes)),
+        aspects=model.aspects or rules.aspects,
+        use_cases=model.use_cases or rules.use_cases,
+        compatible_with=list(dict.fromkeys(model.compatible_with + rules.compatible_with)),
         unavailable_terms=list(dict.fromkeys(rules.unavailable_terms + model.unavailable_terms)),
         needs_clarification=model.needs_clarification and not (product_type or model.category or rules.category),
     )
@@ -392,6 +425,9 @@ def merge_turn(current: ParsedQuery, base: ParsedQuery | None, profile: dict[str
             product_type or category or included or minimum is not None or maximum is not None
         ),
         excluded_attributes=list(dict.fromkeys((base.excluded_attributes if base and not switch else []) + current.excluded_attributes)),
+        aspects=list(dict.fromkeys((base.aspects if base and not switch else []) + current.aspects)),
+        use_cases=list(dict.fromkeys((base.use_cases if base and not switch else []) + current.use_cases)),
+        compatible_with=list(dict.fromkeys((base.compatible_with if base and not switch else []) + current.compatible_with)),
     )
 
 

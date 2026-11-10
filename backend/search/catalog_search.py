@@ -14,6 +14,7 @@ import os
 from typing import Any
 
 from catalog_config import AMAZON_INDEX_DIR, AMAZON_PRODUCT_COLLECTION, AMAZON_REVIEW_COLLECTION
+from graph.graph_store import GraphHit, GraphQuery, GraphStore, open_graph_store
 from rag.reranker import get_reranker
 from rag.retriever import RetrievedChunk
 from rag.vector_index import ChromaVectorIndex, Condition, VectorIndex
@@ -63,6 +64,7 @@ class CatalogSearchService:
         product_index: VectorIndex | None = None,
         review_index: VectorIndex | None = None,
         reranker: Any | None = None,
+        graph: GraphStore | None = None,
     ) -> None:
         self._store = store or ProductStore()
         with closing(self._store.connect()) as conn:
@@ -91,6 +93,23 @@ class CatalogSearchService:
         self._product_index = product_index if product_index is not None else _open_index(AMAZON_PRODUCT_COLLECTION)
         self._review_index = review_index if review_index is not None else _open_index(AMAZON_REVIEW_COLLECTION)
         self._reranker = reranker
+        self.graph = graph if graph is not None else open_graph_store()
+
+    @property
+    def vocabulary(self) -> Any:
+        return self._vocabulary
+
+    def min_price(self, product_id: str) -> float | None:
+        position = self._position.get(product_id)
+        return None if position is None else self._rows[position]["min_price"]
+
+    def hits_for(self, product_ids: list[str], max_price: float | None = None, popular_first: bool = False) -> list[ProductHit]:
+        """Current facts for graph-proposed products; unknown IDs and over-budget items drop out."""
+        rows = [self._rows[self._position[pid]] for pid in product_ids if pid in self._position]
+        rows = [row for row in rows if max_price is None or row["min_price"] <= max_price]
+        if popular_first:
+            rows.sort(key=lambda row: -row["rating_number"])
+        return self._without_duplicates([self._hit(row, 0.0, None, None, [], {}) for row in rows])
 
     def search(
         self, user_query: str, top_k_chunks: int = 50, top_k_products: int = 10,
@@ -115,13 +134,15 @@ class CatalogSearchService:
         if self._is_weak_match(intent, products):
             return SearchResult(replace(intent, unavailable_terms=[query]), [], 0, 0)
         evidence = self._review_evidence(reviews, eligible)
-        fused = rrf_fuse([lexical, [c.product_id for c in products], list(evidence)])
+        graph_hits = self._graph_recall(intent)
+        fused = rrf_fuse([lexical, [c.product_id for c in products], list(evidence), [h.product_id for h in graph_hits]])
         pool = [pid for pid in fused if pid in eligible and self._passes_title_check(pid, intent)]
         checks = {pid: self._attribute_checks(pid, intent.excluded_attributes) for pid in pool}
         pool = [pid for pid in pool if checks[pid] is not None]
 
         distances = {c.product_id: c.distance for c in products}
-        hits = self._ranked_hits(pool, text, distances, evidence, checks)
+        claims = {h.product_id: h.evidence for h in graph_hits}
+        hits = self._ranked_hits(pool, text, distances, evidence, checks, claims)
         hits, signals = _apply_profile_boost(hits, intent, profile)
         hits = self._without_duplicates(hits)[:top_k_products]
         return SearchResult(intent, hits, len(fused), len(pool), personalization=signals)
@@ -205,6 +226,15 @@ class CatalogSearchService:
             logger.warning("Vector recall failed, continuing with what was retrieved: %r", exc)
         return products, reviews
 
+    def _graph_recall(self, intent: ParsedQuery) -> list[GraphHit]:
+        if self.graph is None:
+            return []
+        labels = self._vocabulary.expand([intent.sub_category]) if intent.sub_category else []
+        return self.graph.recall(
+            GraphQuery(tuple(intent.aspects), tuple(intent.use_cases), tuple(intent.compatible_with), tuple(labels)),
+            _CHANNEL_SIZE,
+        )
+
     @staticmethod
     def _review_evidence(reviews: list[RetrievedChunk], eligible: set[str]) -> dict[str, list[RetrievedChunk]]:
         """Group review hits by product in rank order, capping how much one product counts."""
@@ -250,6 +280,7 @@ class CatalogSearchService:
     def _ranked_hits(
         self, pool: list[str], text: str, distances: dict[str, float | None],
         evidence: dict[str, list[RetrievedChunk]], checks: dict[str, dict[str, str] | None],
+        claims: dict[str, tuple[dict[str, Any], ...]],
     ) -> list[ProductHit]:
         rerank = self._rerank_scores(text, pool[:_RERANK_POOL])
         hits = []
@@ -259,7 +290,7 @@ class CatalogSearchService:
             base = rerank.get(product_id, 0.0 if rerank else 1.0 / (60 + rank))
             confirmed = checks[product_id] and all(v == "free" for v in checks[product_id].values())
             score = base * self._rating_prior(row) * (_CONFIRMED_ATTRIBUTE_BOOST if confirmed else 1.0)
-            hits.append(self._hit(row, score, distances.get(product_id), rerank.get(product_id), evidence.get(product_id, []), checks[product_id] or {}))
+            hits.append(self._hit(row, score, distances.get(product_id), rerank.get(product_id), evidence.get(product_id, []), checks[product_id] or {}, claims.get(product_id, ())))
         hits.sort(key=lambda hit: hit.score, reverse=True)
         return hits
 
@@ -278,7 +309,7 @@ class CatalogSearchService:
     @staticmethod
     def _hit(
         row: Any, score: float, distance: float | None, rerank_score: float | None,
-        reviews: list[RetrievedChunk], checks: dict[str, str],
+        reviews: list[RetrievedChunk], checks: dict[str, str], claims: tuple[dict[str, Any], ...] = (),
     ) -> ProductHit:
         meta = {k: row[k] for k in ("product_id", "title", "brand", "category", "sub_category", "base_price", "image_url", "category_path")}
         meta.update(chunk_type="marketing_description", dataset="amazon_reviews_2023")
@@ -287,5 +318,5 @@ class CatalogSearchService:
             row["product_id"], row["title"], row["brand"], row["category"], row["sub_category"],
             row["base_price"], score, distance, rerank_score, [listing, *reviews],
             min_price=row["min_price"], max_price=row["max_price"], sku_count=row["sku_count"],
-            attribute_checks=checks,
+            attribute_checks=checks, graph_evidence=claims,
         )

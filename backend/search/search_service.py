@@ -82,6 +82,8 @@ class ProductHit:
     sku_count: int = 0
     # Rejected attribute → "free" (listing says so) or "unknown" (listing is silent).
     attribute_checks: dict[str, str] = field(default_factory=dict)
+    # Graph claims that matched this query, each with its source quote.
+    graph_evidence: tuple[dict[str, Any], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {

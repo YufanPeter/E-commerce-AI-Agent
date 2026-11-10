@@ -770,6 +770,9 @@ def _card_with_evidence(h: ProductHit, query: str) -> dict[str, Any]:
     checks = getattr(h, "attribute_checks", None)
     if checks:
         card["attribute_checks"] = dict(checks)
+    claims = getattr(h, "graph_evidence", None)
+    if claims:
+        card["graph_evidence"] = list(claims)
     evidence = card_evidence(h, query)
     if evidence:
         card["evidence"] = evidence

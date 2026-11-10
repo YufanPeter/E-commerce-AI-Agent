@@ -173,7 +173,7 @@ class Agent:
             from agent.amazon import CatalogMessageTool
 
             cart = CatalogMessageTool("cart", t("cart.unavailable"))
-        return {
+        tools: dict[str, Tool] = {
             "recommend": recommend,
             "refine": RefineTool(recommend=recommend),
             "compare": CompareTool(),
@@ -182,6 +182,11 @@ class Agent:
             "clarify": ClarifyTool(),
             "fallback": FallbackTool(),
         }
+        if is_english():
+            from agent.tools.knowledge import knowledge_tools
+
+            tools.update(knowledge_tools(recommend))
+        return tools
 
     # ----------------------------- Blocking -----------------------------
 
@@ -584,12 +589,24 @@ class Agent:
                 )
         trace["timings"]["router_ms"] = int((time.perf_counter() - t0) * 1000)
         decision = self._apply_post_route_guards(query, session, decision)
+        decision = self._with_knowledge_route(query, session, decision)
         trace["decision"] = decision.to_dict()
         logger.info(
             "router done in %dms → tool=%s",
             trace["timings"]["router_ms"], decision.tool,
         )
         return decision
+
+    def _with_knowledge_route(self, query: str, session: AgentSession, decision: IntentDecision) -> IntentDecision:
+        """Graph questions are narrow enough to detect directly, so the router enum stays small."""
+        if not is_english() or decision.tool in {"cart", "compare"}:
+            return decision
+        from agent.amazon import knowledge_route
+
+        tool = knowledge_route(query, session)
+        if tool not in self._tools:
+            return decision
+        return IntentDecision(tool, query, "high", f"knowledge route; original={decision.tool}")
 
     @staticmethod
     def _apply_post_route_guards(

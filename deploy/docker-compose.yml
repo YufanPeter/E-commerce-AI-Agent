@@ -32,3 +32,24 @@ services:
       timeout: 5s
       start_period: 30s
       retries: 3
+
+  # Knowledge graph. Start with: --env-file .env --profile graph up -d neo4j
+  neo4j:
+    image: neo4j:5.26.12-community
+    profiles: ["graph"]
+    container_name: cartpilot-neo4j
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:?set NEO4J_PASSWORD}
+      NEO4J_PLUGINS: '["graph-data-science"]'
+      NEO4J_server_memory_heap_initial__size: 1g
+      NEO4J_server_memory_heap_max__size: 2g
+      NEO4J_server_memory_pagecache_size: 1g
+    ports:
+      - "127.0.0.1:7687:7687"
+      - "127.0.0.1:7474:7474"
+    volumes:
+      - neo4j-data:/data
+    restart: unless-stopped
+
+volumes:
+  neo4j-data:

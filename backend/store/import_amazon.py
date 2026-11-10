@@ -252,7 +252,9 @@ def content_digest(db_path: Path) -> str:
             columns = [row[1] for row in conn.execute(f'PRAGMA table_info("{table}")')
                        if row[1] not in _VOLATILE_COLUMNS]
             selected = ", ".join(f'"{column}"' for column in columns)
-            for row in conn.execute(f'SELECT {selected} FROM "{table}" ORDER BY {selected}'):
+            # Model-extracted attributes are added after the build by the graph step.
+            scope = " WHERE provenance <> 'llm'" if table == "product_attributes" else ""
+            for row in conn.execute(f'SELECT {selected} FROM "{table}"{scope} ORDER BY {selected}'):
                 digest.update(repr(row).encode("utf-8"))
     finally:
         conn.close()

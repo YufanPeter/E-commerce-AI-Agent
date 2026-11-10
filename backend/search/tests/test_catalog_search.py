@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
+from graph.graph_store import GraphHit
 from rag.retriever import RetrievedChunk
 from search import catalog_understanding
 from search.catalog_search import CatalogSearchService
@@ -83,7 +84,8 @@ def store(tmp_path_factory):
 
 
 @pytest.fixture(autouse=True)
-def rules_only():
+def rules_only(monkeypatch):
+    monkeypatch.setenv("CARTPILOT_GRAPH", "0")
     with patch.object(catalog_understanding, "_call_model", side_effect=TimeoutError("offline")):
         yield
 
@@ -127,6 +129,22 @@ def test_rerank_decides_order(store, monkeypatch):
     order = ["amz_B000000003", "amz_B000000002", "amz_B000000001"]
     service = CatalogSearchService(store, FakeIndex(), FakeIndex(), reranker=FakeReranker(order))
     assert _ids(service.search("smartwatches"))[:3] == ["B000000003", "B000000002", "B000000001"]
+
+
+def test_graph_channel_proposes_but_sql_still_decides(store):
+    class FakeGraph:
+        def recall(self, query, limit):
+            self.query = query
+            claim = {"relation": "PRAISED_FOR", "value": "comfort", "source": "r1", "quote": "So comfy"}
+            return [GraphHit("amz_B000000003", 1.0, (claim,)), GraphHit("amz_B000000004", 1.0, (claim,))]
+
+    graph = FakeGraph()
+    service = CatalogSearchService(store, FakeIndex(), FakeIndex(), reranker=FakeReranker([]), graph=graph)
+    result = service.search("comfort smartwatches")
+    assert graph.query.aspects == ("comfort",)
+    by_id = {hit.product_id: hit for hit in result.hits}
+    assert by_id["amz_B000000003"].graph_evidence[0]["quote"] == "So comfy"
+    assert "amz_B000000004" not in by_id
 
 
 def test_vector_failure_degrades_to_keyword_search(store):

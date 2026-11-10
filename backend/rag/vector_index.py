@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, Sequence
 
+import numpy as np
+
 from rag.chroma_store import DEFAULT_EMBEDDING_MODEL, DashScopeEmbeddingFunction
 from rag.retriever import ChromaRetriever, RetrievedChunk
 
@@ -84,6 +86,18 @@ class ChromaVectorIndex:
 
     def existing_ids(self) -> set[str]:
         return set(self._retriever.collection.get(include=[])["ids"])
+
+    def vectors(self, batch_size: int = 2000) -> tuple[list[str], np.ndarray]:
+        """Every stored vector, for offline work that should not pay for embedding again."""
+        ids: list[str] = []
+        batches: list[np.ndarray] = []
+        while True:
+            page = self._retriever.collection.get(include=["embeddings"], limit=batch_size, offset=len(ids))
+            if not page["ids"]:
+                break
+            ids.extend(page["ids"])
+            batches.append(np.asarray(page["embeddings"], dtype=np.float32))
+        return ids, np.concatenate(batches) if batches else np.empty((0, 0), dtype=np.float32)
 
     def search(
         self, query: str, top_k: int, filters: Sequence[Condition] = (),
