@@ -19,7 +19,8 @@ from agent.memory_extractor import _STYLE_ALIASES, extract_preference_updates, e
 from agent.memory_inference import infer_suggestions
 from agent.memory_llm import ExtractedMemory, extract_with_llm, might_disclose
 from agent.tools.refine import parse_more_request
-from catalog_config import AMAZON_MODE
+from catalog_config import PROFILE
+from i18n import is_english
 from search.query_understanding import expand_brands
 from store.user_memory_store import (
     ACTIVE,
@@ -68,7 +69,7 @@ _EFFECTS = {
     "note": "解说时结合",
 }
 
-if AMAZON_MODE:
+if is_english():
     _GROUPS = {
         "budget": "Budget", "price_tier": "Budget", "brand_like": "Brands", "brand_avoid": "Brands",
         "attribute": "About you", "avoid_term": "About you", "style": "Style",
@@ -93,7 +94,7 @@ def llm_extract_enabled() -> bool:
 
 def _money_range(value: str) -> str:
     low, _, high = value.partition("-")
-    if AMAZON_MODE:
+    if is_english():
         return f"${low} – ${high}" if low and high else (f"Up to ${high}" if high else f"At least ${low}")
     if low and high:
         return f"¥{low} – ¥{high}"
@@ -104,7 +105,7 @@ def _money_range(value: str) -> str:
 
 def item_label(item: dict[str, Any]) -> str:
     kind, value, scope = item["kind"], item["value"], item.get("scope") or ""
-    if AMAZON_MODE:
+    if is_english():
         if kind == "budget":
             return f"{scope or 'Default'} budget: {_money_range(value)}"
         if kind in {"brand_like", "brand_avoid", "avoid_term", "category"}:
@@ -152,11 +153,11 @@ def _summary(items: list[dict[str, Any]]) -> str:
         return ""
     ordered = sorted(items, key=lambda i: _GROUP_ORDER.index(_GROUPS.get(i["kind"], _GROUP_ORDER[-1])))
     labels = [item_label(item) for item in ordered if item["kind"] != "note"][:4]
-    return (", " if AMAZON_MODE else "、").join(labels)
+    return (", " if is_english() else "、").join(labels)
 
 
 _ACTIVITY_LABELS = {"search": "搜索", "view_detail": "看了", "compare": "对比了", "add_cart": "加购了", "remove_cart": "移出了", "checkout": "下单了"}
-if AMAZON_MODE:
+if is_english():
     _ACTIVITY_LABELS = {"search": "Searched", "view_detail": "Viewed", "compare": "Compared", "add_cart": "Added", "remove_cart": "Removed", "checkout": "Ordered"}
 
 
@@ -208,7 +209,7 @@ def recent_interests(store: UserMemoryStore, user_id: str, limit: int = 2) -> di
 
 
 def build_view(store: UserMemoryStore, user_id: str) -> dict[str, Any]:
-    if not AMAZON_MODE:
+    if PROFILE.capabilities.inferred_memory:
         refresh_inferred(store, user_id)
     preference = store.get_preference(user_id)
     rows = store.list_items(user_id)
@@ -279,7 +280,7 @@ def _apply_extracted(store: UserMemoryStore, user_id: str, memories: list[Extrac
 
 def process_utterance(store: UserMemoryStore, user_id: str, text: str, session_id: str | None) -> list[dict[str, Any]]:
     """规则抽取，同步执行，结果立即生效。"""
-    if AMAZON_MODE:
+    if is_english():
         if not re.match(r"\s*(?:remember\b|i usually\b|my (?:usual )?budget is usually\b)", text, re.I):
             return []
         return _english_memory_update(store, user_id, text, session_id, source="stated")
@@ -339,7 +340,7 @@ def _english_memory_update(
 def tell(store: UserMemoryStore, user_id: str, text: str) -> dict[str, Any]:
     """用户在记忆页直接说一句话。规则 → 模型 → 都没听出结构就原样记成备注。"""
     clean = (text or "").strip()
-    if AMAZON_MODE:
+    if is_english():
         events = _english_memory_update(store, user_id, clean, None, source="manual")
         return {"updates": events, "message": "Memory saved." if events else "No change to saved memory."}
     if not clean:
@@ -375,7 +376,7 @@ def confirm_suggestion(store: UserMemoryStore, user_id: str, item_id: str) -> di
 
 def _update_from_item(item: dict[str, Any]) -> PreferenceUpdate | None:
     kind, value, scope = item["kind"], item["value"], item.get("scope") or ""
-    common = {"message": f"Saved: {item_label(item)}" if AMAZON_MODE else f"已记住：{item_label(item)}",
+    common = {"message": f"Saved: {item_label(item)}" if is_english() else f"已记住：{item_label(item)}",
               "source": "confirmed", "evidence": item.get("evidence")}
     if kind == "brand_like":
         return PreferenceUpdate(field="brand_include", value=value, **common)
@@ -519,7 +520,7 @@ def _mark_used(store: UserMemoryStore, user_id: str, signals: list[dict[str, Any
 
 def refresh_inferred(store: UserMemoryStore, user_id: str) -> None:
     """按最新行为重算建议：新出现的登记，信号消失的撤回，用户处理过的不再提。"""
-    if AMAZON_MODE:
+    if not PROFILE.capabilities.inferred_memory:
         return
     suggestions = infer_suggestions(store.recent_events(user_id))
     current = {

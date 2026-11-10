@@ -30,7 +30,8 @@ from llm.client import (
 
 
 logger = logging.getLogger(__name__)
-from catalog_config import AMAZON_MODE
+from i18n import en as english
+from i18n import is_english, t
 
 
 # System prompt for extracting a directly searchable Chinese product phrase.
@@ -71,16 +72,11 @@ def vision_extract_query(image: str) -> str:
     response = client.chat.completions.create(
         model=get_vision_model_id(),
         messages=[
-            {"role": "system", "content": (
-                "Return one short English shopping search phrase for the main product in the photo. "
-                "Include the product type and only visible attributes. Ignore the background. "
-                "If no product is recognizable, return UNRECOGNIZED. Output only the phrase."
-                if AMAZON_MODE else _EXTRACT_SYSTEM
-            )},
+            {"role": "system", "content": english.VISION_SYSTEM if is_english() else _EXTRACT_SYSTEM},
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": "What product is shown? Return an English search phrase." if AMAZON_MODE else "这张图里的商品是什么？给出检索关键词。"},
+                    {"type": "text", "text": t("vision.user")},
                     {"type": "image_url", "image_url": {"url": image}},
                 ],
             },

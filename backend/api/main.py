@@ -34,7 +34,8 @@ from pydantic import BaseModel, Field
 
 from agent import memory_service
 from api import products as products_router
-from catalog_config import AMAZON_MODE, AMAZON_DB_PATH, AMAZON_VISION
+from catalog_config import PROFILE
+from i18n import is_english, t
 from store.cart_store import CartNotFoundError, CartStore
 from store.order_store import OrderStore
 from store.feedback_store import FeedbackStore
@@ -169,7 +170,7 @@ async def http_exception_handler(_request: Request, exc: HTTPException) -> JSONR
             message=str(exc.detail),
             retryable=exc.status_code >= 500,
         )
-    if AMAZON_MODE and re.search(r"[\u4e00-\u9fff]", str(detail.get("message", ""))):
+    if is_english() and re.search(r"[\u4e00-\u9fff]", str(detail.get("message", ""))):
         messages = {
             400: "Check the request and try again.",
             404: "The requested item was not found.",
@@ -179,7 +180,7 @@ async def http_exception_handler(_request: Request, exc: HTTPException) -> JSONR
     return JSONResponse(status_code=exc.status_code, content=detail)
 
 
-if AMAZON_MODE and not AMAZON_DB_PATH.is_file():
+if PROFILE.requires_prebuilt_db and not PROFILE.db_path.is_file():
     raise RuntimeError("Amazon catalog not found. Run bash scripts/start_amazon.sh to build it first.")
 
 _sessions = SqliteSessionStore()
@@ -310,7 +311,7 @@ def _apply_realtime_preference_updates(query: str, session: Any) -> list[dict[st
         return []
     session_id = getattr(session, "session_id", None)
     events = memory_service.process_utterance(_user_memory, user_id, query, session_id)
-    if not AMAZON_MODE:
+    if PROFILE.capabilities.llm_memory:
         memory_service.extract_in_background(_user_memory, user_id, query, session_id, events)
     if events:
         session.user_profile = _user_memory.get_preference(user_id).to_dict()
@@ -368,11 +369,11 @@ def _warmup() -> None:
 
 @app.get("/health")
 def health() -> dict[str, str]:
-    if AMAZON_MODE:
+    if PROFILE.requires_prebuilt_db:
         try:
             from contextlib import closing
 
-            with closing(sqlite3.connect(f"{AMAZON_DB_PATH.as_uri()}?mode=ro", uri=True)) as conn:
+            with closing(sqlite3.connect(f"{PROFILE.db_path.as_uri()}?mode=ro", uri=True)) as conn:
                 row = conn.execute(
                     "SELECT 1 FROM amazon_product_metadata a JOIN products p USING (product_id) "
                     "WHERE p.base_price = a.price_usd LIMIT 1"
@@ -478,7 +479,7 @@ def delete_memory_item(user_id: str, item_id: str) -> dict[str, Any]:
     result = _user_memory.remove_item(clean_user_id, item_id)
     if result is None:
         raise HTTPException(status_code=404, detail="这条记忆不存在")
-    return {"message": "Memory removed" if AMAZON_MODE else "已忘掉这条", "undo_token": result["undo_token"], "view": memory_service.build_view(_user_memory, clean_user_id)}
+    return {"message": t("memory.removed"), "undo_token": result["undo_token"], "view": memory_service.build_view(_user_memory, clean_user_id)}
 
 
 @app.put("/memory/{user_id}/settings")
@@ -496,7 +497,7 @@ def undo_memory(user_id: str, req: PreferenceUndoRequest) -> dict[str, Any]:
     result = _user_memory.undo_update(clean_user_id, req.undo_token.strip())
     if result is None:
         raise HTTPException(status_code=404, detail="撤销 token 不存在或已使用")
-    return {"message": "Memory restored" if AMAZON_MODE else "已恢复", "view": memory_service.build_view(_user_memory, clean_user_id)}
+    return {"message": t("memory.restored"), "view": memory_service.build_view(_user_memory, clean_user_id)}
 
 
 @app.delete("/memory/{user_id}")
@@ -565,7 +566,7 @@ def chat_stream(req: ChatRequest, request: Request) -> StreamingResponse:
 
     Clients may consume the stream with ``EventSource`` or a streaming HTTP client.
     """
-    if AMAZON_MODE and not AMAZON_VISION and _resolve_image(req):
+    if not PROFILE.capabilities.vision and _resolve_image(req):
         raise HTTPException(status_code=422, detail="Image matching is not configured for the Amazon catalog. Describe the product in English instead.")
     turn = _turn_gate.begin(req.session_id, req.query or "（发了一张图片）")
     try:
@@ -682,7 +683,7 @@ def mutate_cart(req: CartMutationRequest) -> dict[str, Any]:
     """Apply a deterministic cart mutation and return the latest snapshot."""
     store = CartStore()
     action = req.action
-    if AMAZON_MODE and action in {"add", "updateSpecification"}:
+    if not PROFILE.capabilities.cart and action in {"add", "updateSpecification"}:
         raise HTTPException(status_code=409, detail=products_router.error_payload(
             "PRODUCT_NOT_PURCHASABLE", "The Amazon snapshot has no verified purchase options or stock.", retryable=False,
         ))
@@ -813,7 +814,7 @@ def generate_title(req: TitleRequest) -> dict[str, str]:
     user_text = (req.user_text or "").strip()
     if not user_text:
         raise HTTPException(status_code=400, detail="user_text 不能为空")
-    if AMAZON_MODE:
+    if is_english():
         return {"title": " ".join(user_text.split()[:7])[:70]}
 
     from llm.client import get_client, get_model_id
@@ -887,8 +888,8 @@ def get_home(user_id: str, request: Request) -> dict[str, Any]:
         if detail is None:
             continue  # 品类已下架：点了也搜不到，不展示
         entries.append({
-            "title": f"Keep browsing {interest['label']}" if AMAZON_MODE else f"接着看{interest['label']}",
-            "query": f"Browse {interest['label']}" if AMAZON_MODE else f"推荐{interest['label']}",
+            "title": t("home.keep_browsing", label=interest["label"]),
+            "query": t("home.browse_query", label=interest["label"]),
             "image_url": products_router.resolve_image_url(detail, image_base),
         })
     return {"returning": recent["returning"], "entries": entries}

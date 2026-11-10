@@ -26,7 +26,8 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 
-from catalog_config import AMAZON_MODE
+from catalog_config import PROFILE
+from i18n import format_money, t
 from store.product_store import (
     DEFAULT_DB_PATH,
     ProductDetail,
@@ -354,7 +355,7 @@ def evidence_payload(detail: ProductDetail) -> list[dict[str, Any]]:
             {
                 "id": f"{detail.product_id}_review_{review.source_index}",
                 "sourceType": "userReview",
-                "title": f"{review.nickname} · {review.rating}/5" if AMAZON_MODE else f"{review.nickname} · {review.rating} 星",
+                "title": t("review.title", nickname=review.nickname, rating=review.rating),
                 "snippet": review.content,
                 "score": None,
                 "updatedAt": None,
@@ -365,9 +366,9 @@ def evidence_payload(detail: ProductDetail) -> list[dict[str, Any]]:
 
 def money(amount: float, display: str | None = None) -> dict[str, Any]:
     return {
-        "currency": "USD" if AMAZON_MODE else "CNY",
+        "currency": PROFILE.currency,
         "amountMinor": int(round(amount * 100)),
-        "display": display or (f"${amount:,.2f}" if AMAZON_MODE else f"¥{amount:g}"),
+        "display": display or format_money(amount),
     }
 
 

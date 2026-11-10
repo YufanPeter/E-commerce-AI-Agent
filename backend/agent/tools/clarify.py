@@ -10,14 +10,7 @@ from typing import Any
 
 from agent.session import AgentSession
 from agent.tools.base import ToolResult
-
-
-_CLARIFY_TEXT = (
-    "为了帮你更精准地推荐，可以补充一下：\n"
-    "1. 想看哪个品类？（美妆护肤 / 数码电子 / 服饰运动 / 食品饮料）\n"
-    "2. 预算大概多少？\n"
-    "3. 用途或偏好？（例如：敏感肌、跑步、办公便携 等）"
-)
+from i18n import t
 
 
 class ClarifyTool:
@@ -32,6 +25,6 @@ class ClarifyTool:
         return ToolResult(
             tool_name=self.name,
             payload={"query": query, "reason": "query too vague"},
-            narrative_override=_CLARIFY_TEXT,
+            narrative_override=t("clarify.prompt"),
             needs_composer=False,
         )

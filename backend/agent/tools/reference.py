@@ -3,7 +3,7 @@ from __future__ import annotations
 """Lightweight reference parsing for conversational tool targets."""
 
 import re
-from catalog_config import AMAZON_MODE
+from i18n import is_english
 
 
 _CN_NUM = {
@@ -87,7 +87,7 @@ def resolve_indices(query: str, hit_count: int, focus_index: int | None = None) 
         return []
 
     text = query or ""
-    if AMAZON_MODE and not re.search(r"[\u4e00-\u9fff]", text):
+    if is_english() and not re.search(r"[\u4e00-\u9fff]", text):
         words = {"first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5}
         relative = re.search(r"\b(previous|next)\s+(?:one|item|product)\b", text, re.I)
         if relative and focus_index is not None:

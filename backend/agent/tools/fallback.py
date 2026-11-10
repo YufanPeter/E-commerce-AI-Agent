@@ -6,12 +6,7 @@ from typing import Any
 
 from agent.session import AgentSession
 from agent.tools.base import ToolResult
-
-
-_FALLBACK_TEXT = (
-    "抱歉，我是电商导购助手，专门帮你挑选商品。"
-    "你可以告诉我想买的品类、预算或使用场景，我会给出推荐～"
-)
+from i18n import t
 
 
 class FallbackTool:
@@ -26,7 +21,7 @@ class FallbackTool:
         return ToolResult(
             tool_name=self.name,
             payload={"query": query, "reason": "out of scope"},
-            narrative_override=_FALLBACK_TEXT,
+            narrative_override=t("fallback.prompt"),
             needs_composer=False,
         )
 

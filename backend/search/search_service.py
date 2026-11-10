@@ -825,9 +825,9 @@ def _aggregate_reranked_by_product(reranked: list[RerankedChunk]) -> list[Produc
 @lru_cache(maxsize=1)
 def get_search_service() -> SearchService:
     """Return the process-wide service; call once during FastAPI startup to warm it."""
-    from catalog_config import AMAZON_MODE
+    from catalog_config import PROFILE
 
-    if AMAZON_MODE:
+    if PROFILE.search_backend == "catalog":
         from search.amazon_search import AmazonSearchService
 
         return AmazonSearchService()

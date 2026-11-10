@@ -39,7 +39,8 @@ from agent.session import AgentSession
 from agent.tools.base import ToolResult
 from agent.tools.resolve import enrich_candidates, focus_index_in, resolve_one
 from agent.tools.reference import resolve_by_name, resolve_indices
-from catalog_config import AMAZON_MODE
+from catalog_config import PROFILE
+from i18n import is_english, t
 from store.product_store import ProductDetail, ProductReview, ProductStore, price_display
 
 
@@ -175,7 +176,7 @@ class ProductDetailTool:
                 for i in name_matches[:3]
             ]
             # Resolve by ordinal, unique name, then semantic matching over catalog fields.
-            picked = None if AMAZON_MODE else resolve_one(query, candidates)
+            picked = resolve_one(query, candidates) if PROFILE.capabilities.llm_target_resolution else None
             if picked is not None:
                 return str(candidates[picked]["product_id"]), None, query
             # Retain the clarification subset and requested focus for the next turn.
@@ -250,7 +251,7 @@ class ProductDetailTool:
         focus: str,
         limit: int,
     ) -> list[dict[str, Any]]:
-        if AMAZON_MODE and self._evidence_retriever is None:
+        if not PROFILE.capabilities.vector_evidence and self._evidence_retriever is None:
             return []
         try:
             retriever = self._evidence_retriever
@@ -295,7 +296,7 @@ class ProductDetailTool:
 
 
 def _detect_focus_aspect(query: str) -> str:
-    if AMAZON_MODE:
+    if is_english():
         text = query.casefold()
         if re.search(r"\b(negative reviews?|drawbacks?|complaints?)\b", text):
             return "negative_reviews"
@@ -429,7 +430,7 @@ def _reviews_for_focus(reviews: list[ProductReview], focus: str) -> list[Product
 def _review_evidence(product_id: str, review: ProductReview) -> dict[str, Any]:
     return {
         "source_type": "user_review",
-        "title": f"{review.nickname} · {review.rating}/5" if AMAZON_MODE else f"{review.nickname} · {review.rating} 星",
+        "title": t("review.title", nickname=review.nickname, rating=review.rating),
         "text": review.content,
         "score": None,
         "metadata": {
