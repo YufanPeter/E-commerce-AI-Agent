@@ -6,11 +6,21 @@ enum Sender: String, Codable {
 }
 
 enum MessageState: String, Codable {
-    case understanding = "理解中"
-    case retrieving = "检索中"
-    case generating = "生成中"
+    case understanding = "Understanding…"
+    case retrieving = "Searching…"
+    case generating = "Writing…"
     case ready
     case failed
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let value = try container.decode(String.self)
+        let old: [String: Self] = ["理解中": .understanding, "检索中": .retrieving, "生成中": .generating]
+        guard let state = Self(rawValue: value) ?? old[value] else {
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Unknown chat state")
+        }
+        self = state
+    }
 }
 
 /// 导购给出预算时，后端随 tool_result 下发的「预算匹配」信息：预算内有几个规格、最便宜的是哪个。
@@ -25,9 +35,9 @@ struct ProductBudgetHint: Hashable, Codable {
     /// 卡片上的一句提示：「预算内 2 个规格」/「全部规格都在预算内」/「仅基础款在预算内」。
     var caption: String? {
         guard maxPrice != nil || minPrice != nil else { return nil }
-        if skusWithinBudget <= 0 { return "暂无预算内规格" }
-        if skuCount > 1 && skusWithinBudget == skuCount { return "全部规格都在预算内" }
-        if skuCount > 1 { return "预算内 \(skusWithinBudget) 个规格" }
+        if skusWithinBudget <= 0 { return "No options within budget" }
+        if skuCount > 1 && skusWithinBudget == skuCount { return "All options within budget" }
+        if skuCount > 1 { return "\(skusWithinBudget) options within budget" }
         return nil
     }
 }
@@ -47,6 +57,7 @@ struct Product: Identifiable, Hashable, Codable {
     var budgetHint: ProductBudgetHint? = nil
     /// 商品问答，详情页"问问导购"用。旧对话里存的商品没有这个字段。
     var faqs: [ProductFAQ]? = nil
+    var referenceOnly: Bool? = nil
 
     init(
         id: String = UUID().uuidString,
@@ -129,7 +140,9 @@ struct Product: Identifiable, Hashable, Codable {
 
     static func numericPrice(from display: String) -> Double {
         let cleaned = display
+            .replacingOccurrences(of: "$", with: "")
             .replacingOccurrences(of: "¥", with: "")
+            .replacingOccurrences(of: " (reference)", with: "")
             .replacingOccurrences(of: ",", with: "")
             .replacingOccurrences(of: "起", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -138,47 +151,47 @@ struct Product: Identifiable, Hashable, Codable {
 
     static let samples: [Product] = [
         Product(
-            title: "温和氨基酸控油洗面奶",
-            price: "¥129",
-            reason: "适合油皮与混合肌，清洁力足够但洗后不紧绷。",
-            details: "无酒精配方，搭配锌 PCA 控油成分，适合日常早晚清洁。",
-            tags: ["油皮友好", "氨基酸", "无酒精"],
+            title: "Gentle foaming face wash",
+            price: "$12.99",
+            reason: "A gentle cleanser for oily or combination skin.",
+            details: "Alcohol-free formula with zinc PCA for daily use.",
+            tags: ["Oily skin", "Amino acids", "Alcohol-free"],
             specifications: [
-                ProductSpecification(name: "容量", options: ["120g", "180g"]),
-                ProductSpecification(name: "套装", options: ["单支", "2 支装"])
+                ProductSpecification(name: "Volume", options: ["120g", "180g"]),
+                ProductSpecification(name: "Pack size", options: ["Single tube", "Two-pack"])
             ]
         ),
         Product(
-            title: "轻量主动降噪蓝牙耳机",
-            price: "¥189",
-            reason: "预算 200 元内，续航和通勤降噪表现均衡。",
-            details: "单次 7 小时续航，支持透明模式和低延迟游戏模式。",
-            tags: ["200 元内", "降噪", "通勤"],
+            title: "Lightweight noise-canceling earbuds",
+            price: "$49.99",
+            reason: "Balances battery life and noise cancellation for commuting.",
+            details: "Up to seven hours per charge, with transparency and low-latency modes.",
+            tags: ["Under $50", "Noise canceling", "Commuting"],
             specifications: [
-                ProductSpecification(name: "颜色", options: ["曜石黑", "云雾白", "海盐蓝"]),
-                ProductSpecification(name: "版本", options: ["标准版", "长续航版"])
+                ProductSpecification(name: "Color", options: ["Black", "White", "Blue"]),
+                ProductSpecification(name: "Edition", options: ["Standard", "Extended battery"])
             ]
         ),
         Product(
-            title: "云感缓震轻量跑鞋",
-            price: "¥299",
-            reason: "鞋面透气，单只重量低，适合 5-10 公里慢跑。",
-            details: "中底回弹明显，后跟稳定片能降低轻度外翻风险。",
-            tags: ["轻量", "缓震", "跑步"],
+            title: "Lightweight cushioned running shoes",
+            price: "$89.99",
+            reason: "A breathable upper for shorter runs.",
+            details: "Responsive cushioning and a supportive heel.",
+            tags: ["Lightweight", "Cushioning", "Running"],
             specifications: [
-                ProductSpecification(name: "尺码", options: ["39", "40", "41", "42", "43"]),
-                ProductSpecification(name: "颜色", options: ["雾灰", "曜石黑", "荧光绿"])
+                ProductSpecification(name: "Size", options: ["39", "40", "41", "42", "43"]),
+                ProductSpecification(name: "Color", options: ["Gray", "Black", "Lime"])
             ]
         ),
         Product(
-            title: "清爽无酒精防晒乳 SPF50+",
-            price: "¥159",
-            reason: "肤感清爽，不含酒精，适合敏感肌日常通勤。",
-            details: "成膜快，后续上妆不易搓泥，户外建议 2-3 小时补涂。",
-            tags: ["无酒精", "SPF50+", "敏感肌"],
+            title: "Alcohol-free SPF 50+ sunscreen",
+            price: "$15.99",
+            reason: "A light, alcohol-free sunscreen for daily use.",
+            details: "Applies quickly and layers under makeup.",
+            tags: ["Alcohol-free", "SPF50+", "Sensitive skin"],
             specifications: [
-                ProductSpecification(name: "容量", options: ["50ml", "90ml"]),
-                ProductSpecification(name: "肤感", options: ["清爽型", "保湿型"])
+                ProductSpecification(name: "Volume", options: ["50ml", "90ml"]),
+                ProductSpecification(name: "Finish", options: ["Light", "Moisturizing"])
             ]
         )
     ]
@@ -418,6 +431,7 @@ extension StructuredContent {
 /// Shopping recommendation copy with redundant details such as prices removed.
 enum RecommendationCopy {
     private static let pricePatterns = [
+        #"\$\s*[\d,]+(?:\.\d+)?(?:\s*\(reference\))?"#,
         #"售价\s*[¥￥]?\s*[\d,]+(?:\.\d+)?起?"#,
         #"[（(]\s*[\d,]+(?:\.\d+)?\s*元\s*[）)]"#,
         #"[¥￥]\s*[\d,]+(?:\.\d+)?起?"#,
@@ -505,7 +519,7 @@ struct Conversation: Identifiable, Codable {
     init(
         id: UUID = UUID(),
         sessionID: String = UUID().uuidString,
-        title: String = "新对话",
+        title: String = "New chat",
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
         messages: [ChatMessage] = []
@@ -530,23 +544,23 @@ struct Conversation: Identifiable, Codable {
     /// History-list subtitle containing relative time and, optionally, the product count.
     var subtitle: String {
         let time = Conversation.relativeLabel(for: updatedAt)
-        return productCount > 0 ? "\(time) · \(productCount) 个商品" : time
+        return productCount > 0 ? "\(time) · \(productCount) products" : time
     }
 
     private static func relativeLabel(for date: Date) -> String {
         let calendar = Calendar.current
         let timeFormatter = DateFormatter()
-        timeFormatter.locale = Locale(identifier: "zh_CN")
+        timeFormatter.locale = Locale(identifier: "en_US")
         timeFormatter.dateFormat = "HH:mm"
         if calendar.isDateInToday(date) {
-            return "今天 \(timeFormatter.string(from: date))"
+            return "Today \(timeFormatter.string(from: date))"
         }
         if calendar.isDateInYesterday(date) {
-            return "昨天 \(timeFormatter.string(from: date))"
+            return "Yesterday \(timeFormatter.string(from: date))"
         }
         let dayFormatter = DateFormatter()
-        dayFormatter.locale = Locale(identifier: "zh_CN")
-        dayFormatter.dateFormat = "M月d日 HH:mm"
+        dayFormatter.locale = Locale(identifier: "en_US")
+        dayFormatter.dateFormat = "MMM d, h:mm a"
         return dayFormatter.string(from: date)
     }
 }

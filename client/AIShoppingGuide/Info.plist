@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>用于语音输入商品需求，识别后会填入导购对话输入框。</string>
+	<string>Use the microphone to speak a shopping request.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>用于将你的语音购物需求转成文字，再交给 AI 导购处理。</string>
+	<string>Transcribe spoken shopping requests into the chat input.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>用于拍照找货：拍摄商品照片后由 AI 识别并检索相似商品。</string>
+	<string>Take a product photo for image search when available.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>用于从相册选择商品图片，由 AI 识别并检索相似商品。</string>
+	<string>Select a product photo for image search when available.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<!-- 局域网真机调试：允许明文 HTTP 连接到后端（如 http://192.168.x.x:8000）。

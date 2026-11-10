@@ -19,6 +19,7 @@ from agent.contextual_search import ContextualSearchPlan, detect_contextual_plan
 from agent.session import AgentSession
 from agent.tools.base import ToolResult
 from agent.tools.evidence import card_evidence
+from catalog_config import AMAZON_MODE
 from search.query_decomposer import SubRequest, decompose_query
 from search.query_understanding import ParsedQuery
 from search.search_service import ProductHit, SearchResult, SearchService
@@ -184,7 +185,7 @@ class RecommendTool:
                 "max": rng.max_price,
                 "sku_count": rng.sku_count,
             }
-            if budget_max is None and budget_min is None:
+            if (AMAZON_MODE and rng.is_reference) or (budget_max is None and budget_min is None):
                 continue
             card["budget"] = self._budget_fit(card["product_id"], budget_min, budget_max)
 
@@ -326,7 +327,9 @@ class RecommendTool:
             **search_kwargs,
         )
 
-        hits = self._visual_rerank(result.hits, image, top_k, image_embedding=image_embedding)
+        hits = result.hits[:top_k] if AMAZON_MODE else self._visual_rerank(
+            result.hits, image, top_k, image_embedding=image_embedding
+        )
 
         session.remember_search(
             result.parsed.to_dict(),

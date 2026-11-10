@@ -48,14 +48,14 @@ struct ComparisonView: View {
                 } else if let errorText {
                     messageCard(errorText, isError: true)
                 } else {
-                    messageCard("从上方下拉菜单选择两件商品，点「开始对比」～")
+                    messageCard("Choose two products above, then tap Compare.")
                 }
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 18)
         }
         .background(AppTheme.background)
-        .navigationTitle("商品对比")
+        .navigationTitle("Product comparison")
         .navigationBarTitleDisplayMode(.inline)
     }
 
@@ -66,7 +66,7 @@ struct ComparisonView: View {
             slotPickers
 
             Button(action: { Task { await loadComparison() } }) {
-                Text(isLoading ? "对比中…" : "开始对比")
+                Text(isLoading ? "Comparing…" : "Compare")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.white)
                     .frame(maxWidth: .infinity)
@@ -85,18 +85,18 @@ struct ComparisonView: View {
 
     private var slotPickers: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("选择对比的两件商品")
+            Text("Choose two products")
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(AppTheme.textPrimary)
 
-            slotPicker(selection: $leftID, label: "商品 A")
-            slotPicker(selection: $rightID, label: "商品 B")
+            slotPicker(selection: $leftID, label: "Product A")
+            slotPicker(selection: $rightID, label: "Product B")
         }
     }
 
     private func slotPicker(selection: Binding<String?>, label: String) -> some View {
         let currentID = selection.wrappedValue
-        let currentTitle = candidates.first { $0.id == currentID }?.title ?? "请选择\(label)"
+        let currentTitle = candidates.first { $0.id == currentID }?.title ?? "Choose \(label)"
         return Menu {
             ForEach(candidates) { product in
                 Button {
@@ -136,7 +136,7 @@ struct ComparisonView: View {
     private var loadingState: some View {
         HStack(spacing: 10) {
             ProgressView().tint(AppTheme.primary)
-            Text("正在对比…").font(.subheadline).foregroundStyle(AppTheme.textSecondary)
+            Text("Comparing…").font(.subheadline).foregroundStyle(AppTheme.textSecondary)
         }
         .frame(maxWidth: .infinity, alignment: .center)
         .padding(.vertical, 40)
@@ -144,7 +144,7 @@ struct ComparisonView: View {
 
     private func recommendationCard(_ text: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label("选购建议", systemImage: "checkmark.seal")
+            Label("Buying advice", systemImage: "checkmark.seal")
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(AppTheme.primary)
             Text(text)
@@ -167,7 +167,7 @@ struct ComparisonView: View {
 
     private func loadComparison() async {
         guard let l = leftID, let r = rightID, l != r else {
-            errorText = "请选择两件不同的商品。"
+            errorText = "Choose two different products."
             return
         }
         isLoading = true
@@ -179,7 +179,7 @@ struct ComparisonView: View {
             comparison = try await productService.compareProducts(request)
         } catch {
             comparison = nil
-            errorText = "对比加载失败，请稍后重试。"
+            errorText = "Could not load the comparison. Try again."
         }
     }
 }

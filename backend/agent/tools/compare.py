@@ -30,6 +30,7 @@ from agent.session import AgentSession
 from agent.tools.base import ToolResult
 from agent.tools.resolve import resolve_many
 from agent.tools.reference import resolve_by_name, resolve_indices
+from catalog_config import AMAZON_MODE
 from agent.tools.resolve import enrich_candidates, focus_index_in
 from store.product_store import ProductStore
 
@@ -82,7 +83,7 @@ class CompareTool:
             # 规则定位不到 2 款 → 用共享分层 resolver 的 LLM 语义兼底再试一次
             # （如「对比华为耳机和小米手机」这类口语品类词）。只有凑足 2 款才采纳，
             # 避免把“只点名了一款”的场景幻出第二款（那是故意的反问）。
-            if len(product_ids) < 2:
+            if len(product_ids) < 2 and not AMAZON_MODE:
                 llm_ids = self._resolve_targets_llm(query, last_hits)
                 if len(llm_ids) >= 2:
                     product_ids = llm_ids
@@ -151,6 +152,11 @@ class CompareTool:
         Explicit names take priority over generic demonstratives, followed by ordinals.
         If no target is stated, use the first two products.
         """
+        if AMAZON_MODE:
+            indices = resolve_indices(query, len(last_hits), focus_index)
+            if not indices:
+                indices = resolve_by_name(query, last_hits)
+            return [last_hits[i]["product_id"] for i in indices[:_MAX_COMPARE]]
         strict_named = _resolve_context_names(query, last_hits)
         # 名称匹配用补齐了 SKU 规格值的候选：「黑色那款和白色那款对比」也能定位。
         enriched_hits = enrich_candidates(last_hits, self._store)

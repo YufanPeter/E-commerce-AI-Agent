@@ -60,7 +60,14 @@ struct ProductDetailView: View {
             }
 
             detailBottomScrim
-            stickyAddToCartButton
+            if product.referenceOnly == true {
+                Text("Reference price · Availability unknown")
+                    .font(.subheadline)
+                    .foregroundStyle(AppTheme.textSecondary)
+                    .padding(.bottom, stickyButtonBottomPadding + 12)
+            } else {
+                stickyAddToCartButton
+            }
         }
         .sheet(isPresented: $showSpecificationSheet) {
             AddToCartSheet(
@@ -74,7 +81,7 @@ struct ProductDetailView: View {
             .presentationCornerRadius(28)
         }
         .background(AppTheme.background)
-        .navigationTitle("商品详情")
+        .navigationTitle("Product details")
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(AppTheme.background, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
@@ -87,7 +94,7 @@ struct ProductDetailView: View {
             HStack(spacing: 8) {
                 Image(systemName: "cart.badge.plus")
                     .font(.headline.weight(.semibold))
-                Text("加入购物车")
+                Text("Add to cart")
                     .font(.headline)
             }
             .foregroundStyle(.white)
@@ -136,7 +143,7 @@ struct ProductDetailView: View {
             productInfo
 
             if !product.reason.isEmpty {
-                productTextBlock(title: "推荐依据", text: product.reason, icon: "lightbulb")
+                productTextBlock(title: "Why this product", text: product.reason, icon: "lightbulb")
             }
 
             if !product.tags.isEmpty {
@@ -244,7 +251,7 @@ private struct ProductAskSection: View {
                         }
                     }
                     .frame(width: 16, height: 16)
-                    Text(speaker.state == .speaking ? "停止播放" : "听亮点")
+                    Text(speaker.state == .speaking ? "Stop audio" : "Listen to highlights")
                         .font(.subheadline.weight(.medium))
                 }
                 .foregroundStyle(AppTheme.primary)
@@ -256,7 +263,7 @@ private struct ProductAskSection: View {
             .disabled(speaker.state == .loading)
 
             if !faqs.isEmpty {
-                Text("常见问题")
+                Text("Frequently asked questions")
                     .font(.footnote.weight(.semibold))
                     .foregroundStyle(AppTheme.textSecondary)
                     .padding(.top, 2)
@@ -341,7 +348,7 @@ private final class HighlightsSpeaker: NSObject, ObservableObject, AVSpeechSynth
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio, options: .duckOthers)
         try? AVAudioSession.sharedInstance().setActive(true)
         let utterance = AVSpeechUtterance(string: text)
-        utterance.voice = AVSpeechSynthesisVoice(language: "zh-CN")
+        utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
         state = .speaking
         synthesizer.speak(utterance)
     }
@@ -409,10 +416,10 @@ private struct ProductReviewsSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .firstTextBaseline) {
-                Text("用户评价")
+                Text("Customer reviews")
                     .font(.headline)
                     .foregroundStyle(AppTheme.textPrimary)
-                Text("\(filteredAndSortedReviews.count) / \(reviews.count) 条")
+                Text("\(filteredAndSortedReviews.count) of \(reviews.count)")
                     .font(.caption.weight(.medium))
                     .foregroundStyle(AppTheme.textSecondary)
                 Spacer(minLength: 12)
@@ -421,7 +428,7 @@ private struct ProductReviewsSection: View {
             }
 
             if visibleReviews.isEmpty {
-                Text("当前筛选下暂无评价")
+                Text("No reviews match this filter.")
                     .font(.subheadline)
                     .foregroundStyle(AppTheme.textSecondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -444,7 +451,7 @@ private struct ProductReviewsSection: View {
                     }
                 } label: {
                     HStack(spacing: 5) {
-                        Text(isExpanded ? "收起评价" : "查看更多 \(hiddenReviewCount) 条")
+                        Text(isExpanded ? "Show fewer reviews" : "Show \(hiddenReviewCount) more reviews")
                         Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
                             .font(.caption.weight(.semibold))
                     }
@@ -492,7 +499,7 @@ private struct ProductReviewsSection: View {
             .frame(width: 34, height: 34)
             .background(AppTheme.secondary.opacity(0.64), in: Capsule())
             .overlay(Capsule().stroke(AppTheme.border, lineWidth: 1))
-            .accessibilityLabel("评价排序")
+            .accessibilityLabel("Sort reviews")
         }
         .buttonStyle(.plain)
     }
@@ -503,9 +510,9 @@ private struct ProductReviewsSection: View {
                 selectedRating = nil
             } label: {
                 if selectedRating == nil {
-                    Label("全部星级", systemImage: "checkmark")
+                    Label("All ratings", systemImage: "checkmark")
                 } else {
-                    Text("全部星级")
+                    Text("All ratings")
                 }
             }
 
@@ -514,9 +521,9 @@ private struct ProductReviewsSection: View {
                     selectedRating = rating
                 } label: {
                     if selectedRating == rating {
-                        Label("\(rating) 星", systemImage: "checkmark")
+                        Label("\(rating) stars", systemImage: "checkmark")
                     } else {
-                        Text("\(rating) 星")
+                        Text("\(rating) stars")
                     }
                 }
             }
@@ -527,7 +534,7 @@ private struct ProductReviewsSection: View {
             .frame(width: 34, height: 34)
             .background(AppTheme.secondary.opacity(0.64), in: Capsule())
             .overlay(Capsule().stroke(AppTheme.border, lineWidth: 1))
-            .accessibilityLabel("评价星级筛选")
+            .accessibilityLabel("Filter by rating")
         }
         .buttonStyle(.plain)
     }
@@ -542,9 +549,9 @@ private enum ReviewSortMode: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .defaultOrder: return "默认排序"
-        case .ratingHighToLow: return "评分高到低"
-        case .ratingLowToHigh: return "评分低到高"
+        case .defaultOrder: return "Default order"
+        case .ratingHighToLow: return "Highest rated"
+        case .ratingLowToHigh: return "Lowest rated"
         }
     }
 }
@@ -584,7 +591,7 @@ private struct RatingStars: View {
                     .foregroundStyle(index <= rating ? AppTheme.primary : AppTheme.textSecondary.opacity(0.45))
             }
         }
-        .accessibilityLabel("\(rating) 星")
+        .accessibilityLabel("\(rating) stars")
     }
 }
 
@@ -609,7 +616,7 @@ struct AddToCartSheet: View {
             .background(AppTheme.background)
             .safeAreaInset(edge: .bottom) {
                 Button(action: onConfirm) {
-                    Text("确认加入购物车")
+                    Text("Confirm add to cart")
                         .font(.headline)
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
@@ -622,7 +629,7 @@ struct AddToCartSheet: View {
                 .padding(.bottom, 12)
                 .background(.regularMaterial)
             }
-            .navigationTitle("选择规格")
+            .navigationTitle("Choose options")
             .navigationBarTitleDisplayMode(.inline)
         }
     }
@@ -677,7 +684,7 @@ struct AddToCartSheet: View {
 
     private var quantityControl: some View {
         HStack(alignment: .center) {
-            Text("加购数量")
+            Text("Quantity")
                 .font(.headline)
             Spacer()
             QuantityControl(quantity: $quantity)
@@ -731,7 +738,7 @@ private struct AddToCartSuccessToast: View {
                 .foregroundStyle(AppTheme.success)
 
             VStack(alignment: .leading, spacing: 3) {
-                Text("已加入购物车")
+                Text("Added to cart")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(AppTheme.textPrimary)
                 Text(detailText)

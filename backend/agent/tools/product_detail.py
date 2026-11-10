@@ -32,12 +32,14 @@ TODO（待实现）：
 """
 
 import logging
+import re
 from typing import Any
 
 from agent.session import AgentSession
 from agent.tools.base import ToolResult
 from agent.tools.resolve import enrich_candidates, focus_index_in, resolve_one
 from agent.tools.reference import resolve_by_name, resolve_indices
+from catalog_config import AMAZON_MODE
 from store.product_store import ProductDetail, ProductReview, ProductStore, price_display
 
 
@@ -173,7 +175,7 @@ class ProductDetailTool:
                 for i in name_matches[:3]
             ]
             # Resolve by ordinal, unique name, then semantic matching over catalog fields.
-            picked = resolve_one(query, candidates)
+            picked = None if AMAZON_MODE else resolve_one(query, candidates)
             if picked is not None:
                 return str(candidates[picked]["product_id"]), None, query
             # Retain the clarification subset and requested focus for the next turn.
@@ -248,6 +250,8 @@ class ProductDetailTool:
         focus: str,
         limit: int,
     ) -> list[dict[str, Any]]:
+        if AMAZON_MODE and self._evidence_retriever is None:
+            return []
         try:
             retriever = self._evidence_retriever
             if retriever is None:
@@ -291,6 +295,12 @@ class ProductDetailTool:
 
 
 def _detect_focus_aspect(query: str) -> str:
+    if AMAZON_MODE:
+        text = query.casefold()
+        if re.search(r"\b(negative reviews?|drawbacks?|complaints?)\b", text):
+            return "negative_reviews"
+        if re.search(r"\b(reviews?|customer feedback|ratings?)\b", text):
+            return "reviews"
     text = query or ""
     for focus, keywords in _FOCUS_KEYWORDS:
         if any(keyword in text for keyword in keywords):
@@ -419,7 +429,7 @@ def _reviews_for_focus(reviews: list[ProductReview], focus: str) -> list[Product
 def _review_evidence(product_id: str, review: ProductReview) -> dict[str, Any]:
     return {
         "source_type": "user_review",
-        "title": f"{review.nickname} · {review.rating} 星",
+        "title": f"{review.nickname} · {review.rating}/5" if AMAZON_MODE else f"{review.nickname} · {review.rating} 星",
         "text": review.content,
         "score": None,
         "metadata": {

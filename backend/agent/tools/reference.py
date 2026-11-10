@@ -3,6 +3,7 @@ from __future__ import annotations
 """Lightweight reference parsing for conversational tool targets."""
 
 import re
+from catalog_config import AMAZON_MODE
 
 
 _CN_NUM = {
@@ -86,6 +87,26 @@ def resolve_indices(query: str, hit_count: int, focus_index: int | None = None) 
         return []
 
     text = query or ""
+    if AMAZON_MODE and not re.search(r"[\u4e00-\u9fff]", text):
+        words = {"first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5}
+        relative = re.search(r"\b(previous|next)\s+(?:one|item|product)\b", text, re.I)
+        if relative and focus_index is not None:
+            index = focus_index + (-1 if relative[1].lower() == "previous" else 1)
+            return [index] if 0 <= index < hit_count else []
+        matches = re.finditer(
+            r"\b(first|second|third|fourth|fifth|last)\b|\b(?:option|item|number|product)\s+(\d+)\b|#(\d+)\b|\b(\d+)(?:st|nd|rd|th)\b",
+            text, re.I,
+        )
+        indices = [
+            (hit_count if m[1].lower() == "last" else words[m[1].lower()]) - 1 if m[1]
+            else int(m[2] or m[3] or m[4]) - 1
+            for m in matches
+        ]
+        if not indices and text.strip().isdigit():
+            indices = [int(text.strip()) - 1]
+        if not indices and re.search(r"\b(?:both|these two|top two)\b", text, re.I):
+            indices = list(range(min(2, hit_count)))
+        return list(dict.fromkeys(i for i in indices if 0 <= i < hit_count))
     if any(word in text for word in ("全部", "所有", "都对比", "都看看")):
         return list(range(hit_count))
 

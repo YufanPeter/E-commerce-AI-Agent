@@ -27,6 +27,8 @@ MAX_CHARS = 110
 def _body(chunk: Any) -> str:
     """去掉建索引时加的商品前缀，只留正文。"""
     document = getattr(chunk, "document", "") or ""
+    if (getattr(chunk, "metadata", {}) or {}).get("dataset") == "amazon_reviews_2023":
+        return document.strip()
     for marker in ("回答：", "内容："):
         if marker in document:
             return document.split(marker, 1)[1].strip()
@@ -83,7 +85,10 @@ def card_evidence(hit: Any, query: str) -> dict[str, Any] | None:
             if risk is None and not any(word in body for word in _SERVICE_COMPLAINT_WORDS):
                 risk = _relevant_excerpt(body, query)
             continue
-        point = {"source": _SOURCE_LABELS[source], "text": _relevant_excerpt(body, query)}
+        if (getattr(chunk, "metadata", {}) or {}).get("dataset") == "amazon_reviews_2023":
+            point = {"source": "Amazon listing", "text": body[:240]}
+        else:
+            point = {"source": _SOURCE_LABELS[source], "text": _relevant_excerpt(body, query)}
         if source in seen_sources:
             backups.append(point)
         elif len(points) < MAX_POINTS:

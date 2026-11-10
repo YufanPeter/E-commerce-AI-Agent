@@ -320,6 +320,23 @@ def build_comparison(
     if len(details) < 2:
         raise ValueError("A comparison requires at least two products")
 
+    if all(getattr(detail, "catalog_source", None) for detail in details):
+        sources = [detail.catalog_source or {} for detail in details]
+        prices = [detail.price_range.min_price for detail in details]
+        best = prices.index(min(prices)) if prices.count(min(prices)) == 1 else None
+        return {
+            "title": "Product comparison",
+            "products": [_product_header(detail, None, "", []) for detail in details],
+            "rows": [
+                {"label": "Reference price", "values": [price_display(d.price_range) for d in details], "highlight": best},
+                {"label": "Brand", "values": [d.brand for d in details], "highlight": None},
+                {"label": "Catalog category", "values": [d.sub_category for d in details], "highlight": None},
+                {"label": "Historical rating", "values": [f"{s['average_rating']:g}/5" for s in sources], "highlight": None},
+                {"label": "Rating count", "values": [f"{s['rating_number']:,}" for s in sources], "highlight": None},
+            ],
+            "recommendation": "",
+        }
+
     index = get_compare_index()
     dimensions = _dimensions_for(details)
     picked = select_skus_for(

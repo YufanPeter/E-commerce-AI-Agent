@@ -61,6 +61,22 @@ The LLM interprets intent and writes the response. Deterministic tools perform s
 
 ## Quick start
 
+### English Amazon catalog (development)
+
+Place the local `amazon_dense_10k/` dataset beside this README. Install the backend dependencies, then start the English catalog:
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r backend/requirements.txt
+bash scripts/start_amazon.sh
+```
+
+Open `client/AIShoppingGuide.xcodeproj` and run the iOS app with the local backend. Try **“Find smartwatches under $80, no watch bands”**, then **“Under $50”** and **“Compare the first and second.”** Product search is also available at `GET /products/search?q=...&limit=5`.
+
+This mode uses an offline English lexical retrieval baseline and historical **USD reference prices**. The snapshot does not provide verified purchasable variants or current stock. It runs in a separate SQLite database and never overwrites the demo database or an existing Amazon snapshot. See [backend setup](backend/README.md#english-amazon-catalog) for optional model features and limitations.
+
+### Legacy demo setup
+
 ```bash
 git clone https://github.com/YufanPeter/E-commerce-AI-Agent.git
 cd E-commerce-AI-Agent

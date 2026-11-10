@@ -2,9 +2,9 @@ import SwiftUI
 import UIKit
 
 enum AppTab: String, CaseIterable {
-    case guide = "导购"
-    case cart = "购物车"
-    case preference = "偏好"
+    case guide = "Shop"
+    case cart = "Cart"
+    case preference = "Preferences"
 
     var icon: String {
         switch self {
@@ -196,10 +196,10 @@ struct BackendStatusBanner: View {
                         .foregroundStyle(AppTheme.error)
 
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("后端服务未连接")
+                        Text("Backend is disconnected")
                             .font(.system(size: 14, weight: .semibold))
                             .foregroundStyle(AppTheme.textPrimary)
-                        Text("请在电脑上运行 ./scripts/dev.sh 启动后端（支持热重载）。")
+                        Text("Start the Amazon backend on your computer, then try again.")
                             .font(.system(size: 12))
                             .foregroundStyle(AppTheme.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -215,7 +215,7 @@ struct BackendStatusBanner: View {
                             isRechecking = false
                         }
                     } label: {
-                        Text(isRechecking ? "检测中…" : "重试连接")
+                        Text(isRechecking ? "Checking…" : "Reconnect")
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(.white)
                             .padding(.horizontal, 12)

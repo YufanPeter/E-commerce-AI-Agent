@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
@@ -18,6 +19,7 @@ from agent.memory_extractor import _STYLE_ALIASES, extract_preference_updates, e
 from agent.memory_inference import infer_suggestions
 from agent.memory_llm import ExtractedMemory, extract_with_llm, might_disclose
 from agent.tools.refine import parse_more_request
+from catalog_config import AMAZON_MODE
 from search.query_understanding import expand_brands
 from store.user_memory_store import (
     ACTIVE,
@@ -66,6 +68,20 @@ _EFFECTS = {
     "note": "解说时结合",
 }
 
+if AMAZON_MODE:
+    _GROUPS = {
+        "budget": "Budget", "price_tier": "Budget", "brand_like": "Brands", "brand_avoid": "Brands",
+        "attribute": "About you", "avoid_term": "About you", "style": "Style",
+        "category": "Categories", "note": "Notes",
+    }
+    _GROUP_ORDER = ["About you", "Budget", "Brands", "Style", "Categories", "Notes"]
+    _TIER_LABELS = {"value": "Prefer value", "premium": "Prefer premium products"}
+    _SOURCE_LABELS = {"stated": "Stated in chat", "manual": "Added by you", "confirmed": "Confirmed by you", "inferred": "Inferred from activity"}
+    _EFFECTS = {
+        "brand_avoid": "Excluded from recommendations", "brand_like": "Preferred in ranking",
+        "budget": "Used as the default budget", "note": "Saved for reference",
+    }
+
 
 def llm_extract_enabled() -> bool:
     return os.getenv("MEMORY_LLM_EXTRACT", "1").strip().lower() not in {"0", "false", "no", "off"}
@@ -77,6 +93,8 @@ def llm_extract_enabled() -> bool:
 
 def _money_range(value: str) -> str:
     low, _, high = value.partition("-")
+    if AMAZON_MODE:
+        return f"${low} – ${high}" if low and high else (f"Up to ${high}" if high else f"At least ${low}")
     if low and high:
         return f"¥{low} – ¥{high}"
     if high:
@@ -86,6 +104,12 @@ def _money_range(value: str) -> str:
 
 def item_label(item: dict[str, Any]) -> str:
     kind, value, scope = item["kind"], item["value"], item.get("scope") or ""
+    if AMAZON_MODE:
+        if kind == "budget":
+            return f"{scope or 'Default'} budget: {_money_range(value)}"
+        if kind in {"brand_like", "brand_avoid", "avoid_term", "category"}:
+            prefix = {"brand_like": "Likes", "brand_avoid": "Avoids", "avoid_term": "Avoid", "category": "Often browses"}[kind]
+            return f"{prefix} {value}"
     if kind == "budget":
         return f"{scope or '常用'}预算 {_money_range(value)}"
     if kind == "price_tier":
@@ -107,7 +131,7 @@ def item_view(item: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": item["item_id"],
         "kind": item["kind"],
-        "group": _GROUPS.get(item["kind"], "其他"),
+        "group": _GROUPS.get(item["kind"], _GROUP_ORDER[-1]),
         "label": item_label(item),
         "value": item["value"],
         "scope": item.get("scope") or None,
@@ -126,12 +150,14 @@ def item_view(item: dict[str, Any]) -> dict[str, Any]:
 def _summary(items: list[dict[str, Any]]) -> str:
     if not items:
         return ""
-    ordered = sorted(items, key=lambda i: _GROUP_ORDER.index(_GROUPS.get(i["kind"], "其他")))
+    ordered = sorted(items, key=lambda i: _GROUP_ORDER.index(_GROUPS.get(i["kind"], _GROUP_ORDER[-1])))
     labels = [item_label(item) for item in ordered if item["kind"] != "note"][:4]
-    return "、".join(labels)
+    return (", " if AMAZON_MODE else "、").join(labels)
 
 
 _ACTIVITY_LABELS = {"search": "搜索", "view_detail": "看了", "compare": "对比了", "add_cart": "加购了", "remove_cart": "移出了", "checkout": "下单了"}
+if AMAZON_MODE:
+    _ACTIVITY_LABELS = {"search": "Searched", "view_detail": "Viewed", "compare": "Compared", "add_cart": "Added", "remove_cart": "Removed", "checkout": "Ordered"}
 
 
 def _activity(store: UserMemoryStore, user_id: str, limit: int = 8) -> list[dict[str, Any]]:
@@ -182,14 +208,15 @@ def recent_interests(store: UserMemoryStore, user_id: str, limit: int = 2) -> di
 
 
 def build_view(store: UserMemoryStore, user_id: str) -> dict[str, Any]:
-    refresh_inferred(store, user_id)
+    if not AMAZON_MODE:
+        refresh_inferred(store, user_id)
     preference = store.get_preference(user_id)
     rows = store.list_items(user_id)
     active = [row for row in rows if row["status"] == ACTIVE]
     suggested = [row for row in rows if row["status"] == SUGGESTED]
     groups = []
     for name in _GROUP_ORDER:
-        members = [item_view(row) for row in active if _GROUPS.get(row["kind"], "其他") == name]
+        members = [item_view(row) for row in active if _GROUPS.get(row["kind"], _GROUP_ORDER[-1]) == name]
         if members:
             groups.append({"name": name, "items": members})
     return {
@@ -252,6 +279,10 @@ def _apply_extracted(store: UserMemoryStore, user_id: str, memories: list[Extrac
 
 def process_utterance(store: UserMemoryStore, user_id: str, text: str, session_id: str | None) -> list[dict[str, Any]]:
     """规则抽取，同步执行，结果立即生效。"""
+    if AMAZON_MODE:
+        if not re.match(r"\s*(?:remember\b|i usually\b|my (?:usual )?budget is usually\b)", text, re.I):
+            return []
+        return _english_memory_update(store, user_id, text, session_id, source="stated")
     events: list[dict[str, Any]] = []
     for update in extract_preference_updates(text, user_id, session_id):
         event = store.apply_update(user_id, update)
@@ -276,9 +307,41 @@ def extract_in_background(store: UserMemoryStore, user_id: str, text: str, sessi
     _llm_pool.submit(_run)
 
 
+def _english_memory_update(
+    store: UserMemoryStore, user_id: str, text: str, session_id: str | None, source: str,
+) -> list[dict[str, Any]]:
+    clean = re.sub(r"^\s*remember(?: that)?\s+", "", text.strip(), flags=re.I).rstrip(".!?")
+    brand = re.fullmatch(r"i (?:usually |always )?(like|prefer|avoid|never buy) (.{1,55})", clean, re.I)
+    budget = re.fullmatch(
+        r"my (?:usual )?budget is (?:usually )?(?:between )?\$?(\d+(?:\.\d{1,2})?)(?:\s+(?:and|to)\s+\$?(\d+(?:\.\d{1,2})?))?",
+        clean, re.I,
+    )
+    if brand:
+        field = "brand_include" if brand[1].lower() in {"like", "prefer"} else "brand_exclude"
+        value: Any = brand[2].strip()
+    elif budget:
+        field = "budget_range"
+        value = {"budget_min": float(budget[1]) if budget[2] else None, "budget_max": float(budget[2] or budget[1])}
+        if value["budget_min"] is not None and value["budget_min"] > value["budget_max"]:
+            return []
+    elif source == "manual" and clean:
+        field = "preference_note"
+        existing = store.get_preference(user_id).preference_note
+        value = f"{existing}; {clean}" if existing else clean
+    else:
+        return []
+    event = store.apply_update(user_id, PreferenceUpdate(
+        field=field, value=value, message=f"Saved: {clean}", source=source, session_id=session_id, evidence=text,
+    ))
+    return [event] if event else []
+
+
 def tell(store: UserMemoryStore, user_id: str, text: str) -> dict[str, Any]:
     """用户在记忆页直接说一句话。规则 → 模型 → 都没听出结构就原样记成备注。"""
     clean = (text or "").strip()
+    if AMAZON_MODE:
+        events = _english_memory_update(store, user_id, clean, None, source="manual")
+        return {"updates": events, "message": "Memory saved." if events else "No change to saved memory."}
     if not clean:
         return {"updates": [], "message": "没听清，再说一次？"}
     before = {row["item_id"] for row in store.list_items(user_id)}
@@ -312,7 +375,8 @@ def confirm_suggestion(store: UserMemoryStore, user_id: str, item_id: str) -> di
 
 def _update_from_item(item: dict[str, Any]) -> PreferenceUpdate | None:
     kind, value, scope = item["kind"], item["value"], item.get("scope") or ""
-    common = {"message": f"已记住：{item_label(item)}", "source": "confirmed", "evidence": item.get("evidence")}
+    common = {"message": f"Saved: {item_label(item)}" if AMAZON_MODE else f"已记住：{item_label(item)}",
+              "source": "confirmed", "evidence": item.get("evidence")}
     if kind == "brand_like":
         return PreferenceUpdate(field="brand_include", value=value, **common)
     if kind == "brand_avoid":
@@ -455,6 +519,8 @@ def _mark_used(store: UserMemoryStore, user_id: str, signals: list[dict[str, Any
 
 def refresh_inferred(store: UserMemoryStore, user_id: str) -> None:
     """按最新行为重算建议：新出现的登记，信号消失的撤回，用户处理过的不再提。"""
+    if AMAZON_MODE:
+        return
     suggestions = infer_suggestions(store.recent_events(user_id))
     current = {
         MemoryKey(row["kind"], row.get("scope") or "", row.get("attr") or "", row["value"])

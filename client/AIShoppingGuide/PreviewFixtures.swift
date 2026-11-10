@@ -4,13 +4,13 @@ import Foundation
 enum PreviewFixtures {
     static let sunscreenJSON = """
     {
-        "opening": "为你推荐了3款口碑不错的高倍防晒好物",
+        "opening": "I found three sunscreen options.",
         "items": [
-            {"productId": "p_beauty_023", "description": "理肤泉特护清盈防晒乳：专为易敏肌设计，质地清爽控油"},
-            {"productId": "p_beauty_010", "description": "安热沙金灿倍护防晒乳：防水防汗，户外暴晒首选"},
-            {"productId": "p_beauty_006", "description": "欧莱雅多重防护隔离露：水感轻薄还带提亮，伪素颜很方便"}
+            {"productId": "p_beauty_023", "description": "La Roche-Posay: a lightweight option."},
+            {"productId": "p_beauty_010", "description": "Anessa: a water-resistant option."},
+            {"productId": "p_beauty_006", "description": "L'Oréal: a light everyday option."}
         ],
-        "followup": ["推荐更平价的防晒", "推荐专为敏感肌定制的防晒"]
+        "followup": ["Show cheaper sunscreens", "Show sunscreen for sensitive skin"]
     }
     """
 
@@ -24,7 +24,7 @@ enum PreviewFixtures {
     }
 
     static var loadingMessage: ChatMessage {
-        ChatMessage(sender: .ai, text: "正在检索商品", state: .retrieving)
+        ChatMessage(sender: .ai, text: "Searching products…", state: .retrieving)
     }
 }
 #endif

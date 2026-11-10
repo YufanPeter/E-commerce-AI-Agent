@@ -27,12 +27,12 @@ import sqlite3
 from dataclasses import asdict, dataclass, field, fields, replace
 from functools import lru_cache
 from pathlib import Path
+from catalog_config import DEFAULT_DB_PATH
 
 
 logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_DB_PATH = PROJECT_ROOT / "backend" / "storage" / "ecommerce_agent.sqlite3"
 
 
 # ---------------------------------------------------------------------------

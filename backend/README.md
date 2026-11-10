@@ -2,6 +2,18 @@
 
 This backend folder contains the local product store and RAG data layer for the shopping agent.
 
+## English Amazon catalog
+
+Run `bash scripts/start_amazon.sh` from the repository root after installing dependencies. On first run it imports `amazon_dense_10k/` into `backend/storage/amazon/catalog_en.sqlite3`, then starts the API in Amazon mode. The exporter data is kept as supplied. The importer normalizes the four top-level categories and uses the source USD price, not the export's converted CNY price.
+
+The English path includes keyword search and category filters, explicit USD budgets and brand filters, conversational refinement, ordinal detail and comparisons, and simple saved English preferences. The API retains its current SSE and product payload contracts; snapshot items add `priceType: "reference"` and catalog provenance. There are no simulated SKUs or inventory in this database. The previous demo data remains available through the original startup commands.
+
+No model key is required for the text baseline. To test English model-generated summaries, export `CARTPILOT_AMAZON_MODEL_COPY=1` with a configured chat provider. To enable photo-to-English-query extraction, export `CARTPILOT_AMAZON_VISION=1` with a configured vision provider. Amazon photo search uses the extracted English description with the same text index; it does not use the demo image vectors. Neither option changes the English lexical ranking baseline.
+
+Use a different `CARTPILOT_AMAZON_DB` path when rebuilding a catalog. The importer refuses to overwrite an existing file. Rebuild Amazon-specific relevance labels before reporting retrieval improvements; the legacy demo labels refer to different product IDs.
+
+The [Amazon labeling pilot](../docs/amazon-labels.md) builds evidence-backed catalog attributes, English evaluation cases and separate demo SKU fixtures.
+
 ## Setup
 
 Install dependencies:

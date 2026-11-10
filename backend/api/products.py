@@ -26,6 +26,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 
+from catalog_config import AMAZON_MODE
 from store.product_store import (
     DEFAULT_DB_PATH,
     ProductDetail,
@@ -120,6 +121,20 @@ def get_product_image(product_id: str) -> FileResponse:
     return FileResponse(path, media_type=media_type, headers={"Cache-Control": "public, max-age=86400"})
 
 
+@router.get("/products/search")
+def search_products(request: Request, q: str = Query(..., min_length=1, max_length=300),
+                    limit: int = Query(10, ge=1, le=24)) -> dict[str, Any]:
+    from search.search_service import get_search_service
+
+    result = get_search_service().search(q, top_k_products=limit)
+    details = (store.get_product_detail(hit.product_id) for hit in result.hits)
+    return {
+        "requestID": "catalog_search",
+        "products": [product_payload(detail, image_base_url(request)) for detail in details if detail],
+        "needsClarification": result.parsed.needs_clarification,
+    }
+
+
 @router.get("/products/{product_id}")
 def get_product(product_id: str, request: Request) -> dict[str, Any]:
     detail = store.get_product_detail(product_id)
@@ -176,6 +191,8 @@ def product_pitch(product_id: str) -> dict[str, str]:
         "price": detail.price_range.min_price,
         "price_display": price_display(detail.price_range),
     }
+    if detail.catalog_source is not None:
+        return {"description": detail.marketing_description[:300]}
     from agent.composer import AnswerComposer
     from agent.session import AgentSession
     from agent.tools.base import ToolResult
@@ -238,7 +255,7 @@ MAX_DETAIL_FAQS = 5
 def product_payload(detail: ProductDetail, image_base: str | None = None) -> dict[str, Any]:
     image_url = resolve_image_url(detail, image_base)
     specs = specifications_payload(detail.skus)
-    return {
+    payload = {
         "productID": detail.product_id,
         "title": detail.title,
         "category": detail.category,
@@ -262,6 +279,9 @@ def product_payload(detail: ProductDetail, image_base: str | None = None) -> dic
         "faqs": [{"question": faq.question, "answer": faq.answer} for faq in detail.faqs[:MAX_DETAIL_FAQS]],
         "updatedAt": None,
     }
+    if detail.catalog_source is not None:
+        payload.update(priceType="reference", catalogSource=detail.catalog_source)
+    return payload
 
 
 def specifications_payload(skus: list[ProductSku]) -> list[dict[str, Any]]:
@@ -334,7 +354,7 @@ def evidence_payload(detail: ProductDetail) -> list[dict[str, Any]]:
             {
                 "id": f"{detail.product_id}_review_{review.source_index}",
                 "sourceType": "userReview",
-                "title": f"{review.nickname} · {review.rating} 星",
+                "title": f"{review.nickname} · {review.rating}/5" if AMAZON_MODE else f"{review.nickname} · {review.rating} 星",
                 "snippet": review.content,
                 "score": None,
                 "updatedAt": None,
@@ -345,9 +365,9 @@ def evidence_payload(detail: ProductDetail) -> list[dict[str, Any]]:
 
 def money(amount: float, display: str | None = None) -> dict[str, Any]:
     return {
-        "currency": "CNY",
+        "currency": "USD" if AMAZON_MODE else "CNY",
         "amountMinor": int(round(amount * 100)),
-        "display": display or f"¥{amount:g}",
+        "display": display or (f"${amount:,.2f}" if AMAZON_MODE else f"¥{amount:g}"),
     }
 
 

@@ -137,6 +137,7 @@ struct ProductPayload: Identifiable, Codable, Hashable {
     let evidence: [EvidencePayload]?
     let updatedAt: Date?
     var faqs: [ProductFAQ]? = nil
+    var priceType: String? = nil
 }
 
 struct ProductSearchRequest: Codable, Hashable {
@@ -470,7 +471,7 @@ enum StringValue: Codable, Hashable {
         switch self {
         case let .string(value): return value
         case let .number(value): return "\(Int(value))"
-        case let .array(value): return value.joined(separator: "、")
+        case let .array(value): return value.joined(separator: ", ")
         case let .object(value):
             if let min = value["budget_min"], let max = value["budget_max"] {
                 return "¥\(Int(min))-¥\(Int(max))"

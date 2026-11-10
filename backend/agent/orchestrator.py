@@ -33,6 +33,7 @@ Fallback strategy:
 
 import json
 import logging
+from catalog_config import AMAZON_MODE
 import os
 import re
 import time
@@ -160,6 +161,17 @@ class Agent:
 
     @staticmethod
     def _default_tools() -> dict[str, Tool]:
+        if AMAZON_MODE:
+            from agent.amazon import CatalogMessageTool
+
+            recommend = RecommendTool(decomposer=lambda _query: [])
+            return {
+                "recommend": recommend, "refine": RefineTool(recommend=recommend),
+                "compare": CompareTool(), "product_detail": ProductDetailTool(),
+                "cart": CatalogMessageTool("cart", "Amazon snapshot products have no verified purchase options or stock, so they cannot be added to the cart."),
+                "clarify": CatalogMessageTool("clarify", "What are you shopping for? You can include a brand and a budget in USD."),
+                "fallback": CatalogMessageTool("fallback", "I can help you search and compare products in the Amazon catalog."),
+            }
         return {
             "recommend": RecommendTool(),
             "refine": RefineTool(),
@@ -254,7 +266,7 @@ class Agent:
             return
 
         # ① 路由（同时后台预取 query 解析 / 多需求拆解，和 router 并行）
-        yield {"type": "status", "data": {"phase": "routing", "message": _THINKING_STEP}}
+        yield {"type": "status", "data": {"phase": "routing", "message": "Thinking…" if AMAZON_MODE else _THINKING_STEP}}
         if _should_prefetch(query, session):
             self._prefetch_search_understanding(query)
         decision = self._safe_route(query, session, trace)
@@ -317,8 +329,8 @@ class Agent:
 
         # ① 看图：把图片抽成中文检索词。图片向量只依赖原图，和 VLM 看图并行算，
         #    后面视觉重排直接用现成结果（省一次 embedding 往返）。
-        yield {"type": "status", "data": {"phase": "vision", "message": "正在识别图片…"}}
-        embedding_future = _prefetch_image_embedding(image)
+        yield {"type": "status", "data": {"phase": "vision", "message": "Reading the photo…" if AMAZON_MODE else "正在识别图片…"}}
+        embedding_future = None if AMAZON_MODE else _prefetch_image_embedding(image)
         t0 = time.perf_counter()
         try:
             extracted = vision_extract_query(image)
@@ -329,7 +341,9 @@ class Agent:
         trace["timings"]["vision_ms"] = int((time.perf_counter() - t0) * 1000)
 
         # Store this image turn, including optional text, for composer context.
-        display = f"[图片] {hint_text}".strip() if hint_text else "[图片搜索]"
+        display = (f"[Photo] {hint_text}".strip() if hint_text else "[Photo search]") if AMAZON_MODE else (
+            f"[图片] {hint_text}".strip() if hint_text else "[图片搜索]"
+        )
         session.add_user(display)
 
         # Merge image and text terms so textual constraints affect retrieval.
@@ -339,7 +353,7 @@ class Agent:
         prebuilt_parsed = None
         if extracted != UNRECOGNIZED and hint_text:
             effective_query = f"{extracted} {hint_text}"
-        elif extracted != UNRECOGNIZED:
+        elif extracted != UNRECOGNIZED and not AMAZON_MODE:
             try:
                 prebuilt_parsed = parsed_query_from_phrase(extracted)
             except Exception as exc:  # noqa: BLE001 - 构造失败就走原来的 LLM 解析
@@ -362,7 +376,7 @@ class Agent:
 
         # Skip retrieval and clarify when the image cannot be recognized.
         if extracted == UNRECOGNIZED:
-            text = "没看清这张图里的商品呢～换张更清晰的图，或者用文字描述一下你想找什么？"
+            text = "I couldn't identify the product. Try a clearer photo or describe what you want." if AMAZON_MODE else "没看清这张图里的商品呢～换张更清晰的图，或者用文字描述一下你想找什么？"
             yield {"type": "tool_result", "data": {
                 "tool_name": "recommend",
                 "payload": {"action": "image_unrecognized", "products": []},
@@ -374,7 +388,7 @@ class Agent:
 
         # Run visual search and reranking.
         yield {"type": "status", "data": {
-            "phase": "tool", "tool": "recommend", "message": "正在按图找相似商品…",
+            "phase": "tool", "tool": "recommend", "message": "Searching for products matching the photo description…" if AMAZON_MODE else "正在按图找相似商品…",
         }}
         t1 = time.perf_counter()
         recommend = self._tools["recommend"]
@@ -543,7 +557,12 @@ class Agent:
             return decision
         t0 = time.perf_counter()
         try:
-            decision = route(query, session)
+            if AMAZON_MODE:
+                from agent.amazon import route_catalog
+
+                decision = route_catalog(query, session)
+            else:
+                decision = route(query, session)
         except Exception as exc:  # noqa: BLE001
             # On router failure, deterministic keywords preserve clear cart/checkout
             # intent; other requests use recommendation as the safe default.
@@ -689,6 +708,11 @@ class Agent:
 
     @staticmethod
     def _fallback_narrative(tool_result: ToolResult) -> str:
+        if AMAZON_MODE:
+            from agent.amazon import reply
+
+            response = reply(tool_result)
+            return response if isinstance(response, str) else json.dumps(response, ensure_ascii=False)
         # Local narrative used when composition fails.
         if tool_result.tool_name == "recommend":
             hits = tool_result.payload.get("products") or tool_result.payload.get("hits") or []
@@ -703,6 +727,12 @@ _IMAGE_EXECUTOR: Any | None = None
 
 
 def _tool_step_text(decision: IntentDecision, raw_query: str) -> str:
+    if AMAZON_MODE:
+        return {
+            "recommend": "Searching the catalog…", "refine": "Updating your search…",
+            "compare": "Comparing products…", "product_detail": "Checking the product details…",
+            "cart": "Checking purchase options…",
+        }.get(decision.tool, "Checking your request…")
     """工具开始前的步骤文案。此时结构化解析还没出来，用 router 改写后的查询说明在找什么。"""
     if decision.tool not in {"recommend", "refine"}:
         return _TOOL_WORKING_HINT.get(decision.tool, "处理中…")
@@ -742,6 +772,8 @@ def _filter_summary(parsed: dict[str, Any]) -> str:
 
 
 def _compose_step_text(tool_result: ToolResult) -> str:
+    if AMAZON_MODE:
+        return "Preparing your results…"
     """工具结束后的步骤文案：说清实际找到了什么，只说发生过的事。"""
     if tool_result.tool_name not in {"recommend", "refine"}:
         return _TOOL_COMPOSE_HINT.get(tool_result.tool_name) or "正在生成回复…"
@@ -902,6 +934,8 @@ def _prefetch_image_embedding(image: str) -> Any | None:
 
 
 def _should_prefetch(query: str, session: AgentSession) -> bool:
+    if AMAZON_MODE:
+        return False
     """只在大概率要走检索的回合预取：pending 态（选规格/选商品）和极短指代应答不预取。"""
     if os.getenv("LLM_PREFETCH", "1").strip().lower() in {"0", "false", "no", "off"}:
         return False
