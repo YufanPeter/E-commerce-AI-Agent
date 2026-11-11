@@ -37,6 +37,8 @@ def parse_more_request(query: str) -> str | None:
     客户端的"查看更多"发的是"更多<分区名>"。这里只认整句都是在要更多的情况，
     "还有便宜点的吗"带了新约束，交给 router 走普通 refine。"""
     text = (query or "").strip().rstrip("？?。.!！~～ ")
+    if re.fullmatch(r"(?:show (?:me )?|see )?(?:more(?: (?:results|options|products))?|other options)", text, re.I):
+        return ""
     if _MORE_PHRASE_RE.fullmatch(text):
         return ""
     if text.startswith("更多") and len(text) > 2:
@@ -64,6 +66,7 @@ class RefineTool:
         if base is None:
             return self._recommend.run(query, session, dict(slots or {}))
 
+        base = base.without((slots or {}).get("constraint_ops", {}).get("clear", ()))
         merged_slots = {**(slots or {}), "base_parsed": base}
         result = self._recommend.run(query, session, merged_slots)
 

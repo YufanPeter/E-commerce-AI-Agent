@@ -19,9 +19,12 @@ from agent.contextual_search import ContextualSearchPlan, detect_contextual_plan
 from agent.session import AgentSession
 from agent.tools.base import ToolResult
 from agent.tools.evidence import card_evidence
+from i18n import en as english
+from i18n import is_english
+from catalog_config import PROFILE
 from search.query_decomposer import SubRequest, decompose_query
 from search.query_understanding import ParsedQuery
-from search.search_service import ProductHit, SearchResult, SearchService
+from search.search_service import ProductHit, SearchResult, SearchService, confirmed_tier
 
 
 logger = logging.getLogger(__name__)
@@ -184,7 +187,7 @@ class RecommendTool:
                 "max": rng.max_price,
                 "sku_count": rng.sku_count,
             }
-            if budget_max is None and budget_min is None:
+            if (PROFILE.capabilities.reference_prices and rng.is_reference) or (budget_max is None and budget_min is None):
                 continue
             card["budget"] = self._budget_fit(card["product_id"], budget_min, budget_max)
 
@@ -246,8 +249,9 @@ class RecommendTool:
             lower = max(lo_p, lo_budget) if lo_budget is not None else lo_p
             return max(0.0, min(1.0, (upper - lower) / (hi_p - lo_p)))
 
-        def _key(h: ProductHit) -> float:
-            return (float(getattr(h, "score", 0.0) or 0.0) - lo) / span + _BUDGET_FIT_WEIGHT * _fraction(h)
+        def _key(h: ProductHit) -> tuple[int, float]:
+            fit = (float(getattr(h, "score", 0.0) or 0.0) - lo) / span + _BUDGET_FIT_WEIGHT * _fraction(h)
+            return confirmed_tier(h, parsed), fit
 
         return sorted(hits, key=_key, reverse=True)
 
@@ -326,7 +330,9 @@ class RecommendTool:
             **search_kwargs,
         )
 
-        hits = self._visual_rerank(result.hits, image, top_k, image_embedding=image_embedding)
+        hits = result.hits[:top_k] if not PROFILE.capabilities.image_similarity else self._visual_rerank(
+            result.hits, image, top_k, image_embedding=image_embedding
+        )
 
         session.remember_search(
             result.parsed.to_dict(),
@@ -360,6 +366,8 @@ class RecommendTool:
                 f"用户上传了一张商品图，我识别为「{query}」并找到 {len(hits)} 款相似商品。"
                 "请说明这是【根据图片】找到的相似/同类商品，再简明介绍推荐理由。"
             )
+        if is_english():
+            hint = english.VISUAL_HINT.format(query=query) if hits else english.VISUAL_EMPTY_HINT
         return ToolResult(tool_name=self.name, payload=payload, composer_hint=hint)
 
     def _visual_rerank(
@@ -508,7 +516,7 @@ class RecommendTool:
         分区名是模型写的小标题，再过一遍 query 解析可能被误判成新约束，所以直接并入
         上一轮的结构化意图，也省一次 LLM。多需求检索的基线只记了第一个需求，分区名
         可能属于别的需求，这时按分区名重新检索。"""
-        if isinstance(base, ParsedQuery) and not session.get("last_search_multi"):
+        if isinstance(base, ParsedQuery) and not session.task.multi_search:
             parsed = base
             if label:
                 parsed = replace(
@@ -623,6 +631,13 @@ class RecommendTool:
             memory_hint = _personalization_hint(payload["personalization"], session)
             if memory_hint:
                 hint = f"{hint}{memory_hint}"
+        if is_english():
+            hint = english.search_hint(
+                len(hits), showing_more=exclude_seen, vague=result.parsed.needs_clarification,
+                unavailable=", ".join(getattr(result.parsed, "unavailable_terms", None) or []),
+            )
+            if hits:
+                hint = f"{hint} {_personalization_hint(payload['personalization'], session)}".strip()
 
         return ToolResult(
             tool_name=self.name,
@@ -680,7 +695,7 @@ class RecommendTool:
         # Store all merged hits and use the first parsed subrequest as a reasonable refine
         # baseline, since refinement over several groups is inherently ambiguous.
         session.remember_search(first_parsed or {}, flat_hit_refs)
-        session.set("last_search_multi", True)
+        session.task.multi_search = True
 
         # Flat and grouped cards share objects, so one price-display pass updates both.
         self._attach_price_displays(flat_products)
@@ -716,6 +731,8 @@ class RecommendTool:
                 "然后极简地指出每款商品的核心卖点（15字以内，绝不重复商品名或价格）。"
             )
 
+        if is_english():
+            hint = english.MULTI_HINT if non_empty_groups else english.MULTI_EMPTY_HINT
         return ToolResult(
             tool_name=self.name,
             payload=payload,
@@ -730,7 +747,7 @@ _MORE_CHUNKS_PER_SEEN = 10
 
 def _personalization_hint(signals: list[dict[str, Any]], session: AgentSession) -> str:
     """告诉 composer 这次用到了哪些长期偏好，让回答能说清「为什么这样推荐」。"""
-    labels = {
+    labels = english.PERSONALIZATION_LABELS if is_english() else {
         "brand_avoid": "已避开用户不买的品牌",
         "avoid_term": "已避开用户忌讳的成分",
         "brand_like": "优先了用户喜欢的品牌",
@@ -744,7 +761,8 @@ def _personalization_hint(signals: list[dict[str, Any]], session: AgentSession) 
         if not label:
             continue
         value = signal.get("value")
-        parts.append(f"{label}（{value}）" if signal["kind"] in {"brand_avoid", "avoid_term", "brand_like"} else label)
+        named = signal["kind"] in {"brand_avoid", "avoid_term", "brand_like"}
+        parts.append(f"{label} ({value})" if named and is_english() else f"{label}（{value}）" if named else label)
     profile = session.user_profile or {}
     context = []
     for scope, attrs in (profile.get("category_specific") or {}).items():
@@ -753,6 +771,10 @@ def _personalization_hint(signals: list[dict[str, Any]], session: AgentSession) 
     note = profile.get("preference_note") or profile.get("notes")
     if note:
         context.append(str(note))
+    if is_english():
+        memory = f"You {', '.join(dict.fromkeys(parts))}; you may mention this briefly in the opening. " if parts else ""
+        facts = f"Lasting facts about the shopper: {'; '.join(dict.fromkeys(context))}. Use them only where the product data supports it." if context else ""
+        return (memory + facts).strip()
     text = ""
     if parts:
         text += "本次" + "，".join(dict.fromkeys(parts)) + "，可在开场白里自然带一句。"
@@ -764,6 +786,14 @@ def _personalization_hint(signals: list[dict[str, Any]], session: AgentSession) 
 def _card_with_evidence(h: ProductHit, query: str) -> dict[str, Any]:
     """商品卡片 + 给 composer 写解说用的证据（前端不用证据字段）。"""
     card = _to_product_card(h)
+    checks = getattr(h, "attribute_checks", None)
+    if checks:
+        card["attribute_checks"] = dict(checks)
+    claims = getattr(h, "graph_evidence", None)
+    if claims:
+        card["graph_evidence"] = list(claims)
+    if getattr(h, "rating", None):
+        card["rating"] = h.rating
     evidence = card_evidence(h, query)
     if evidence:
         card["evidence"] = evidence

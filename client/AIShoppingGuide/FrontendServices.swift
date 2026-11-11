@@ -207,20 +207,20 @@ enum RESTServiceError: Error {
     var message: String {
         switch self {
         case .invalidURL:
-            return "商品服务地址无效。"
+            return "The product service URL is invalid."
         case .invalidResponse:
-            return "商品服务返回了无效响应。"
+            return "The product service returned an invalid response."
         case let .requestFailed(statusCode, _, message):
             return "\(message)（HTTP \(statusCode)）"
         case .connectionFailed:
-            return "商品服务暂时不可用，请确认后端 REST API 已启动。"
+            return "The product service is unavailable. Make sure the backend is running."
         case .decodingFailed:
-            return "商品服务返回数据解析失败。"
+            return "Could not read the product service response."
         }
     }
 
     var displayMessage: String {
-        "\(message)\n错误码：\(code)"
+        "\(message)\nError code: \(code)"
     }
 }
 
@@ -281,6 +281,18 @@ final class RESTProductService: ProductServicing {
 
     func searchProducts(_ request: ProductSearchRequest) async throws -> ProductSearchResponse {
         let productIDs = extractProductIDs(from: request.query)
+        if productIDs.isEmpty {
+            let url = baseURL.appendingPathComponent("products").appendingPathComponent("search")
+            guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+                throw RESTServiceError.invalidURL
+            }
+            components.queryItems = [
+                URLQueryItem(name: "q", value: request.query),
+                URLQueryItem(name: "limit", value: String(max(1, min(request.limit, 24))))
+            ]
+            guard let endpoint = components.url else { throw RESTServiceError.invalidURL }
+            return try await self.request(ProductSearchResponse.self, url: endpoint)
+        }
         let products = try await fetchProducts(productIDs: productIDs)
         return ProductSearchResponse(
             requestID: UUID().uuidString,
@@ -320,7 +332,7 @@ final class RESTProductService: ProductServicing {
             throw RESTServiceError.requestFailed(
                 statusCode: http.statusCode,
                 code: payload?.code ?? "API_HTTP_\(http.statusCode)",
-                message: payload?.message ?? "商品对比请求失败。"
+                message: payload?.message ?? "Could not compare products."
             )
         }
         do {
@@ -377,7 +389,7 @@ final class RESTProductService: ProductServicing {
             throw RESTServiceError.requestFailed(
                 statusCode: http.statusCode,
                 code: payload?.code ?? "API_HTTP_\(http.statusCode)",
-                message: payload?.message ?? "购物车更新失败。"
+                message: payload?.message ?? "Could not update the cart."
             )
         }
         return await agentCartSnapshot(from: data)
@@ -571,7 +583,7 @@ final class RESTProductService: ProductServicing {
             throw RESTServiceError.requestFailed(
                 statusCode: httpResponse.statusCode,
                 code: payload?.code ?? "API_HTTP_\(httpResponse.statusCode)",
-                message: payload?.message ?? "商品服务请求失败。"
+                message: payload?.message ?? "The product service request failed."
             )
         }
         do {
@@ -592,7 +604,7 @@ final class RESTProductService: ProductServicing {
     }
 
     private func extractProductIDs(from text: String) -> [String] {
-        let pattern = #"p_(beauty|clothes|digital|food)_\d{3}"#
+        let pattern = #"\b(?:p_(?:beauty|clothes|digital|food)_\d{3}|amz_[A-Z0-9]{10})\b"#
         guard let regex = try? NSRegularExpression(pattern: pattern) else {
             return []
         }
@@ -625,7 +637,7 @@ final class RESTPreferenceService: PreferenceServicing {
     func fetchPreference(userID: String = UserIdentity.defaultUserID) async throws -> UserPreferencePayload {
         let url = baseURL.appendingPathComponent("preferences/\(userID)")
         let (data, response) = try await session.data(from: url)
-        try validate(response: response, data: data, fallback: "偏好服务请求失败。")
+        try validate(response: response, data: data, fallback: "Could not load preferences.")
         return try decoder.decode(UserPreferencePayload.self, from: data)
     }
 
@@ -635,7 +647,7 @@ final class RESTPreferenceService: PreferenceServicing {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try encoder.encode(preference)
         let (data, response) = try await session.data(for: request)
-        try validate(response: response, data: data, fallback: "偏好保存失败。")
+        try validate(response: response, data: data, fallback: "Could not save preferences.")
         return try decoder.decode(UserPreferencePayload.self, from: data)
     }
 
@@ -645,7 +657,7 @@ final class RESTPreferenceService: PreferenceServicing {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try encoder.encode(PreferenceUndoRequest(undoToken: undoToken))
         let (data, response) = try await session.data(for: request)
-        try validate(response: response, data: data, fallback: "撤销偏好失败。")
+        try validate(response: response, data: data, fallback: "Could not undo the preference change.")
         return try decoder.decode(PreferenceUndoResponse.self, from: data).preference
     }
 
@@ -679,7 +691,7 @@ final class RESTPreferenceService: PreferenceServicing {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: ["personalization_enabled": enabled])
         let (data, response) = try await session.data(for: request)
-        try validate(response: response, data: data, fallback: "设置保存失败。")
+        try validate(response: response, data: data, fallback: "Could not save settings.")
         return try decoder.decode(MemoryViewPayload.self, from: data)
     }
 
@@ -695,7 +707,7 @@ final class RESTPreferenceService: PreferenceServicing {
             request.httpBody = try encoder.encode(body)
         }
         let (data, response) = try await session.data(for: request)
-        try validate(response: response, data: data, fallback: "记忆服务请求失败。")
+        try validate(response: response, data: data, fallback: "The memory service request failed.")
         return try decoder.decode(T.self, from: data)
     }
 
@@ -952,7 +964,7 @@ final class RESTAgentService: AgentServicing {
             throw RESTServiceError.requestFailed(
                 statusCode: 500,
                 code: "AGENT_STREAM_ERROR",
-                message: message ?? "Agent 流式处理失败。"
+                message: message ?? "The assistant stopped responding."
             )
 
         default:
@@ -1219,7 +1231,7 @@ private final class SSEDelegate: NSObject, URLSessionDataDelegate {
             continuation.finish(throwing: RESTServiceError.requestFailed(
                 statusCode: http.statusCode,
                 code: "API_HTTP_\(http.statusCode)",
-                message: "Agent 服务请求失败。"
+                message: "The assistant request failed."
             ))
             completionHandler(.cancel)
             return
@@ -1309,6 +1321,7 @@ extension Product {
             reviews: reviews
         )
         self.faqs = payload.faqs
+        self.referenceOnly = payload.priceType == "reference"
     }
 }
 
@@ -1341,7 +1354,7 @@ private extension ProductReview {
         let rating = Int(String(ratingText.filter(\.isNumber))) ?? 0
         self.init(
             id: evidence.id,
-            nickname: (nickname?.isEmpty == false ? nickname : "匿名用户") ?? "匿名用户",
+            nickname: (nickname?.isEmpty == false ? nickname : "Anonymous customer") ?? "Anonymous customer",
             rating: min(5, max(0, rating)),
             content: evidence.snippet,
             polarity: nil

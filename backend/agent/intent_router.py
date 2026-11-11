@@ -21,6 +21,8 @@ from typing import Any
 
 from agent.session import AgentSession
 from llm.cache import TTLCache
+from i18n import en as english
+from i18n import is_english
 from llm.client import get_client, get_model_id
 
 
@@ -43,6 +45,15 @@ KNOWN_TOOLS: tuple[str, ...] = (
 )
 
 
+# The English catalog routes graph questions directly and reads tool arguments from the
+# same call, so no rule has to re-read the message afterwards.
+ENGLISH_TOOLS: tuple[str, ...] = (*KNOWN_TOOLS, "similar", "accessories", "buying_guide")
+CART_ACTIONS: tuple[str, ...] = (
+    "add", "remove", "set_quantity", "change_spec", "view", "checkout", "reorder", "order_history", "answer", "cancel",
+)
+CLEARABLE: tuple[str, ...] = ("budget", "brand")
+
+
 @dataclass(frozen=True)
 class IntentDecision:
     """Router output containing the selected tool, rewritten query, and confidence."""
@@ -51,14 +62,20 @@ class IntentDecision:
     rewritten_query: str        # Context-expanded query, including implicit follow-ups.
     confidence: str             # "high" | "medium" | "low"
     reasoning: str              # Diagnostic only; never shown to the user.
+    # English only: what the tool acts on (positions, cart action, quantity, ...), checked
+    # by ``english_args``. ``None`` means the tool reads the message itself.
+    args: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        data = {
             "tool": self.tool,
             "rewritten_query": self.rewritten_query,
             "confidence": self.confidence,
             "reasoning": self.reasoning,
         }
+        if self.args is not None:
+            data["args"] = self.args
+        return data
 
 
 _TOOL_SCHEMA: dict[str, Any] = {
@@ -132,6 +149,65 @@ SYSTEM_PROMPT = """你是电商导购 Agent 的路由器，唯一职责是把用
 """
 
 
+def _tool_schema() -> dict[str, Any]:
+    """The routing function with field descriptions in the catalog's language."""
+    if not is_english():
+        return _TOOL_SCHEMA
+    function = _TOOL_SCHEMA["function"]
+    properties = function["parameters"]["properties"]
+    fields = english.ROUTER_ARG_FIELDS
+    nullable_int = {"type": ["integer", "null"]}
+    english_properties = {
+        "tool": {"type": "string", "enum": list(ENGLISH_TOOLS), "description": english.ROUTER_TOOL_FIELD},
+        "rewritten_query": {**properties["rewritten_query"], "description": english.ROUTER_REWRITE_FIELD},
+        "confidence": {**properties["confidence"], "description": "How certain the routing is; use low when unclear."},
+        "reasoning": {**properties["reasoning"], "description": "One short sentence."},
+        "positions": {"type": "array", "items": {"type": "integer"}, "description": fields["positions"]},
+        "quantity": {**nullable_int, "description": fields["quantity"]},
+        "cart_action": {"type": ["string", "null"], "enum": [*CART_ACTIONS, None], "description": fields["cart_action"]},
+        "cart_item": {**nullable_int, "description": fields["cart_item"]},
+        "size_step": {"type": "integer", "enum": [-1, 0, 1], "description": fields["size_step"]},
+        "clear": {"type": "array", "items": {"type": "string", "enum": list(CLEARABLE)}, "description": fields["clear"]},
+        "cheaper": {"type": "boolean", "description": fields["cheaper"]},
+        "whole_order": {"type": "boolean", "description": fields["whole_order"]},
+        "reorder_item": {"type": "string", "description": fields["reorder_item"]},
+    }
+    return {
+        "type": "function",
+        "function": {
+            **function,
+            "description": "Route the shopper's message to the right tool and read what it acts on.",
+            "parameters": {
+                "type": "object",
+                "properties": english_properties,
+                "required": list(english_properties),
+                "additionalProperties": False,
+            },
+        },
+    }
+
+
+def english_args(raw: dict[str, Any]) -> dict[str, Any]:
+    """Keep only well-formed tool arguments; anything else reads as "not said"."""
+
+    def positive(value: Any) -> int | None:
+        return value if isinstance(value, int) and not isinstance(value, bool) and 0 < value < 100 else None
+
+    action = raw.get("cart_action")
+    step = raw.get("size_step")
+    return {
+        "positions": list(dict.fromkeys(p for p in (positive(v) for v in raw.get("positions") or []) if p)),
+        "quantity": positive(raw.get("quantity")),
+        "cart_action": action if action in CART_ACTIONS else None,
+        "cart_item": positive(raw.get("cart_item")),
+        "size_step": step if step in (-1, 0, 1) else 0,
+        "clear": [c for c in dict.fromkeys(raw.get("clear") or []) if c in CLEARABLE],
+        "cheaper": raw.get("cheaper") is True,
+        "whole_order": raw.get("whole_order") is True,
+        "reorder_item": " ".join(str(raw.get("reorder_item") or "").split()),
+    }
+
+
 # 首轮路由缓存：没有对话历史时，路由结果只取决于 query 本身，
 # 同一句话（demo 热词 / 用户重试）不必再打一次 LLM。
 _FIRST_TURN_CACHE: TTLCache[IntentDecision] = TTLCache(maxsize=512)
@@ -143,7 +219,8 @@ def clear_route_cache() -> None:
 
 def route(query: str, session: AgentSession, timeout: float = 6.0) -> IntentDecision:
     """主入口。LLM 失败时抛异常，由 orchestrator 决定降级。"""
-    cache_key = " ".join((query or "").split()) if not session.history_for_router() else None
+    stateless = not session.history_for_router() and not (is_english() and _english_state(session))
+    cache_key = " ".join((query or "").split()) if stateless else None
     if cache_key:
         cached = _FIRST_TURN_CACHE.get(cache_key)
         if cached is not None:
@@ -163,14 +240,15 @@ def _route_uncached(query: str, session: AgentSession, timeout: float) -> Intent
     # One retry handles most cases; recommendation is the safest final shopping default.
     last_exc: Exception | None = None
     args: dict[str, Any] | None = None
+    tools = ENGLISH_TOOLS if is_english() else KNOWN_TOOLS
     for attempt in range(2):
         response = client.chat.completions.create(
             model=get_model_id(role="fast"),
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": english.ROUTER_SYSTEM if is_english() else SYSTEM_PROMPT},
                 {"role": "user", "content": user_content},
             ],
-            tools=[_TOOL_SCHEMA],
+            tools=[_tool_schema()],
             tool_choice={"type": "function", "function": {"name": "route_to_tool"}},
             temperature=0.1,
             timeout=timeout,
@@ -182,7 +260,7 @@ def _route_uncached(query: str, session: AgentSession, timeout: float) -> Intent
             logger.warning("Router empty response (attempt %d/2), retrying", attempt + 1)
             continue
         # Retry a missing or unknown tool field; the rest of the response is often valid.
-        if candidate.get("tool") in KNOWN_TOOLS:
+        if candidate.get("tool") in tools:
             args = candidate
             break
         last_exc = ValueError(f"Router returned invalid tool {candidate.get('tool')!r}")
@@ -196,7 +274,7 @@ def _route_uncached(query: str, session: AgentSession, timeout: float) -> Intent
         raise last_exc  # type: ignore[misc]
 
     tool = args.get("tool")
-    if tool not in KNOWN_TOOLS:
+    if tool not in tools:
         # After retry exhaustion, prefer recommendation over unnecessary clarification.
         logger.warning("Router tool still invalid %r after retry, defaulting to recommend", tool)
         tool = "recommend"
@@ -206,11 +284,46 @@ def _route_uncached(query: str, session: AgentSession, timeout: float) -> Intent
         rewritten_query=str(args.get("rewritten_query") or query).strip() or query,
         confidence=str(args.get("confidence", "medium")),
         reasoning=str(args.get("reasoning", "")),
+        args=english_args(args) if is_english() else None,
     )
+
+
+def _numbered(items: list[dict[str, Any]]) -> str:
+    return "\n".join(f"{i}. {str(item.get('title') or '')[:90]}" for i, item in enumerate(items, start=1))
+
+
+def _english_state(session: AgentSession) -> list[str]:
+    """What the shopper can point at, so the router can read positions and answers."""
+    task = session.task
+    view = task.active_view
+    titles = {item.get("product_id"): item.get("title") for item in [*view.items, *task.shopping_items]}
+    sections = []
+    if view.kind == "cart" and view.items:
+        sections.append(f"Cart on screen (cart_item counts these):\n{_numbered(view.items)}")
+        if task.shopping_items:
+            sections.append(f"Earlier results (positions count these):\n{_numbered(task.shopping_items)}")
+    elif view.items:
+        sections.append(f"Products on screen (positions count these):\n{_numbered(view.items)}")
+    if task.focus_product_id in titles:
+        position = next((i for i, item in enumerate(task.add_targets(), start=1) if item.get("product_id") == task.focus_product_id), None)
+        sections.append(f"Focused product: {f'{position}. ' if position else ''}{titles[task.focus_product_id]}")
+    if task.last_added:
+        sections.append(f"Just added to the cart: {titles.get(task.last_added.get('product_id')) or 'a product'}")
+    pending = task.pending
+    if pending is not None and pending.kind == "cart_sku":
+        sections.append(f"Waiting for the shopper to choose a size, color or other option of {pending.data.get('title')} to add.")
+    elif pending is not None and pending.kind == "cart_pick":
+        choices = _numbered(pending.data.get("candidates") or [])
+        sections.append(f"Waiting for the shopper to say which product to add:\n{choices}")
+    return sections
 
 
 def _build_user_content(query: str, session: AgentSession) -> str:
     """Combine the current query with recent conversation context."""
+    if is_english():
+        parts = [f"Recent conversation:\n{session.recent_text(n=4)}"] if session.history_for_router() else []
+        parts += _english_state(session)
+        return "\n\n".join([*parts, f"Current query: {query}"])
     if not session.history:
         return f"当前 query：{query}"
     return (

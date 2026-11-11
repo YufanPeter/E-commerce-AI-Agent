@@ -16,7 +16,7 @@ final class MockAgentService: AgentServicing {
                         type: .status,
                         status: AgentStatusPayload(
                             phase: .understanding,
-                            message: "正在理解你的需求"
+                            message: "Reading your request…"
                         )
                     )
                 )
@@ -32,7 +32,7 @@ final class MockAgentService: AgentServicing {
                         type: .status,
                         status: AgentStatusPayload(
                             phase: .retrieving,
-                            message: "正在检索商品"
+                            message: "Searching products…"
                         )
                     )
                 )
@@ -95,7 +95,7 @@ final class MockProductService: ProductServicing {
         guard let product = MockProductCatalog.all.first(where: { $0.productID == productID }) else {
             return nil
         }
-        let raw = product.summary ?? "这款商品值得推荐"
+        let raw = product.summary ?? "Recommended for this search"
         let cleaned = RecommendationCopy.sanitized(raw)
         return cleaned.isEmpty ? nil : cleaned
     }
@@ -126,18 +126,18 @@ final class MockProductService: ProductServicing {
             )
         }
         let priceRow = ComparisonRowPayload(
-            label: "价格",
+            label: "Price",
             values: products.map { $0.price.display },
             highlight: 0
         )
         let reasonRow = ComparisonRowPayload(
-            label: "推荐点",
+            label: "Highlights",
             values: products.map { $0.summary ?? "" },
             highlight: nil
         )
 
         return ProductComparisonPayload(
-            title: "商品对比",
+            title: "Product comparison",
             products: headers,
             rows: [priceRow, reasonRow],
             recommendation: products.first?.title ?? ""
@@ -336,7 +336,7 @@ final class MockUserProfileService: UserProfileServicing {
     private var profile = UserProfilePayload(
         userID: "demo_user",
         budgetMin: nil,
-        budgetMax: Money(currency: "CNY", amountMinor: 50000, display: "CNY 500"),
+        budgetMax: Money(currency: "USD", amountMinor: 50000, display: "$500"),
         preferredCategories: ["beauty", "digital"],
         excludedIngredients: ["alcohol"],
         excludedBrands: [],
@@ -392,23 +392,23 @@ final class MockPreferenceService: PreferenceServicing {
     func fetchMemory(userID: String) async throws -> MemoryViewPayload { memory }
 
     func tellMemory(userID: String, text: String) async throws -> MemoryActionResult {
-        MemoryActionResult(message: "记下了，解说时会参考", undoToken: nil, view: memory)
+        MemoryActionResult(message: "Saved for future recommendations", undoToken: nil, view: memory)
     }
 
     func confirmMemory(userID: String, itemID: String) async throws -> MemoryActionResult {
-        MemoryActionResult(message: "已记住", undoToken: nil, view: memory)
+        MemoryActionResult(message: "Saved", undoToken: nil, view: memory)
     }
 
     func rejectMemory(userID: String, itemID: String) async throws -> MemoryActionResult {
-        MemoryActionResult(message: "好的，不再提这条", undoToken: nil, view: memory)
+        MemoryActionResult(message: "I will leave that out", undoToken: nil, view: memory)
     }
 
     func deleteMemory(userID: String, itemID: String) async throws -> MemoryActionResult {
-        MemoryActionResult(message: "已忘掉这条", undoToken: "undo_preview", view: memory)
+        MemoryActionResult(message: "Memory removed", undoToken: "undo_preview", view: memory)
     }
 
     func undoMemory(userID: String, undoToken: String) async throws -> MemoryActionResult {
-        MemoryActionResult(message: "已恢复", undoToken: nil, view: memory)
+        MemoryActionResult(message: "Restored", undoToken: nil, view: memory)
     }
 
     func setPersonalization(userID: String, enabled: Bool) async throws -> MemoryViewPayload { memory }
@@ -477,23 +477,23 @@ private enum MockProductCatalog {
         let reviews = [
             ReviewPayload(
                 id: "\(productID)_review_1",
-                nickname: "青柠",
+                nickname: "Alex",
                 rating: 5,
-                content: "到手质感比预期好，日常使用很顺手，包装也完整。",
+                content: "The build felt better than expected and the packaging arrived intact.",
                 polarity: "positive"
             ),
             ReviewPayload(
                 id: "\(productID)_review_2",
-                nickname: "小舟",
+                nickname: "Sam",
                 rating: 4,
-                content: "核心功能满意，细节做工稳，适合对性价比有要求的人。",
+                content: "The main features work well for the price.",
                 polarity: "positive"
             ),
             ReviewPayload(
                 id: "\(productID)_review_3",
-                nickname: "北山",
+                nickname: "Jamie",
                 rating: 4,
-                content: "尺码和描述一致，物流很快，后续会再观察耐用度。",
+                content: "The sizing matched the description. I still need to see how it holds up.",
                 polarity: "neutral"
             )
         ]
@@ -542,7 +542,7 @@ private enum MockProductCatalog {
                 EvidencePayload(
                     id: review.id,
                     sourceType: .userReview,
-                    title: "用户\(review.nickname) · \(review.rating) 星",
+                    title: "\(review.nickname) · \(review.rating)/5",
                     snippet: review.content,
                     score: nil,
                     updatedAt: Date()
@@ -554,12 +554,13 @@ private enum MockProductCatalog {
 
     static func money(from display: String) -> Money {
         let cleaned = display
+            .replacingOccurrences(of: "$", with: "")
             .replacingOccurrences(of: "¥", with: "")
             .replacingOccurrences(of: ",", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let amount = Double(cleaned) ?? 0
         return Money(
-            currency: "CNY",
+            currency: "USD",
             amountMinor: Int((amount * 100).rounded()),
             display: display
         )
@@ -602,9 +603,9 @@ private enum MockCartFactory {
     static func priceSummary(for items: [CartItemPayload]) -> CartPriceSummaryPayload {
         let amountMinor = items.reduce(0) { $0 + $1.lineTotal.amountMinor }
         let subtotal = Money(
-            currency: "CNY",
+            currency: "USD",
             amountMinor: amountMinor,
-            display: "CNY \(Double(amountMinor) / 100)"
+            display: "$\(Double(amountMinor) / 100)"
         )
         return CartPriceSummaryPayload(
             subtotal: subtotal,
@@ -618,25 +619,25 @@ private func generateMockResponseText(query: String, products: [ProductPayload])
     let productCount = min(products.count, 5)
     
     let opening: String
-    if query.lowercased().contains("平板") || query.lowercased().contains("电脑") {
-        opening = "为你推荐了 \(productCount) 款高性能平板电脑"
-    } else if query.lowercased().contains("手机") {
-        opening = "为你推荐了 \(productCount) 款热门智能手机"
-    } else if query.lowercased().contains("耳机") || query.lowercased().contains("音箱") {
-        opening = "为你推荐了 \(productCount) 款优质音频设备"
-    } else if query.lowercased().contains("服饰") || query.lowercased().contains("运动") {
-        opening = "为你推荐了 \(productCount) 款运动服饰"
+    if query.lowercased().contains("tablet") || query.lowercased().contains("computer") {
+        opening = "I found \(productCount) tablet options."
+    } else if query.lowercased().contains("phone") {
+        opening = "I found \(productCount) phone options."
+    } else if query.lowercased().contains("headphones") || query.lowercased().contains("speakers") {
+        opening = "I found \(productCount) audio options."
+    } else if query.lowercased().contains("clothing") || query.lowercased().contains("sports") {
+        opening = "I found \(productCount) sportswear options."
     } else {
-        opening = "为你推荐了 \(productCount) 款精选商品"
+        opening = "I found \(productCount) options."
     }
 
     var items: [[String: String]] = []
     let features = [
-        "性能强劲，流畅运行各种应用",
-        "设计精美，适合日常穿着",
-        "舒适透气，运动必备",
-        "性价比高，物超所值",
-        "款式时尚，百搭耐看"
+        "Responsive in everyday use.",
+        "Designed for everyday wear.",
+        "A breathable option for workouts.",
+        "A budget-friendly option.",
+        "An easy style to pair."
     ]
     for (index, product) in products.prefix(productCount).enumerated() {
         let feature = features[index % features.count]
@@ -644,14 +645,14 @@ private func generateMockResponseText(query: String, products: [ProductPayload])
             "productId": product.productID,
             "description": "\(product.title)：\(feature)"
         ])
-        print("生成 item: productId=\(product.productID), description=\(product.title)：\(feature)")
+        print("Built item \(product.productID): \(product.title), \(feature)")
     }
 
     let followup = [
-        "推荐一些更平价的选择",
-        "推荐其他品牌的商品",
-        "对比一下刚才推荐的两款",
-        "想了解更多规格细节"
+        "Show cheaper options",
+        "Show other brands",
+        "Compare the first and second",
+        "Show details for the first one"
     ]
 
     let result: [String: Any] = [
@@ -662,9 +663,9 @@ private func generateMockResponseText(query: String, products: [ProductPayload])
     
     if let jsonData = try? JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted]),
        let jsonString = String(data: jsonData, encoding: .utf8) {
-        print("生成的 JSON: \(jsonString)")
+        print("Generated JSON: \(jsonString)")
         return jsonString
     }
-    print("JSON 生成失败")
+    print("Could not generate JSON")
     return ""
 }

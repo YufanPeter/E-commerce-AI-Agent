@@ -80,6 +80,11 @@ class ProductHit:
     min_price: float | None = None
     max_price: float | None = None
     sku_count: int = 0
+    # Rejected attribute → "free" (listing says so) or "unknown" (listing is silent).
+    attribute_checks: dict[str, str] = field(default_factory=dict)
+    # Graph claims that matched this query, each with its source quote.
+    graph_evidence: tuple[dict[str, Any], ...] = ()
+    rating: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -482,6 +487,17 @@ def _budget_fit(hit: ProductHit, low: float | None, high: float | None) -> float
     return 1.0 if fully_inside else 0.6
 
 
+def confirmed_tier(hit: ProductHit, parsed: ParsedQuery | None) -> int:
+    """How many of the shopper's conditions the listing confirms, the first sort key after search.
+
+    It applies only when the search names a product type or category, so every hit is the
+    right kind of product. Later reorderings must keep it as their first key.
+    """
+    if parsed is None or not (parsed.sub_category or parsed.category):
+        return 0
+    return sum(value in ("free", "meets") for value in (getattr(hit, "attribute_checks", None) or {}).values())
+
+
 def _apply_profile_boost(
     hits: list[ProductHit],
     parsed: ParsedQuery,
@@ -825,6 +841,12 @@ def _aggregate_reranked_by_product(reranked: list[RerankedChunk]) -> list[Produc
 @lru_cache(maxsize=1)
 def get_search_service() -> SearchService:
     """Return the process-wide service; call once during FastAPI startup to warm it."""
+    from catalog_config import PROFILE
+
+    if PROFILE.search_backend == "catalog":
+        from search.catalog_search import CatalogSearchService
+
+        return CatalogSearchService()
     return SearchService()
 
 

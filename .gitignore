@@ -33,6 +33,8 @@ instance/
 *.sqlite3-wal
 *.db
 # backend/storage/
+/backend/storage/amazon/
+/amazon_dense_10k/
 
 # Node / frontend if added later
 node_modules/

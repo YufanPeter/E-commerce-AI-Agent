@@ -195,7 +195,7 @@ def test_reorder_quantity_comes_from_the_sentence(tool, store: CartStore):
 
 
 def test_ordinal_is_not_a_quantity():
-    from agent.tools.cart import _quantity_in
+    from agent.turn_args import quantity_in as _quantity_in
 
     assert _quantity_in("第二个") is None
     assert _quantity_in("来两瓶") == 2
@@ -226,7 +226,7 @@ def test_reorder_ambiguous_asks_then_uses_answer(tool, store: CartStore):
     session.add_user("第二个")
     tool.run("第二个", session, {})
     assert [(line.product_id, line.quantity) for line in store.list_items()] == [("p2", 1)]
-    assert session.get("pending_add") is None
+    assert session.task.pending_data("cart_pick") is None
 
 
 def test_reorder_whole_last_order(tool, store: CartStore):

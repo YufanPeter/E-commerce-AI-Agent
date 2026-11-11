@@ -79,6 +79,8 @@ def import_product(
     product: dict[str, Any],
     source_path: Path,
     data_dir: Path,
+    *,
+    image_url: str | None = None,
 ) -> None:
     product_id = product["product_id"]
     rag_knowledge = product.get("rag_knowledge", {})
@@ -119,7 +121,7 @@ def import_product(
             product.get("sub_category"),
             float(product["base_price"]),
             product.get("image_path"),
-            None,
+            image_url,
             str(relative_source),
         ),
     )

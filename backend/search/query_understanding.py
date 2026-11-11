@@ -26,13 +26,14 @@ import re
 import sqlite3
 from dataclasses import asdict, dataclass, field, fields, replace
 from functools import lru_cache
+from typing import Collection
 from pathlib import Path
+from catalog_config import DEFAULT_DB_PATH
 
 
 logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_DB_PATH = PROJECT_ROOT / "backend" / "storage" / "ecommerce_agent.sqlite3"
 
 
 # ---------------------------------------------------------------------------
@@ -51,6 +52,8 @@ class ParsedQuery:
     sub_category_exclude: list[str] = field(default_factory=list)
     max_price: float | None = None
     min_price: float | None = None
+    # A price the shopper gave as approximate ("around $50"); min/max then hold the window.
+    price_target: float | None = None
     brand_include: list[str] = field(default_factory=list)
     brand_exclude: list[str] = field(default_factory=list)
     negative_ingredients: list[str] = field(default_factory=list)
@@ -60,6 +63,16 @@ class ParsedQuery:
     # 用户点名、但商品库里没有的品牌或品类（「三星手机」「扫地机器人」）。
     # 非空时检索直接返回空结果，由话术坦诚说明，而不是拿相近的商品顶替。
     unavailable_terms: list[str] = field(default_factory=list)
+    # Rejected ingredients or properties, checked against catalog attributes after recall.
+    excluded_attributes: list[str] = field(default_factory=list)
+    # Knowledge-graph signals; they only propose candidates, never filter.
+    aspects: list[str] = field(default_factory=list)
+    use_cases: list[str] = field(default_factory=list)
+    compatible_with: list[str] = field(default_factory=list)
+    # Limits on measured attributes: {"attribute": "battery_hours", "op": ">=", "value": 20.0}.
+    numeric: list[dict[str, object]] = field(default_factory=list)
+    # Standalone search words written by the model; empty when rules parsed the turn.
+    search_text: str = ""
 
     @property
     def hard_filters(self) -> dict[str, object]:
@@ -90,6 +103,22 @@ class ParsedQuery:
         allowed = {f.name for f in fields(cls)}
         return cls(**{k: v for k, v in data.items() if k in allowed})
 
+    def without(self, cleared: "Collection[str]") -> "ParsedQuery":
+        """Forget withdrawn constraints ("budget", "brand") so a later turn cannot inherit them."""
+        changes: dict[str, object] = {}
+        if "budget" in cleared:
+            changes.update(min_price=None, max_price=None, price_target=None)
+        if "brand" in cleared:
+            changes.update(brand_include=[], brand_exclude=[])
+        return replace(self, **changes) if changes else self
+
+    def switches_from(self, base: "ParsedQuery") -> bool:
+        """Whether this turn names a different category, which the old conditions don't apply to."""
+        return bool(
+            (self.sub_category and base.sub_category and self.sub_category != base.sub_category)
+            or (self.category and base.category and self.category != base.category)
+        )
+
     def merge_base(self, base: "ParsedQuery") -> "ParsedQuery":
         """Overlay the current parsed turn on the previous structured intent.
 
@@ -98,6 +127,9 @@ class ParsedQuery:
         soft preferences accumulate. Retrieval terms are merged with current terms first,
         and inherited context makes clarification unnecessary.
         """
+        if self.switches_from(base):
+            return replace(self, needs_clarification=False)
+
         def pick(cur: object, prev: object) -> object:
             return cur if cur is not None else prev
 
@@ -129,6 +161,10 @@ class ParsedQuery:
             retrieval_query=retrieval_query,
             needs_clarification=False,
             unavailable_terms=list(self.unavailable_terms or []),
+            excluded_attributes=union(self.excluded_attributes, base.excluded_attributes),
+            aspects=union(self.aspects, base.aspects),
+            use_cases=union(self.use_cases, base.use_cases),
+            compatible_with=union(self.compatible_with, base.compatible_with),
         )
 
 
@@ -188,7 +224,7 @@ def load_taxonomy(db_path: Path = DEFAULT_DB_PATH) -> dict[str, object]:
     and expands canonical brands to stored variants. It is cached once per process.
     """
     if not db_path.exists():
-        return {"sub_to_cat": {}, "brands": [], "brand_expand": {}, "titles": [], "catalog_text": "", "brand_subs": {}}
+        return {"sub_to_cat": {}, "brands": [], "brand_expand": {}, "titles": [], "catalog_text": "", "brand_subs": {}, "groups": {}}
 
     with sqlite3.connect(db_path) as conn:
         rows = conn.execute(
@@ -199,6 +235,15 @@ def load_taxonomy(db_path: Path = DEFAULT_DB_PATH) -> dict[str, object]:
             descriptions = conn.execute("SELECT marketing_description FROM product_descriptions").fetchall()
         except sqlite3.Error:
             descriptions = []
+        try:
+            group_rows = conn.execute(
+                "SELECT catalog_group, label FROM catalog_taxonomy WHERE catalog_group IS NOT NULL"
+            ).fetchall()
+        except sqlite3.Error:
+            group_rows = []
+    groups: dict[str, list[str]] = {}
+    for group, label in group_rows:
+        groups.setdefault(group, []).append(label)
 
     sub_to_cat: dict[str, str] = {}
     raw_brands: set[str] = set()
@@ -243,7 +288,14 @@ def load_taxonomy(db_path: Path = DEFAULT_DB_PATH) -> dict[str, object]:
         "titles": [(title, sub) for title, sub in title_rows],
         "catalog_text": catalog_text,
         "brand_subs": {brand: sorted(subs) for brand, subs in brand_subs.items()},
+        "groups": groups,
     }
+
+
+def expand_sub_categories(names: list[str]) -> list[str]:
+    """Expand catalog groups to their leaf labels for ``$in`` and ``$nin``."""
+    groups: dict[str, list[str]] = load_taxonomy()["groups"]  # type: ignore[assignment]
+    return list(dict.fromkeys(label for name in names for label in groups.get(name, [name])))
 
 
 def expand_brands(canonical_brands: list[str]) -> list[str]:

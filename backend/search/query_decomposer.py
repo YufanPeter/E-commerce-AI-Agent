@@ -26,6 +26,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from llm.cache import Deduper, TTLCache
+from i18n import en as english
+from i18n import is_english
 from llm.client import get_client, get_model_id
 # Reuse the tolerant function-call JSON parser.
 from search.llm_parser import _loads_arguments
@@ -95,6 +97,33 @@ _TOOL_SCHEMA: dict[str, Any] = {
 }
 
 
+def _tool_schema() -> dict[str, Any]:
+    """The split function with field descriptions in the catalog's language."""
+    if not is_english():
+        return _TOOL_SCHEMA
+    function = _TOOL_SCHEMA["function"]
+    requests = function["parameters"]["properties"]["requests"]
+    item = requests["items"]
+    return {
+        "type": "function",
+        "function": {
+            **function,
+            "description": "Split one message into independent shopping requests.",
+            "parameters": {
+                **function["parameters"],
+                "properties": {"requests": {
+                    **requests,
+                    "description": "One entry for a single need.",
+                    "items": {**item, "properties": {
+                        "label": {"type": "string", "description": "A two-to-four word English product label."},
+                        "query": {"type": "string", "description": "A standalone English search keeping the shopper's product words."},
+                    }},
+                }},
+            },
+        },
+    }
+
+
 SYSTEM_PROMPT = """你是电商导购的"需求拆解器"。唯一职责：判断用户一句话里是否包含【多个不同品类】的购物需求，并拆成独立子需求。
 
 严格规则：
@@ -136,6 +165,8 @@ def might_be_multi_intent(query: str) -> bool:
     text = (query or "").strip()
     if len(text) < 4:
         return False
+    if is_english():
+        return english.MULTI_INTENT_RE.search(text) is not None
     return any(marker in text for marker in _MULTI_INTENT_MARKERS)
 
 
@@ -184,10 +215,10 @@ def _decompose_uncached(query: str, timeout: float = 6.0) -> list[SubRequest]:
         response = client.chat.completions.create(
             model=get_model_id(role="fast"),
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": english.DECOMPOSER_SYSTEM if is_english() else SYSTEM_PROMPT},
                 {"role": "user", "content": query},
             ],
-            tools=[_TOOL_SCHEMA],
+            tools=[_tool_schema()],
             tool_choice={"type": "function", "function": {"name": "split_shopping_requests"}},
             temperature=0.1,
             timeout=timeout,

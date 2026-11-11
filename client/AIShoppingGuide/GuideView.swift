@@ -99,10 +99,9 @@ struct GuideView: View {
 
     /// Example-query pool from which four unique items are sampled for each empty state.
     private static let examplePool = [
-        "适合油皮的洗面奶", "200 元内蓝牙耳机", "轻量跑鞋", "不要含酒精的防晒",
-        "通勤双肩包推荐", "敏感肌身体乳", "适合送女友的香水", "300 元内机械键盘",
-        "冬天保暖羽绒服", "学生党平价护眼台灯", "适合露营的折叠椅", "低糖代餐零食",
-        "降噪头戴式耳机", "夏天透气运动短裤", "适合新手的口红色号", "家用空气炸锅"
+        "Face wash for oily skin", "Earbuds under $50", "Lightweight running shoes", "Facial sunscreen",
+        "Coffee makers under $100", "Laptop stands", "Smartwatches, no watch bands", "Nonstick frying pans",
+        "Body sunscreen", "Bedding sets", "Shampoo for dry hair", "Casual dresses"
     ]
 
     /// Samples four unique examples from the pool.
@@ -110,7 +109,7 @@ struct GuideView: View {
         Array(examplePool.shuffled().prefix(4))
     }
 
-    private static let newConversationTitle = "新对话"
+    private static let newConversationTitle = "New chat"
     private static let emptyStateAnchorID = "guide-empty-state-anchor"
 
     var body: some View {
@@ -229,7 +228,7 @@ struct GuideView: View {
                 .lineLimit(2)
             Spacer()
             HStack(spacing: 8) {
-                Button("撤销") {
+                Button("Undo") {
                     Task { @MainActor in
                         await preferenceStore.undo(update)
                         withAnimation(.easeOut(duration: 0.18)) {
@@ -242,7 +241,7 @@ struct GuideView: View {
                 Divider()
                     .frame(height: 16)
 
-                Button("确定") {
+                Button("OK") {
                     withAnimation(.easeOut(duration: 0.18)) {
                         pendingMemoryUpdate = nil
                     }
@@ -265,7 +264,7 @@ struct GuideView: View {
                     .tracking(0.3)
                     .scaleEffect(x: 1.06, y: 1, anchor: .leading)
                     .foregroundStyle(AppTheme.textPrimary)
-                Text("购物导购")
+                Text("Shopping assistant")
                     .font(.caption.weight(.medium))
                     .foregroundStyle(AppTheme.textSecondary)
             }
@@ -276,7 +275,7 @@ struct GuideView: View {
                 HStack(spacing: 5) {
                     Image(systemName: "square.and.pencil")
                         .font(.system(size: 15, weight: .semibold))
-                    Text("新对话")
+                    Text("New chat")
                         .font(.subheadline.weight(.semibold))
                 }
                 .foregroundStyle(AppTheme.primary)
@@ -375,7 +374,7 @@ struct GuideView: View {
                         onSpecSubmit: { send($0) },
                         onCompareTap: { comparisonContext = ComparisonContext(candidates: $0) },
                         onFollowUpTap: sendPrompt,
-                        onSeeMore: { sendPrompt("更多\($0)") },
+                        onSeeMore: { _ in sendPrompt("Show more") },
                         onFeedback: { submitFeedback(for: message.id, rating: $0) },
                         onAddToCart: { addToCart($0, selectedOptions: $1, quantity: $2) }
                     )
@@ -460,7 +459,7 @@ struct GuideView: View {
             TapGesture()
                 .onEnded(action)
         )
-        .accessibilityLabel("跳到最新消息")
+        .accessibilityLabel("Jump to latest message")
         .accessibilityAddTraits(.isButton)
     }
 
@@ -470,7 +469,7 @@ struct GuideView: View {
         VStack(alignment: .leading, spacing: 22) {
             VStack(alignment: .leading, spacing: 6) {
                 HomeGreeting(text: homeGreeting)
-                Text(homeFeed?.isReturning == true ? "欢迎回来，今天想看点什么？" : "我是你的导购，直接说需求就行")
+                Text(homeFeed?.isReturning == true ? "Welcome back. What are you shopping for?" : "Tell me what you’re shopping for.")
                     .font(.subheadline)
                     .foregroundStyle(AppTheme.textSecondary)
                     .modifier(StaggeredAppear(index: 1))
@@ -479,7 +478,7 @@ struct GuideView: View {
             if !cartItems.isEmpty || homeFeed?.entries.isEmpty == false {
                 VStack(spacing: 8) {
                     if !cartItems.isEmpty {
-                        homeEntry(title: "购物车里有 \(cartItems.count) 款商品", imageURL: nil, action: onOpenCart)
+                        homeEntry(title: "\(cartItems.count) products in your cart", imageURL: nil, action: onOpenCart)
                             .modifier(StaggeredAppear(index: 2))
                     }
                     ForEach(Array((homeFeed?.entries ?? []).enumerated()), id: \.element.id) { index, entry in
@@ -492,7 +491,7 @@ struct GuideView: View {
             }
 
             VStack(alignment: .leading, spacing: 10) {
-                homeSectionTitle("逛逛分类")
+                homeSectionTitle("Browse categories")
                 FlowLayout(spacing: 10) {
                     ForEach(displayedCategories) { category in
                         Button {
@@ -518,7 +517,7 @@ struct GuideView: View {
             .modifier(StaggeredAppear(index: 5))
 
             VStack(alignment: .leading, spacing: 10) {
-                homeSectionTitle("大家在搜")
+                homeSectionTitle("Popular searches")
                 FlowLayout(spacing: 8) {
                     ForEach(Array(displayedHotSearches.prefix(6)), id: \.self) { query in
                         Button(query) { send(query) }
@@ -539,10 +538,10 @@ struct GuideView: View {
 
     private var homeGreeting: String {
         switch Calendar.current.component(.hour, from: Date()) {
-        case 5..<11: return "早上好"
-        case 11..<13: return "中午好"
-        case 13..<18: return "下午好"
-        default: return "晚上好"
+        case 5..<11: return "Good morning"
+        case 11..<13: return "Good afternoon"
+        case 13..<18: return "Good afternoon"
+        default: return "Good evening"
         }
     }
 
@@ -584,7 +583,7 @@ struct GuideView: View {
     private var displayedCategories: [CategoryEntry] {
         let names = suggestions?.categories.isEmpty == false
             ? suggestions!.categories
-            : ["数码电子", "服饰运动", "美妆护肤", "食品饮料"]
+            : ["Electronics", "Clothing & Sports", "Beauty & Personal Care", "Home & Kitchen"]
         return names.map { CategoryEntry(name: $0) }
     }
 
@@ -600,15 +599,15 @@ struct GuideView: View {
                 if #available(iOS 26.0, *) {
                     GlassEffectContainer(spacing: 12) {
                         VStack(alignment: .leading, spacing: 12) {
-                            ComposerAction(icon: "camera.fill", title: "相机") { openCamera() }
-                            ComposerAction(icon: "photo.fill", title: "图片上传") { openPhotoPicker() }
+                            ComposerAction(icon: "camera.fill", title: "Camera") { openCamera() }
+                            ComposerAction(icon: "photo.fill", title: "Photo library") { openPhotoPicker() }
                         }
                     }
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 } else {
                     VStack(alignment: .leading, spacing: 12) {
-                        ComposerAction(icon: "camera.fill", title: "相机") { openCamera() }
-                        ComposerAction(icon: "photo.fill", title: "图片上传") { openPhotoPicker() }
+                        ComposerAction(icon: "camera.fill", title: "Camera") { openCamera() }
+                        ComposerAction(icon: "photo.fill", title: "Photo library") { openPhotoPicker() }
                     }
                     .padding(14)
                     .frame(width: 156, alignment: .leading)
@@ -699,7 +698,7 @@ struct GuideView: View {
                     .frame(width: 38, height: 38)
             }
             .buttonStyle(.tactile)
-            .accessibilityLabel("语音输入")
+            .accessibilityLabel("Voice input")
         }
 
         if hasComposerPayload {
@@ -711,7 +710,7 @@ struct GuideView: View {
                     .background(AppTheme.primary, in: Circle())
             }
             .buttonStyle(.tactile)
-            .accessibilityLabel(isAssistantStreaming ? "改需求并继续" : "发送")
+            .accessibilityLabel(isAssistantStreaming ? "Update request and continue" : "Send")
         } else if isAssistantStreaming {
             Button(action: { stopGeneration() }) {
                 Image(systemName: "stop.fill")
@@ -721,7 +720,7 @@ struct GuideView: View {
                     .background(AppTheme.textPrimary, in: Circle())
             }
             .buttonStyle(.tactile)
-            .accessibilityLabel("停止生成")
+            .accessibilityLabel("Stop response")
         }
     }
 
@@ -732,9 +731,9 @@ struct GuideView: View {
     /// Input placeholder that prompts for context when an image is attached, such as finding a similar lower-priced item.
     private var composerPlaceholder: String {
         if pendingImageData != nil {
-            return "补充需求，例如「更平价」「同品牌」"
+            return "Add a detail, such as a lower budget or the same brand"
         }
-        return isAssistantStreaming ? "想改要求？直接说" : "搜索商品、品牌或需求"
+        return isAssistantStreaming ? "Want to change your request?" : "Search products, brands, or needs"
     }
 
     private var isKeyboardPresented: Bool {
@@ -800,7 +799,7 @@ struct GuideView: View {
     }
 
     /// 点击 followup 建议：填入输入框供用户编辑，不直接发送。
-    /// 点追问或"查看更多"：等于用户发了这句话，生成中会先停掉当前回答。
+    /// 点追问或"Show more"：等于用户发了这句话，生成中会先停掉当前回答。
     private func sendPrompt(_ prompt: String) {
         let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -828,7 +827,7 @@ struct GuideView: View {
         lastQuery = query
         if currentTitle == GuideView.newConversationTitle {
             currentTitle = imageData != nil && query.isEmpty
-                ? "拍照找货"
+                ? "Search with a photo"
                 : String(query.prefix(20))
         }
         let userMessage = ChatMessage(sender: .user, text: query, localImageData: imageData)
@@ -842,7 +841,7 @@ struct GuideView: View {
         shouldHoldLatestQuestionAnchor = true
         pendingQuestionAnchorID = userMessage.id
         let placeholder = imageData != nil
-            ? "正在识别图片并匹配商品"
+            ? "Matching products from the photo…"
             : loadingSearchText(for: query)
         // Fade in the user bubble and assistant placeholder together with a spring animation.
         withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
@@ -851,7 +850,7 @@ struct GuideView: View {
                 sender: .ai,
                 text: placeholder,
                 state: .understanding,
-                thinkingSteps: [imageData != nil ? "正在识别图片" : (isAmending ? Self.amendThinkingStep : "思考中")]
+                thinkingSteps: [imageData != nil ? "Reading the photo…" : (isAmending ? Self.amendThinkingStep : "Thinking…")]
             ))
         }
         runAgent(for: query, imageBase64: imageData?.base64EncodedString())
@@ -903,7 +902,7 @@ struct GuideView: View {
 
     // MARK: - 停止生成
 
-    private static let amendThinkingStep = "收到，正在调整"
+    private static let amendThinkingStep = "Updating your request…"
 
     /// 取消当前回合并保留用户已经看到的内容。断开连接后，后端会关闭 LLM 流并记录半截回合。
     /// isAmending：用户是在改需求。还没内容的回答直接去掉，有内容的标明新结果在下面。
@@ -952,7 +951,7 @@ struct GuideView: View {
                 message.text = ""
             }
         } else {
-            message.text = "已停止生成"
+            message.text = "Response stopped"
             message.structuredContent = nil
         }
         message.state = .ready
@@ -1010,7 +1009,7 @@ struct GuideView: View {
     private func retryLast() {
         guard !isAssistantStreaming else { return }
         messages.removeAll { $0.canRetry }
-        let query = lastQuery.isEmpty ? "重新推荐" : lastQuery
+        let query = lastQuery.isEmpty ? "Search again" : lastQuery
         pendingAutoFollowWorkItem?.cancel()
         isAutoFollowEnabled = true
         shouldHoldLatestQuestionAnchor = false
@@ -1018,9 +1017,9 @@ struct GuideView: View {
         shouldShowJumpToLatest = false
         messages.append(ChatMessage(
             sender: .ai,
-            text: "正在重新匹配商品",
+            text: "Searching again…",
             state: .understanding,
-            thinkingSteps: ["思考中"]
+            thinkingSteps: ["Thinking…"]
         ))
         runAgent(for: query)
     }
@@ -1097,7 +1096,7 @@ struct GuideView: View {
                 let hasStructuredContent = latestAssistantMessage?.structuredContent != nil
 
                 if hasProducts || hasStructuredContent {
-                    markFollowupGenerationFailed("追问生成失败，正在重试")
+                    markFollowupGenerationFailed("Could not generate suggestions. Retrying…")
                     try? await Task.sleep(nanoseconds: retryDelay(for: attempt))
                     completeFollowupsFromCurrentMessage(query: query)
                     persistCurrent()
@@ -1111,7 +1110,7 @@ struct GuideView: View {
         }
 
         if latestAssistantMessage?.products.isEmpty == false || latestAssistantMessage?.structuredContent != nil {
-            markFollowupGenerationFailed("追问生成失败，可以稍后重试")
+            markFollowupGenerationFailed("Could not generate suggestions. Try again later.")
         } else {
             updateLastAI(text: errorMessage(lastError ?? RESTServiceError.decodingFailed), state: .failed, canRetry: true)
         }
@@ -1127,7 +1126,7 @@ struct GuideView: View {
             var visibleNarrative = ""
             var isStructuredNarrative = false
             var hydrated: [Product] = []
-            var statusText = imageBase64 == nil ? loadingSearchText(for: query) : "正在识别图片并匹配商品"
+            var statusText = imageBase64 == nil ? loadingSearchText(for: query) : "Matching products from the photo…"
 
             // 结构化流式（新协议）：后端按"开场白逐字 → 每款商品解说 → 追问"顺序下发，
             // 卡片随自己的解说到达时才弹出，而不是检索一完成就整批砸出来。
@@ -1167,7 +1166,7 @@ struct GuideView: View {
                                 products: nil
                             )
                         } else if status.phase == .generating, !hydrated.isEmpty {
-                            markFollowupGenerationInProgress("生成追问中")
+                            markFollowupGenerationInProgress("Preparing follow-up suggestions…")
                         }
                     }
 
@@ -1197,7 +1196,7 @@ struct GuideView: View {
                     if let piece = event.textDelta {
                         hasStructuredStream = true
                         pendingProductPreview = false
-                        setStreamingStatus(hydrated.isEmpty ? "正在整理推荐" : "正在介绍商品")
+                        setStreamingStatus(hydrated.isEmpty ? "Preparing recommendations…" : "Preparing product details…")
                         if piece.count >= streamOpeningTypewriterThreshold {
                             // 一大块一次到（缓存命中）：按逐字节奏打出来，别"啪"地整句出现
                             for character in piece {
@@ -1242,7 +1241,7 @@ struct GuideView: View {
                         lastCardRevealAt = Date()
                         streamedItems.append(StructuredItem(productId: pid, description: description, group: event.group))
                         let remaining = hydrated.count - streamedItems.count
-                        setStreamingStatus(remaining > 0 ? "正在介绍商品" : "生成追问中")
+                        setStreamingStatus(remaining > 0 ? "Preparing product details…" : "Preparing follow-up suggestions…")
                         withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.86)) {
                             renderStructuredStream(
                                 query: query,
@@ -1310,7 +1309,7 @@ struct GuideView: View {
                         try Task.checkCancellation()
                         lastFollowupRevealAt = Date()
                         streamedFollowups.append(text)
-                        setStreamingStatus("生成追问中")
+                        setStreamingStatus("Preparing follow-up suggestions…")
                         withAnimation(.easeOut(duration: 0.18)) {
                             renderStructuredStream(
                                 query: query,
@@ -1356,7 +1355,7 @@ struct GuideView: View {
                             if hydrated.isEmpty {
                                 updateLastAI(text: statusText, state: .generating, products: nil)
                             } else {
-                                markFollowupGenerationInProgress("生成追问中")
+                                markFollowupGenerationInProgress("Preparing follow-up suggestions…")
                             }
                         } else {
                             clearThinkingSteps()
@@ -1468,8 +1467,8 @@ struct GuideView: View {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: "…."))
         guard !step.isEmpty, messages[index].thinkingSteps?.last != step else { return }
-        // 改需求时第一步已经是"收到，正在调整"，后端的"思考中"不用再显示一遍
-        if step == "思考中", messages[index].thinkingSteps?.last == Self.amendThinkingStep { return }
+        // 改需求时第一步已经是"Updating your request…"，后端的"Thinking…"不用再显示一遍
+        if step == "Thinking…", messages[index].thinkingSteps?.last == Self.amendThinkingStep { return }
         withAnimation(.easeOut(duration: 0.2)) {
             messages[index].thinkingSteps = (messages[index].thinkingSteps ?? []) + [step]
         }
@@ -1719,20 +1718,20 @@ struct GuideView: View {
     private func completedRecommendationOpening(for query: String, products: [Product]) -> String {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty {
-            return "为你找到了几款和「\(trimmed)」比较匹配的商品"
+            return "Here are some options for “\(trimmed).”"
         }
         if let firstTag = products.first?.tags.first, !firstTag.isEmpty {
-            return "为你找到了几款\(firstTag)相关的商品"
+            return "Here are some options in \(firstTag)."
         }
-        return "为你找到了几款比较匹配的商品"
+        return "Here are some options for your search."
     }
 
     private func searchingRecommendationOpening(for query: String) -> String {
-        "正在为你寻找合适的商品"
+        "Looking for matching products…"
     }
 
     private func loadingSearchText(for query: String) -> String {
-        "正在为你寻找合适的商品"
+        "Looking for matching products…"
     }
 
     private func retryDelay(for attempt: Int) -> UInt64 {
@@ -1742,7 +1741,7 @@ struct GuideView: View {
 
     private func markAssistantTransientFailure(attempt: Int, maxAttempts: Int) {
         guard attempt < maxAttempts else { return }
-        let retryText = "连接中断，正在第 \(attempt + 1) 次重试"
+        let retryText = "Connection lost. Retry \(attempt + 1)…"
         updateLastAI(text: retryText, state: .understanding, products: nil)
         if let index = messages.lastIndex(where: { $0.sender == .ai }) {
             messages[index].thinkingSteps = [retryText]
@@ -1789,12 +1788,12 @@ struct GuideView: View {
     }
 
     private func fallbackFollowups(for query: String, products: [Product]) -> [String] {
-        var prompts = ["推荐更便宜一点的", "对比一下前两款", "换个品牌看看"]
+        var prompts = ["Show cheaper options", "Compare the first and second", "Show other brands"]
         if let tag = products.first?.tags.first, !tag.isEmpty {
-            prompts[2] = "继续找\(tag)相关的"
+            prompts[2] = "Show more \(tag)"
         }
-        if query.contains("便宜") || query.contains("平价") {
-            prompts[0] = "预算再放宽一点看看"
+        if query.contains("cheap") || query.contains("affordable") {
+            prompts[0] = "Clear the budget"
         }
         return prompts
     }
@@ -1941,52 +1940,52 @@ struct GuideView: View {
         
         switch error {
         case .invalidURL:
-            message += "服务地址无效\n\n"
-            errorMessage = "商品服务地址无效。"
+            message += "Invalid service URL\n\n"
+            errorMessage = "The product service URL is invalid."
         case .invalidResponse:
-            message += "服务响应无效\n\n"
-            errorMessage = "商品服务返回了无效响应。"
+            message += "Invalid service response\n\n"
+            errorMessage = "The product service returned an invalid response."
         case .requestFailed(let code, _, let msg):
             errorMessage = msg
             switch code {
             case 400:
-                message += "请求参数有误\n\n"
+                message += "Invalid request\n\n"
             case 401, 403:
-                message += "认证失败，请检查网络权限\n\n"
+                message += "Access was denied\n\n"
             case 404:
-                message += "找不到相关商品\n\n"
+                message += "Product not found\n\n"
             case 429:
-                message += "请求过于频繁，请稍候再试\n\n"
+                message += "Too many requests. Try again shortly.\n\n"
             case 500...599:
-                message += "服务器暂时不可用\n\n"
+                message += "The server is unavailable\n\n"
             default:
-                message += "商品服务暂时不可用\n\n"
+                message += "Product service unavailable\n\n"
             }
         case .connectionFailed:
-            message += "连接失败\n\n"
-            errorMessage = "商品服务暂时不可用，请确认后端 REST API 已启动。"
+            message += "Could not connect\n\n"
+            errorMessage = "The product service is unavailable. Make sure the backend is running."
         case .decodingFailed:
-            message += "数据解析失败\n\n"
-            errorMessage = "商品服务返回数据解析失败。"
+            message += "Could not read the response\n\n"
+            errorMessage = "Could not read the product service response."
         }
         
-        message += "失败原因：\(errorMessage)\n\n"
+        message += "Reason: \(errorMessage)\n\n"
         
-        message += "建议：\n"
-        message += "• 检查网络连接是否正常\n"
-        message += "• 尝试简化搜索关键词\n"
-        message += "• 稍后重新尝试\n"
+        message += "What you can try:\n"
+        message += "• Check your connection\n"
+        message += "• Try a simpler search\n"
+        message += "• Try again in a moment\n"
         
         return message
     }
     
     private func defaultErrorMessage() -> String {
-        return "商品服务暂时不可用\n\n" +
-               "失败原因：未知错误\n\n" +
-               "建议：\n" +
-               "• 检查网络连接是否正常\n" +
-               "• 尝试简化搜索关键词\n" +
-               "• 点击下方按钮重新尝试"
+        return "Product service unavailable\n\n" +
+               "Reason: Unknown error\n\n" +
+               "What you can try:\n" +
+               "• Check your connection\n" +
+               "• Try a simpler search\n" +
+               "• Tap the button below to retry"
     }
 
     private func updateKeyboardHeight(from notification: Notification) {
@@ -2320,8 +2319,8 @@ struct MessageRow: View {
         let questions = textParagraphs.filter { paragraph in
             guard paragraph != opening else { return false }
             return paragraph.contains("？") || paragraph.contains("?") ||
-                paragraph.contains("需要") || paragraph.contains("想要") ||
-                paragraph.contains("想看")
+                paragraph.contains("need") || paragraph.contains("want") ||
+                paragraph.contains("looking for")
         }
         return questions
     }
@@ -2443,12 +2442,12 @@ struct MessageRow: View {
                     }
 
                     if let points = parsedStructuredContent?.points, !points.isEmpty {
-                        ComparisonInsightList(title: "这些差异意味着什么", items: points)
+                        ComparisonInsightList(title: "What the differences mean", items: points)
                             .transition(.opacity)
                     }
 
                     if let picks = parsedStructuredContent?.picks, !picks.isEmpty {
-                        ComparisonInsightList(title: "怎么选", items: picks)
+                        ComparisonInsightList(title: "How to choose", items: picks)
                             .transition(.opacity)
                     }
 
@@ -2476,7 +2475,7 @@ struct MessageRow: View {
                                     .foregroundStyle(AppTheme.textPrimary)
                                     .lineSpacing(4)
                                     .fixedSize(horizontal: false, vertical: true)
-                                Button("查看详情") {
+                                Button("View details") {
                                     onProductTap(section.product)
                                 }
                                 .font(.footnote.weight(.medium))
@@ -2564,7 +2563,7 @@ struct MessageRow: View {
 
                 if message.wasStopped == true {
                     Label(
-                        message.wasAmended == true ? "已改需求，新结果在下面" : "已停止",
+                        message.wasAmended == true ? "Request updated. New results below." : "Stopped",
                         systemImage: message.wasAmended == true ? "arrow.down.circle" : "stop.circle"
                     )
                         .font(.caption.weight(.medium))
@@ -2594,7 +2593,7 @@ struct MessageRow: View {
                             HStack(spacing: 8) {
                                 Image(systemName: "arrow.clockwise")
                                     .font(.headline)
-                                Text("重新尝试")
+                                Text("Try again")
                                     .font(.headline.weight(.semibold))
                             }
                             .padding(.horizontal, 24)
@@ -2605,7 +2604,7 @@ struct MessageRow: View {
                             .shadow(color: AppTheme.primary.opacity(0.22), radius: 6, x: 0, y: 3)
                         }
                         
-                        Text("点击上方按钮重新搜索")
+                        Text("Tap above to search again")
                             .font(.caption)
                             .foregroundStyle(AppTheme.textSecondary)
                     }
@@ -2621,7 +2620,7 @@ struct MessageRow: View {
                     Button {
                         onCompareTap(message.products)
                     } label: {
-                        Label("对比商品", systemImage: "square.split.2x1")
+                        Label("Compare products", systemImage: "square.split.2x1")
                             .font(.footnote.weight(.semibold))
                             .foregroundStyle(AppTheme.primary)
                             .padding(.horizontal, 14)
@@ -2655,7 +2654,7 @@ struct MessageRow: View {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .font(.title2)
                             .foregroundColor(AppTheme.error)
-                        Text("出错了")
+                        Text("Something went wrong")
                             .font(.headline)
                             .foregroundColor(AppTheme.error)
                     }
@@ -2698,8 +2697,7 @@ struct MessageRow: View {
 
     private var loadingStatusText: String {
         let trimmed = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return message.state.rawValue }
-        return trimmed.hasSuffix("中") ? trimmed : message.state.rawValue
+        return trimmed.isEmpty ? message.state.rawValue : trimmed
     }
 
     private var displayText: String {
@@ -2711,14 +2709,14 @@ struct MessageRow: View {
         }
     }
 
-    /// 真正给出了内容的回答才能评价和分享，出错和"已停止生成"不算。
+    /// 真正给出了内容的回答才能评价和分享，出错和"Response stopped"不算。
     private var showsFeedbackBar: Bool {
         message.sender == .ai
             && message.state == .ready
             && !message.canRetry
             && message.followupError == nil
             && !message.text.isEmpty
-            && message.text != "已停止生成"
+            && message.text != "Response stopped"
     }
 
     /// 回答开始前显示思考步骤；一旦有开场白或正文就不再显示。
@@ -2749,7 +2747,7 @@ struct MessageRow: View {
         let trimmed = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
         guard message.structuredContent == nil else { return false }
-        return !trimmed.hasPrefix("正在")
+        return !trimmed.hasPrefix("Looking for matching products")
     }
 
     private var bubbleColor: Color {
@@ -2780,7 +2778,7 @@ private struct StreamingPulseIndicator: View {
         .padding(.vertical, 8)
         .background(AppTheme.surface, in: Capsule())
         .overlay(Capsule().stroke(AppTheme.border, lineWidth: 1))
-        .accessibilityLabel("生成中")
+        .accessibilityLabel("Writing…")
         .task {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 300_000_000)
@@ -2884,8 +2882,8 @@ private struct AnswerFeedbackBar: View {
 
     var body: some View {
         HStack(spacing: 2) {
-            rateButton(value: "up", symbol: "hand.thumbsup", label: "有帮助")
-            rateButton(value: "down", symbol: "hand.thumbsdown", label: "没帮助")
+            rateButton(value: "up", symbol: "hand.thumbsup", label: "Helpful")
+            rateButton(value: "down", symbol: "hand.thumbsdown", label: "Not helpful")
             ShareLink(item: shareText) {
                 Image(systemName: "square.and.arrow.up")
                     .font(.system(size: 14, weight: .medium))
@@ -2893,9 +2891,9 @@ private struct AnswerFeedbackBar: View {
                     .frame(width: 40, height: 40)
                     .contentShape(Rectangle())
             }
-            .accessibilityLabel("分享")
+            .accessibilityLabel("Share")
             if rating != nil {
-                Text("反馈已提交")
+                Text("Feedback sent")
                     .font(.caption)
                     .foregroundStyle(AppTheme.textSecondary)
                     .padding(.leading, 6)
@@ -2963,7 +2961,7 @@ private struct ThinkingStepDot: View {
     }
 }
 
-/// 分区标题：左边说明这组的共同点，右边"查看更多"继续看同类、不重复已展示的。
+/// 分区标题：左边说明这组的共同点，右边"Show more"继续看同类、不重复已展示的。
 private struct ProductSectionHeader: View {
     let title: String
     let onSeeMore: () -> Void
@@ -2975,7 +2973,7 @@ private struct ProductSectionHeader: View {
                 .foregroundStyle(AppTheme.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 8)
-            Button("查看更多", action: onSeeMore)
+            Button("Show more", action: onSeeMore)
                 .font(.footnote.weight(.medium))
                 .foregroundStyle(AppTheme.primary)
                 .buttonStyle(.tactile)
@@ -3055,7 +3053,7 @@ private struct ClaudeStyleLoadingStatus: View {
 
     private var normalizedText: String {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.hasSuffix("中") ? trimmed : "\(trimmed)中"
+        return trimmed
     }
 
     private var ellipsisOpacity: Double {
@@ -3136,14 +3134,7 @@ struct VoiceEndpointDetector {
     static func looksIncomplete(_ text: String) -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
         guard !trimmed.isEmpty else { return false }
-        let chineseEndings = [
-            "和", "跟", "还有", "然后", "以及", "或者", "但是", "而且", "那个", "这个",
-            "就是", "比如", "我想", "我要", "想要", "帮我", "呃", "嗯"
-        ]
-        if chineseEndings.contains(where: { trimmed.hasSuffix($0) }) {
-            return true
-        }
-        let englishEndings: Set<String> = ["of", "and", "the", "to", "with", "for", "a", "an", "or", "but"]
+        let englishEndings: Set<String> = ["of", "and", "the", "to", "with", "for", "a", "an", "or", "but", "want", "need", "um", "uh"]
         let lastWord = trimmed.lowercased().split(whereSeparator: { !$0.isLetter }).last.map(String.init)
         return lastWord.map(englishEndings.contains) ?? false
     }
@@ -3174,7 +3165,7 @@ final class SpeechInputController: NSObject, ObservableObject, SFSpeechRecognize
     /// 一次语音输入结束后写入，只写一次。
     @Published private(set) var outcome: VoiceCaptureOutcome?
 
-    private let speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "zh_CN"))
+    private let speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "en_US"))
     private let audioEngine = AVAudioEngine()
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
@@ -3190,15 +3181,15 @@ final class SpeechInputController: NSObject, ObservableObject, SFSpeechRecognize
         errorMessage = nil
         outcome = nil
         guard speechRecognizer?.isAvailable == true else {
-            errorMessage = "语音识别暂时不可用。"
+            errorMessage = "Speech recognition is unavailable."
             return
         }
         guard await requestSpeechAuthorization() else {
-            errorMessage = "请允许语音识别权限后再使用语音输入。"
+            errorMessage = "Allow speech recognition to use voice input."
             return
         }
         guard await requestMicrophoneAuthorization() else {
-            errorMessage = "请允许麦克风权限后再使用语音输入。"
+            errorMessage = "Allow microphone access to use voice input."
             return
         }
         // 用户可能在权限弹框期间已经取消了
@@ -3225,7 +3216,7 @@ final class SpeechInputController: NSObject, ObservableObject, SFSpeechRecognize
             // 没有可用麦克风时格式为空，直接 installTap 会让进程崩溃
             guard recordingFormat.sampleRate > 0, recordingFormat.channelCount > 0 else {
                 stop()
-                errorMessage = "没有检测到可用的麦克风。"
+                errorMessage = "No microphone was detected."
                 return
             }
             let tap = Self.makeTapBlock(request: request) { [weak self] value in
@@ -3258,7 +3249,7 @@ final class SpeechInputController: NSObject, ObservableObject, SFSpeechRecognize
             }
         } catch {
             stop()
-            errorMessage = "语音输入启动失败，请稍后重试。"
+            errorMessage = "Could not start voice input. Try again."
         }
     }
 
@@ -3388,7 +3379,7 @@ final class SpeechInputController: NSObject, ObservableObject, SFSpeechRecognize
     ) {
         Task { @MainActor in
             if !available {
-                errorMessage = "语音识别暂时不可用。"
+                errorMessage = "Speech recognition is unavailable."
                 stop()
             }
         }
@@ -3419,11 +3410,11 @@ private struct VoiceCaptureOverlay: View {
                 .contentShape(Rectangle())
                 .onTapGesture { speech.finishNow() }
                 .accessibilityElement()
-                .accessibilityLabel("正在聆听")
-                .accessibilityHint("点按结束说话并发送")
+                .accessibilityLabel("Listening")
+                .accessibilityHint("Tap to finish speaking and send")
                 .accessibilityAddTraits(.isButton)
 
-            Button("取消", action: onCancel)
+            Button("Cancel", action: onCancel)
                 .font(.subheadline.weight(.medium))
                 .foregroundStyle(AppTheme.textSecondary)
                 .frame(minWidth: 88, minHeight: 36)
@@ -3474,7 +3465,7 @@ private struct VoiceCaptureOverlay: View {
                 .font(.subheadline.weight(.medium))
                 .foregroundStyle(AppTheme.error)
         } else if speech.transcript.isEmpty {
-            Text("请说话")
+            Text("Start speaking")
                 .font(.subheadline)
                 .foregroundStyle(AppTheme.textSecondary)
         } else {
@@ -3609,8 +3600,13 @@ struct ProductCard: View {
                         .background(AppTheme.secondary.opacity(0.6), in: Capsule())
                 }
 
-                addButton
-                    .padding(.top, 2)
+                if product.referenceOnly == true {
+                    Text("Availability unknown")
+                        .font(.caption2)
+                        .foregroundStyle(AppTheme.textSecondary)
+                } else {
+                    addButton.padding(.top, 2)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -3618,7 +3614,7 @@ struct ProductCard: View {
         .surfacePanel(cornerRadius: 16)
         .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .onTapGesture(perform: onDetail)
-        .accessibilityAction(named: "查看详情", onDetail)
+        .accessibilityAction(named: "View details", onDetail)
         .sheet(isPresented: $showSpecSheet) {
             AddToCartSheet(
                 product: product,
@@ -3658,7 +3654,7 @@ struct ProductCard: View {
                     Image(systemName: "checkmark")
                         .font(.caption2.weight(.bold))
                 }
-                Text(justAdded ? "已加入" : (needsSpecChoice ? "选规格" : "加入购物车"))
+                Text(justAdded ? "Added" : (needsSpecChoice ? "Choose options" : "Add to cart"))
             }
             .font(.caption.weight(.semibold))
             .foregroundStyle(justAdded ? AppTheme.success : .white)
@@ -3715,8 +3711,8 @@ struct SpecSelectionCard: View {
     }
 
     private var buttonTitle: String {
-        if submitted { return "已选择" }
-        return allChosen ? "加入购物车" : "请选择规格"
+        if submitted { return "Selected" }
+        return allChosen ? "Add to cart" : "Choose options"
     }
 
     var body: some View {
@@ -3773,7 +3769,7 @@ struct SpecSelectionCard: View {
     private func submit() {
         guard allChosen, !submitted else { return }
         submitted = true
-        let phrase = "我要 " + selection.dimensions
+        let phrase = "I want " + selection.dimensions
             .compactMap { selected[$0.name] }
             .joined(separator: " ")
         onSubmit(phrase)
@@ -3786,15 +3782,15 @@ struct CategoryEntry: Identifiable {
     var id: String { name }
 
     /// Natural-language search query sent to the agent when the shortcut is selected.
-    var query: String { "推荐\(name)" }
+    var query: String { "Browse \(name)" }
 
     var icon: String {
         switch name {
         // Use simple icons with a consistent outlined style.
-        case "数码电子": return "laptopcomputer"
-        case "服饰运动": return "figure.run"
-        case "美妆护肤": return "drop"
-        case "食品饮料", "食品生活": return "cup.and.saucer"
+        case "Electronics": return "laptopcomputer"
+        case "Clothing & Sports": return "figure.run"
+        case "Beauty & Personal Care": return "drop"
+        case "Food & Drinks", "Home & Kitchen": return "cup.and.saucer"
         default: return "bag"
         }
     }
@@ -3802,10 +3798,10 @@ struct CategoryEntry: Identifiable {
     var tint: Color {
         switch name {
         // Use muted earth tones that complement the terracotta accent without saturated AI-style colors.
-        case "数码电子": return Color(hex: "6E89A6")   // 雾蓝
-        case "服饰运动": return Color(hex: "7E9B6B")   // 橄榄绿
-        case "美妆护肤": return Color(hex: "C77B82")   // 豆沙粉
-        case "食品饮料", "食品生活": return Color(hex: "D69A4C")   // 芥末黄
+        case "Electronics": return Color(hex: "6E89A6")   // 雾蓝
+        case "Clothing & Sports": return Color(hex: "7E9B6B")   // 橄榄绿
+        case "Beauty & Personal Care": return Color(hex: "C77B82")   // 豆沙粉
+        case "Food & Drinks", "Home & Kitchen": return Color(hex: "D69A4C")   // 芥末黄
         default: return AppTheme.primary
         }
     }
@@ -3922,14 +3918,14 @@ struct HistorySheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("历史记录")
+                Text("Chat history")
                     .font(.title3.bold())
                 Spacer()
                 if !conversations.isEmpty {
                     Button(role: .destructive) {
                         showClearAllConfirm = true
                     } label: {
-                        Label("清空", systemImage: "trash")
+                        Label("Clear", systemImage: "trash")
                             .font(.subheadline.weight(.medium))
                             .foregroundStyle(AppTheme.error)
                     }
@@ -3964,12 +3960,12 @@ struct HistorySheet: View {
                             Button(role: .destructive) {
                                 onDelete(conversation)
                             } label: {
-                                Label("删除", systemImage: "trash")
+                                Label("Delete", systemImage: "trash")
                             }
                             Button {
                                 startRename(conversation)
                             } label: {
-                                Label("重命名", systemImage: "pencil")
+                                Label("Rename", systemImage: "pencil")
                             }
                             .tint(AppTheme.primary)
                         }
@@ -3978,12 +3974,12 @@ struct HistorySheet: View {
                             Button {
                                 startRename(conversation)
                             } label: {
-                                Label("重命名", systemImage: "pencil")
+                                Label("Rename", systemImage: "pencil")
                             }
                             Button(role: .destructive) {
                                 pendingDelete = conversation
                             } label: {
-                                Label("删除对话", systemImage: "trash")
+                                Label("Delete chat", systemImage: "trash")
                             }
                         }
                     }
@@ -3995,41 +3991,41 @@ struct HistorySheet: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(AppTheme.background)
         .confirmationDialog(
-            "删除这段对话？",
+            "Delete this chat?",
             isPresented: Binding(
                 get: { pendingDelete != nil },
                 set: { if !$0 { pendingDelete = nil } }
             ),
             titleVisibility: .visible
         ) {
-            Button("删除", role: .destructive) {
+            Button("Delete", role: .destructive) {
                 if let target = pendingDelete { onDelete(target) }
                 pendingDelete = nil
             }
-            Button("取消", role: .cancel) { pendingDelete = nil }
+            Button("Cancel", role: .cancel) { pendingDelete = nil }
         } message: {
             Text(pendingDelete?.title ?? "")
         }
-        .alert("重命名对话", isPresented: Binding(
+        .alert("Rename chat", isPresented: Binding(
             get: { renameTarget != nil },
             set: { if !$0 { renameTarget = nil } }
         )) {
-            TextField("对话标题", text: $renameText)
-            Button("保存") {
+            TextField("Chat title", text: $renameText)
+            Button("Save") {
                 if let target = renameTarget {
                     onRename(target, renameText)
                 }
                 renameTarget = nil
             }
-            Button("取消", role: .cancel) { renameTarget = nil }
+            Button("Cancel", role: .cancel) { renameTarget = nil }
         }
         .confirmationDialog(
-            "清空所有历史对话？此操作不可撤销",
+            "Clear all chats? This cannot be undone.",
             isPresented: $showClearAllConfirm,
             titleVisibility: .visible
         ) {
-            Button("清空全部 \(conversations.count) 段对话", role: .destructive) { onClearAll() }
-            Button("取消", role: .cancel) {}
+            Button("Clear all \(conversations.count) chats", role: .destructive) { onClearAll() }
+            Button("Cancel", role: .cancel) {}
         }
     }
 
@@ -4038,7 +4034,7 @@ struct HistorySheet: View {
             Image(systemName: "magnifyingglass")
                 .font(.subheadline)
                 .foregroundStyle(AppTheme.textSecondary)
-            TextField("搜索历史对话", text: $searchText)
+            TextField("Search chat history", text: $searchText)
                 .font(.subheadline)
                 .foregroundStyle(AppTheme.textPrimary)
                 .submitLabel(.search)
@@ -4070,7 +4066,7 @@ struct HistorySheet: View {
             Image(systemName: "clock.arrow.circlepath")
                 .font(.largeTitle)
                 .foregroundStyle(AppTheme.textSecondary)
-            Text("还没有历史对话")
+            Text("No previous chats")
                 .font(.subheadline)
                 .foregroundStyle(AppTheme.textSecondary)
         }
@@ -4082,7 +4078,7 @@ struct HistorySheet: View {
             Image(systemName: "magnifyingglass")
                 .font(.largeTitle)
                 .foregroundStyle(AppTheme.textSecondary)
-            Text("没有匹配的对话")
+            Text("No matching chats")
                 .font(.subheadline)
                 .foregroundStyle(AppTheme.textSecondary)
         }
@@ -4121,7 +4117,7 @@ private extension AgentStatusPhase {
 }
 
 #if DEBUG
-#Preview("推荐消息") {
+#Preview("Recommendations") {
     ScrollView {
         MessageRow(
             message: PreviewFixtures.recommendMessage,
@@ -4138,7 +4134,7 @@ private extension AgentStatusPhase {
     .background(AppTheme.background)
 }
 
-#Preview("加载中") {
+#Preview("Loading") {
     MessageRow(
         message: PreviewFixtures.loadingMessage,
         examples: [],

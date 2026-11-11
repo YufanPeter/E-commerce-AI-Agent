@@ -14,6 +14,8 @@ import asyncio
 import json
 import logging
 import os
+import re
+import sqlite3
 import threading
 from collections.abc import AsyncIterator, Iterator
 from typing import Any
@@ -32,7 +34,10 @@ from pydantic import BaseModel, Field
 
 from agent import memory_service
 from api import products as products_router
-from store.cart_store import CartNotFoundError, CartStore
+from catalog_config import PROFILE
+from i18n import en as english
+from i18n import is_english, t
+from store.cart_store import CartNotFoundError, CartStockError, CartStore
 from store.order_store import OrderStore
 from store.feedback_store import FeedbackStore
 from store.session_store import SqliteSessionStore
@@ -166,8 +171,18 @@ async def http_exception_handler(_request: Request, exc: HTTPException) -> JSONR
             message=str(exc.detail),
             retryable=exc.status_code >= 500,
         )
+    if is_english() and re.search(r"[\u4e00-\u9fff]", str(detail.get("message", ""))):
+        messages = {
+            400: "Check the request and try again.",
+            404: "The requested item was not found.",
+            409: "This action cannot be completed for the current item.",
+        }
+        detail = {**detail, "message": messages.get(exc.status_code, "The request could not be completed.")}
     return JSONResponse(status_code=exc.status_code, content=detail)
 
+
+if PROFILE.requires_prebuilt_db and not PROFILE.db_path.is_file():
+    raise RuntimeError("Amazon catalog not found. Run bash scripts/start_amazon.sh to build it first.")
 
 _sessions = SqliteSessionStore()
 _user_memory = UserMemoryStore()
@@ -297,7 +312,8 @@ def _apply_realtime_preference_updates(query: str, session: Any) -> list[dict[st
         return []
     session_id = getattr(session, "session_id", None)
     events = memory_service.process_utterance(_user_memory, user_id, query, session_id)
-    memory_service.extract_in_background(_user_memory, user_id, query, session_id, events)
+    if PROFILE.capabilities.llm_memory:
+        memory_service.extract_in_background(_user_memory, user_id, query, session_id, events)
     if events:
         session.user_profile = _user_memory.get_preference(user_id).to_dict()
     return events
@@ -354,6 +370,19 @@ def _warmup() -> None:
 
 @app.get("/health")
 def health() -> dict[str, str]:
+    if PROFILE.requires_prebuilt_db:
+        try:
+            from contextlib import closing
+
+            with closing(sqlite3.connect(f"{PROFILE.db_path.as_uri()}?mode=ro", uri=True)) as conn:
+                row = conn.execute(
+                    "SELECT 1 FROM amazon_product_metadata a JOIN products p USING (product_id) "
+                    "WHERE p.base_price = a.price_usd LIMIT 1"
+                ).fetchone()
+            if row is None:
+                raise ValueError("Amazon USD catalog is empty")
+        except (sqlite3.Error, ValueError) as exc:
+            raise HTTPException(status_code=503, detail="Build the Amazon USD catalog before starting the backend.") from exc
     return {"status": "ok"}
 
 
@@ -451,7 +480,7 @@ def delete_memory_item(user_id: str, item_id: str) -> dict[str, Any]:
     result = _user_memory.remove_item(clean_user_id, item_id)
     if result is None:
         raise HTTPException(status_code=404, detail="这条记忆不存在")
-    return {"message": "已忘掉这条", "undo_token": result["undo_token"], "view": memory_service.build_view(_user_memory, clean_user_id)}
+    return {"message": t("memory.removed"), "undo_token": result["undo_token"], "view": memory_service.build_view(_user_memory, clean_user_id)}
 
 
 @app.put("/memory/{user_id}/settings")
@@ -469,7 +498,7 @@ def undo_memory(user_id: str, req: PreferenceUndoRequest) -> dict[str, Any]:
     result = _user_memory.undo_update(clean_user_id, req.undo_token.strip())
     if result is None:
         raise HTTPException(status_code=404, detail="撤销 token 不存在或已使用")
-    return {"message": "已恢复", "view": memory_service.build_view(_user_memory, clean_user_id)}
+    return {"message": t("memory.restored"), "view": memory_service.build_view(_user_memory, clean_user_id)}
 
 
 @app.delete("/memory/{user_id}")
@@ -538,6 +567,8 @@ def chat_stream(req: ChatRequest, request: Request) -> StreamingResponse:
 
     Clients may consume the stream with ``EventSource`` or a streaming HTTP client.
     """
+    if not PROFILE.capabilities.vision and _resolve_image(req):
+        raise HTTPException(status_code=422, detail="Image matching is not configured for the Amazon catalog. Describe the product in English instead.")
     turn = _turn_gate.begin(req.session_id, req.query or "（发了一张图片）")
     try:
         session = _sessions.get_or_create(req.session_id)
@@ -653,7 +684,21 @@ def mutate_cart(req: CartMutationRequest) -> dict[str, Any]:
     """Apply a deterministic cart mutation and return the latest snapshot."""
     store = CartStore()
     action = req.action
+    if not PROFILE.capabilities.cart and action in {"add", "updateSpecification"}:
+        raise HTTPException(status_code=409, detail=products_router.error_payload(
+            "PRODUCT_NOT_PURCHASABLE", t("cart.unavailable"), retryable=False,
+        ))
+    try:
+        _apply_cart_mutation(store, req)
+    except CartStockError as exc:
+        raise HTTPException(status_code=409, detail=products_router.error_payload(
+            "OUT_OF_STOCK", str(exc), retryable=False,
+        )) from exc
+    return _cart_response(store)
 
+
+def _apply_cart_mutation(store: CartStore, req: CartMutationRequest) -> None:
+    action = req.action
     if action == "add":
         if not req.productID:
             raise HTTPException(status_code=400, detail="productID 不能为空")
@@ -681,12 +726,14 @@ def mutate_cart(req: CartMutationRequest) -> dict[str, Any]:
         if current is None:
             raise HTTPException(status_code=404, detail="购物车商品不存在")
         quantity = req.quantity or current.quantity
-        store.remove_item(old_id)
-        store.add_product(req.productID, sku_id=req.skuID, quantity=quantity)
+        if req.skuID == current.sku_id:
+            store.set_quantity(old_id, quantity)
+        else:
+            # Add first: a rejected replacement must leave the existing line intact.
+            store.add_product(req.productID, sku_id=req.skuID, quantity=quantity)
+            store.remove_item(old_id)
     else:
         raise HTTPException(status_code=400, detail="不支持的购物车操作")
-
-    return _cart_response(store)
 
 
 @app.post("/cart/checkout")
@@ -702,7 +749,7 @@ def checkout_cart(req: CheckoutRequest) -> dict[str, Any]:
             order_user_id=user_id,
             cart_item_ids=[_cart_item_id(value) for value in req.cart_item_ids] or None,
         )
-    except CartNotFoundError as exc:
+    except (CartNotFoundError, CartStockError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     order_payload = order.to_dict()
     memory_service.record_turn(
@@ -780,18 +827,21 @@ def generate_title(req: TitleRequest) -> dict[str, str]:
     user_text = (req.user_text or "").strip()
     if not user_text:
         raise HTTPException(status_code=400, detail="user_text 不能为空")
+    words_title = " ".join(user_text.split()[:7])[:70]
+    if is_english() and not PROFILE.capabilities.llm_copy:
+        return {"title": words_title}
 
     from llm.client import get_client, get_model_id
 
-    system = (
+    system = english.TITLE_SYSTEM if is_english() else (
         "你是对话标题生成器。根据用户的购物需求，生成一个简洁的中文标题，"
         "用于历史记录列表展示。要求：① 4-8 个字；② 概括核心需求（品类+关键属性），"
         "如「油皮洗面奶」「平价蓝牙耳机」「三亚出行搭配」；③ 只输出标题本身，"
         "不要引号、标点、解释。"
     )
-    convo = f"用户：{user_text}"
+    convo = f"{'Shopper' if is_english() else '用户'}：{user_text}"
     if req.assistant_text and req.assistant_text.strip():
-        convo += f"\n助手：{req.assistant_text.strip()[:200]}"
+        convo += f"\n{'Assistant' if is_english() else '助手'}：{req.assistant_text.strip()[:200]}"
 
     try:
         client = get_client()
@@ -806,13 +856,13 @@ def generate_title(req: TitleRequest) -> dict[str, str]:
             timeout=float(os.getenv("LLM_TITLE_TIMEOUT", os.getenv("DASHSCOPE_TITLE_TIMEOUT", "8"))),
         )
         title = (resp.choices[0].message.content or "").strip()
-        title = title.strip("「」\"'。.，、 \n\t")[:12]
+        title = title.strip("「」“”\"'。.，、 \n\t")[:60 if is_english() else 12]
     except Exception as exc:  # noqa: BLE001 - return empty so the client can fall back
         logger.warning("Title generation failed: %r", exc)
         title = ""
 
     if not title:
-        title = user_text[:12]
+        title = words_title if is_english() else user_text[:12]
     return {"title": title}
 
 
@@ -852,8 +902,8 @@ def get_home(user_id: str, request: Request) -> dict[str, Any]:
         if detail is None:
             continue  # 品类已下架：点了也搜不到，不展示
         entries.append({
-            "title": f"接着看{interest['label']}",
-            "query": f"推荐{interest['label']}",
+            "title": t("home.keep_browsing", label=interest["label"]),
+            "query": t("home.browse_query", label=interest["label"]),
             "image_url": products_router.resolve_image_url(detail, image_base),
         })
     return {"returning": recent["returning"], "entries": entries}
@@ -888,6 +938,21 @@ def _hot_search_term(brand: str, sub_category: str) -> str:
     return f"{brand} {sub_category}" if parts[-1:] and parts[-1].isascii() else f"{brand}{sub_category}"
 
 
+# Amazon has thousands of small or generic brands, so only well-reviewed pairs are suggested.
+_HOT_PAIRS_SQL = {
+    False: (
+        "SELECT DISTINCT brand, sub_category FROM products "
+        "WHERE status='active' AND brand <> '' AND sub_category <> ''"
+    ),
+    True: (
+        "SELECT p.brand, p.sub_category FROM products p "
+        "JOIN amazon_product_metadata a ON a.product_id = p.product_id "
+        "WHERE p.status='active' AND p.brand <> '' AND a.is_generic_brand = 0 "
+        "GROUP BY p.brand, p.sub_category HAVING SUM(a.rating_number) >= 5000"
+    ),
+}
+
+
 @app.get("/suggestions")
 def get_suggestions() -> dict[str, Any]:
     """Return empty-state home categories and dynamic popular searches.
@@ -911,10 +976,8 @@ def get_suggestions() -> dict[str, Any]:
         # Real brand/subcategory combinations guaranteed to map to products.
         pairs = [
             (r["brand"], r["sub_category"])
-            for r in conn.execute(
-                "SELECT DISTINCT brand, sub_category FROM products "
-                "WHERE status='active' AND brand <> '' AND sub_category <> ''"
-            ).fetchall()
+            for r in conn.execute(_HOT_PAIRS_SQL[PROFILE.search_backend == "catalog"]).fetchall()
+            if r["brand"].isascii()
         ]
         subcats = [
             r["sub_category"]

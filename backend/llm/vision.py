@@ -30,6 +30,8 @@ from llm.client import (
 
 
 logger = logging.getLogger(__name__)
+from i18n import en as english
+from i18n import is_english, t
 
 
 # System prompt for extracting a directly searchable Chinese product phrase.
@@ -70,11 +72,11 @@ def vision_extract_query(image: str) -> str:
     response = client.chat.completions.create(
         model=get_vision_model_id(),
         messages=[
-            {"role": "system", "content": _EXTRACT_SYSTEM},
+            {"role": "system", "content": english.VISION_SYSTEM if is_english() else _EXTRACT_SYSTEM},
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": "这张图里的商品是什么？给出检索关键词。"},
+                    {"type": "text", "text": t("vision.user")},
                     {"type": "image_url", "image_url": {"url": image}},
                 ],
             },
@@ -86,7 +88,7 @@ def vision_extract_query(image: str) -> str:
     text = (response.choices[0].message.content or "").strip()
     # Remove occasional quotes and terminal punctuation around model output.
     text = text.strip("「」\"'。．. \n\t")
-    if not text or UNRECOGNIZED in text:
+    if not text or UNRECOGNIZED in text or text.upper() == "UNRECOGNIZED":
         logger.info("vision_extract_query could not identify a product in the image")
         return UNRECOGNIZED
     logger.info("vision_extract_query → %r", text)

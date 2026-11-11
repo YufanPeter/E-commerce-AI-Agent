@@ -2,6 +2,22 @@
 
 This backend folder contains the local product store and RAG data layer for the shopping agent.
 
+## English Amazon catalog
+
+Run `bash scripts/start_amazon.sh` from the repository root after installing dependencies. On first run it imports `amazon_dense_10k/` into `backend/storage/amazon/catalog_en.sqlite3`, then starts the API in Amazon mode. The exporter data is kept as supplied. The importer normalizes the four top-level categories and uses the source USD price, not the export's converted CNY price.
+
+The English path includes keyword search and category filters, explicit USD budgets and brand filters, conversational refinement, ordinal detail and comparisons, and simple saved English preferences. The API retains its current SSE and product payload contracts; snapshot items add `priceType: "reference"` and catalog provenance. There are no simulated SKUs or inventory in this database. The previous demo data remains available through the original startup commands.
+
+The chat model reads each English turn: which tool to run and what it acts on (positions, cart action, quantity, size change, withdrawn conditions), plus the search text and filters. Without a model key, or with `CARTPILOT_AMAZON_LLM=0`, a first message runs a keyword search with rule-parsed filters and deterministic copy; follow-ups such as details, comparisons and cart actions ask the shopper to try again.
+
+Two offline evaluations score this reading without running tools: `python -m eval.query_understanding_eval` (search intent, add `--rules` for the fallback) and `python -m eval.routing_eval_en` (tool and arguments). Run them from `backend` with `CARTPILOT_CATALOG=amazon`; each costs one fast-model call per turn. To enable photo-to-English-query extraction, export `CARTPILOT_AMAZON_VISION=1` with a configured vision provider. Amazon photo search uses the extracted English description with the same text index; it does not use the demo image vectors. Neither option changes the English lexical ranking baseline.
+
+The importer and `graph.build_graph` check every extracted attribute against its source text with the configured chat model, so building the catalog needs a model key. Rows that fail are kept in `attribute_rejections`, and results are cached in `attribute_verdicts.jsonl`. Pass `--off-peak` to wait for cheaper hours, or `--skip-verification` to the importer to publish rule-extracted attributes unchecked without a key.
+
+Use a different `CARTPILOT_AMAZON_DB` path when rebuilding a catalog. The importer refuses to overwrite an existing file. Rebuild Amazon-specific relevance labels before reporting retrieval improvements; the legacy demo labels refer to different product IDs.
+
+The [Amazon labeling pilot](../docs/amazon-labels.md) builds evidence-backed catalog attributes, English evaluation cases and separate demo SKU fixtures.
+
 ## Setup
 
 Install dependencies:

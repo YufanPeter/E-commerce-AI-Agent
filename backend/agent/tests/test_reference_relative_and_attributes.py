@@ -52,7 +52,7 @@ class TestRelative:
     def test_focus_index_in_session(self):
         session = AgentSession()
         assert focus_index_in(_HITS, session) is None
-        session.set("last_focus_product_id", "p2")
+        session.task.focus_on("p2")
         assert focus_index_in(_HITS, session) == 1
 
     def test_resolve_one_relative(self, monkeypatch):

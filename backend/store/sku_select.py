@@ -10,6 +10,8 @@ import re
 from collections import OrderedDict
 from typing import Any
 
+from i18n import is_english
+
 
 def sku_to_dict(sku: Any) -> dict[str, Any]:
     if isinstance(sku, dict):
@@ -124,8 +126,88 @@ def mentioned_constraints(query: str, skus: list[dict[str, Any]]) -> dict[str, s
     return out
 
 
+def matching(skus: list[dict[str, Any]], selected: dict[str, str]) -> list[dict[str, Any]]:
+    """SKUs carrying every selected option."""
+    return [sku for sku in skus if all((sku.get("options") or {}).get(d) == v for d, v in selected.items())]
+
+
+_SIZE_DIM = re.compile(r"size|waist|length|capacity|尺码|尺寸|码|容量", re.I)
+_LETTER_SIZES = ("xxs", "xs", "s", "m", "l", "xl", "xxl", "xxxl")
+
+
+def _size_rank(value: str) -> float | None:
+    text = str(value).strip().casefold().removesuffix("码")
+    if text in _LETTER_SIZES:
+        return float(_LETTER_SIZES.index(text))
+    match = re.search(r"\d+(?:\.\d+)?", text)
+    if match is None:
+        return None
+    return float(match[0]) * (1024 if "tb" in text else 1)
+
+
+def stepped_size(skus: list[dict[str, Any]], current: dict[str, Any], step: int) -> dict[str, str]:
+    """The option one size up or down from the current one; empty at either end."""
+    for dim, values in varying_dims(skus).items():
+        ranks = [_size_rank(value) for value in values]
+        if not _SIZE_DIM.search(str(dim)) or None in ranks or current.get(dim) not in values:
+            continue
+        ordered = [value for _, value in sorted(zip(ranks, values), key=lambda pair: pair[0])]
+        target = ordered.index(current[dim]) + step
+        return {dim: ordered[target]} if 0 <= target < len(ordered) else {}
+    return {}
+
+
+def spec_changes(query: str, skus: list[dict[str, Any]], current: dict[str, Any], step: int = 0) -> dict[str, str]:
+    """The fields this message changes; every other field keeps its current value."""
+    changes = mentioned_constraints(query, skus)
+    if step and not changes:
+        changes = stepped_size(skus, current, step)
+    return {dim: value for dim, value in changes.items() if current.get(dim) != value}
+
+
+_ENGLISH_SIZE_WORDS = (
+    (re.compile(r"\b(?:double|2)\s*-?\s*(?:xl|extra[- ]large)\b", re.I), "xxl"),
+    (re.compile(r"\b(?:extra|x)[- ]large\b", re.I), "xl"),
+    (re.compile(r"\b(?:extra|x)[- ]small\b", re.I), "xs"),
+    (re.compile(r"\blarge\b", re.I), "l"),
+    (re.compile(r"\bmedium\b", re.I), "m"),
+    (re.compile(r"\bsmall\b", re.I), "s"),
+)
+_ENGLISH_UNITS = (
+    (re.compile(r"\b(\d+)\s*(?:ft|feet|foot)\b", re.I), r"\1 ft"),
+    (re.compile(r"\b(\d+)\s*(?:in|inch|inches)\b", re.I), r"\1 in"),
+    (re.compile(r"\b(\d+)\s*gb\b", re.I), r"\1gb"),
+    (re.compile(r"\bgrey\b", re.I), "gray"),
+)
+
+
+def _english_value_text(text: str, *, query: bool) -> str:
+    """Canonical form so spoken and catalog spellings compare equal."""
+    result = text.casefold()
+    for pattern, replacement in _ENGLISH_UNITS:
+        result = pattern.sub(replacement, result)
+    if query:
+        for pattern, replacement in _ENGLISH_SIZE_WORDS:
+            result = pattern.sub(replacement, result)
+    return result
+
+
+def _pick_english_value(values: list[str], query: str) -> str | None:
+    text = _english_value_text(query, query=True)
+    hits = [
+        value for value in values
+        if value and re.search(rf"(?<![\w'’])(?<!\d\.){re.escape(_english_value_text(value, query=False))}(?!\w|\.\d)", text)
+    ]
+    if not hits:
+        return None
+    hits.sort(key=len, reverse=True)
+    return hits[0] if len(hits) == 1 or len(hits[0]) > len(hits[1]) else None
+
+
 def pick_dim_value(values: list[str], query: str) -> str | None:
     """在某维度的候选取值里，选出用户这句话指定的那个；选不出返回 None。"""
+    if is_english():
+        return _pick_english_value(values, query)
     q = query or ""
     q_lower = q.lower()
     exact = [v for v in values if v and (v in q or v.lower() in q_lower)]

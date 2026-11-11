@@ -222,6 +222,22 @@ def test_llm_blocking_memory_requires_confirmation():
     assert validate_memories(raw, "我从来不用含酒精的护肤品")[0].needs_confirm is True
 
 
+def test_llm_budget_keeps_its_category(store):
+    from agent.memory_llm import budget_scopes
+
+    assert "美妆护肤" in budget_scopes()
+    raw = [
+        {"kind": "budget", "value": "300", "quote": "护肤品我一般控制在 300 以内", "durable": True, "category": "美妆护肤"},
+        {"kind": "budget", "value": "800", "quote": "一般 800", "durable": True, "category": "Invented"},
+    ]
+    scoped, unknown = validate_memories(raw, "护肤品我一般控制在 300 以内，其他一般 800")
+    assert (scoped.scope, unknown.scope) == ("美妆护肤", "")
+    memory_service._apply_extracted(store, "u1", [scoped, unknown], "护肤品我一般控制在 300 以内", None)
+    preference = store.get_preference("u1")
+    assert preference.category_specific["美妆护肤"]["budget_max"] == 300
+    assert preference.budget_max == 800  # Only the unscoped budget covers everything.
+
+
 def _search_result():
     return {
         "tool_name": "recommend",

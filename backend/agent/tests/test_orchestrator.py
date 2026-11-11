@@ -266,12 +266,6 @@ class TestAgentSession:
         s = AgentSession()
         assert s.history_window == DEFAULT_HISTORY_WINDOW
 
-    def test_working_memory(self):
-        s = AgentSession()
-        s.set("k", 42)
-        assert s.get("k") == 42
-        assert s.get("missing", "x") == "x"
-
     def test_recent_text_with_empty(self):
         s = AgentSession()
         assert s.recent_text() == ""
@@ -314,7 +308,7 @@ class TestRecommendTool:
         assert len(r.payload["debug"]["hits_full"]) == 1
         # Summary provides a high-level overview.
         assert r.payload["summary"]["hit_count"] == 1
-        assert session.get("last_hits") == [{"product_id": "p1", "title": "雅诗兰黛精华"}]
+        assert session.recall_hits() == [{"product_id": "p1", "title": "雅诗兰黛精华"}]
         assert "1 款商品" in r.composer_hint
 
     def test_zero_hits_hint(self):
@@ -371,7 +365,7 @@ class TestRecommendTool:
         # The composer hint requests grouped presentation.
         assert "分组" in r.composer_hint
         # `last_hits` stores the merged results.
-        assert session.get("last_hits")
+        assert session.recall_hits()
 
 
 
@@ -643,7 +637,7 @@ class TestOrchestratorBlocking:
             "fallback": FallbackTool(),
         })
         session = AgentSession()
-        session.set("last_hits", [
+        session.task.show("search", [
             {"product_id": "p1", "title": "Apple iPhone 17 Pro"},
             {"product_id": "p2", "title": "小米 17 Ultra"},
         ])
@@ -658,7 +652,7 @@ class TestOrchestratorBlocking:
     def test_attribute_followup_with_named_product_routes_to_product_detail(self):
         agent = _make_agent()
         session = AgentSession()
-        session.set("last_hits", [
+        session.task.show("search", [
             {"product_id": "p1", "title": "Apple iPhone 17 Pro"},
             {"product_id": "p2", "title": "小米 17 Ultra"},
         ])
@@ -678,7 +672,7 @@ class TestOrchestratorBlocking:
     def test_router_injected_compare_word_does_not_force_compare(self):
         agent = _make_agent()
         session = AgentSession()
-        session.set("last_hits", [
+        session.task.show("search", [
             {"product_id": "p1", "title": "小米 17 Max 大屏长续航"},
             {"product_id": "p2", "title": "小米 17 Ultra 影像手机"},
         ])
@@ -698,7 +692,7 @@ class TestOrchestratorBlocking:
     def test_group_attribute_followup_routes_to_compare(self):
         agent = _make_agent()
         session = AgentSession()
-        session.set("last_hits", [
+        session.task.show("search", [
             {"product_id": "p1", "title": "Apple iPad Pro"},
             {"product_id": "p2", "title": "小米平板 8 Pro"},
         ])
@@ -717,7 +711,7 @@ class TestOrchestratorBlocking:
     def test_new_attribute_search_stays_recommend(self):
         agent = _make_agent()
         session = AgentSession()
-        session.set("last_hits", [
+        session.task.show("search", [
             {"product_id": "p1", "title": "Apple iPad Pro"},
             {"product_id": "p2", "title": "小米平板 8 Pro"},
         ])
@@ -736,11 +730,11 @@ class TestOrchestratorBlocking:
     def test_bare_attribute_followup_with_focus_routes_to_product_detail(self):
         agent = _make_agent()
         session = AgentSession()
-        session.set("last_hits", [
+        session.task.show("search", [
             {"product_id": "p1", "title": "Apple iPad Pro"},
             {"product_id": "p2", "title": "小米平板 8 Pro"},
         ])
-        session.set("last_focus_product_id", "p2")
+        session.task.focus_on("p2")
         router_decision = IntentDecision(
             tool="recommend",
             rewritten_query="推荐续航好的平板",
@@ -757,11 +751,11 @@ class TestOrchestratorBlocking:
     def test_pending_detail_selection_forces_product_detail_without_router(self):
         agent = _make_agent()
         session = AgentSession()
-        session.set("last_hits", [
+        session.task.show("search", [
             {"product_id": "p1", "title": "Apple iPad Pro"},
             {"product_id": "p2", "title": "小米平板 8 Pro"},
         ])
-        session.set("pending_detail", {
+        session.task.ask("detail_pick", {
             "candidates": [{"product_id": "p1", "title": "Apple"}, {"product_id": "p2", "title": "小米"}],
             "focus_query": "续航怎么样",
         })
@@ -774,8 +768,8 @@ class TestOrchestratorBlocking:
     def test_pending_detail_topic_change_releases_and_routes_normally(self):
         agent = _make_agent()
         session = AgentSession()
-        session.set("last_hits", [{"product_id": "p1", "title": "Apple iPad Pro"}])
-        session.set("pending_detail", {"candidates": [{"product_id": "p1", "title": "A"}], "focus_query": "x"})
+        session.task.show("search", [{"product_id": "p1", "title": "Apple iPad Pro"}])
+        session.task.ask("detail_pick", {"candidates": [{"product_id": "p1", "title": "A"}], "focus_query": "x"})
         router_decision = IntentDecision(
             tool="recommend", rewritten_query="推荐几款手机", confidence="high", reasoning="fresh",
         )
@@ -784,17 +778,17 @@ class TestOrchestratorBlocking:
             decision = agent._safe_route("推荐几款手机", session, {"timings": {}})
 
         assert decision.tool == "recommend"
-        assert session.get("pending_detail") is None
+        assert session.task.pending_data("detail_pick") is None
 
     def test_pending_compare_selection_forces_compare_without_router(self):
         agent = _make_agent()
         session = AgentSession()
-        session.set("last_hits", [
+        session.task.show("search", [
             {"product_id": "p1", "title": "Apple iPhone"},
             {"product_id": "p2", "title": "小米"},
             {"product_id": "p3", "title": "华为"},
         ])
-        session.set("pending_compare", {"hit_count": 3})
+        session.task.ask("compare_pick", {"hit_count": 3})
 
         decision = agent._safe_route("第一个和第三个", session, {"timings": {}})
         assert decision.tool == "compare"
@@ -803,17 +797,17 @@ class TestOrchestratorBlocking:
     def test_pending_cart_holds_for_spec_reply(self):
         agent = _make_agent()
         session = AgentSession()
-        session.set("pending_cart", {"product_id": "p1", "title": "x", "quantity": 1, "spec_text": ""})
+        session.task.ask("cart_sku", {"product_id": "p1", "title": "x", "quantity": 1, "selected": {}})
 
         # A color-and-size reply must stay in the cart flow to complete the addition.
         decision = agent._safe_route("暗夜黑 42码", session, {"timings": {}})
         assert decision.tool == "cart"
-        assert session.get("pending_cart") is not None
+        assert session.task.pending_data("cart_sku") is not None
 
     def test_pending_cart_releases_on_new_search_escape(self):
         agent = _make_agent()
         session = AgentSession()
-        session.set("pending_cart", {"product_id": "p1", "title": "x", "quantity": 1, "spec_text": ""})
+        session.task.ask("cart_sku", {"product_id": "p1", "title": "x", "quantity": 1, "selected": {}})
         router_decision = IntentDecision(
             tool="recommend", rewritten_query="推荐几款笔记本", confidence="high", reasoning="fresh",
         )
@@ -822,7 +816,7 @@ class TestOrchestratorBlocking:
         with patch("agent.orchestrator.route", return_value=router_decision):
             decision = agent._safe_route("推荐几款笔记本", session, {"timings": {}})
         assert decision.tool == "recommend"
-        assert session.get("pending_cart") is None
+        assert session.task.pending_data("cart_sku") is None
 
     def test_new_search_escape_detection(self):
         from agent.orchestrator import _is_new_search_escape
@@ -852,7 +846,7 @@ class TestOrchestratorBlocking:
             "fallback": FallbackTool(),
         })
         session = AgentSession()
-        session.set("last_hits", [
+        session.task.show("search", [
             {"product_id": "hoodie", "title": "李宁 运动生活系列 男子连帽套头卫衣"},
             {"product_id": "shorts", "title": "优衣库 男装 DRY 速干运动短裤"},
             {"product_id": "pants", "title": "Nike Dri-FIT 男子训练长裤"},

@@ -32,12 +32,16 @@ TODO（待实现）：
 """
 
 import logging
+import re
 from typing import Any
 
 from agent.session import AgentSession
 from agent.tools.base import ToolResult
-from agent.tools.resolve import enrich_candidates, focus_index_in, resolve_one
-from agent.tools.reference import resolve_by_name, resolve_indices
+from agent.tools.evidence import overlap, product_claims, relevant_excerpt
+from agent.tools.resolve import enrich_candidates, positions_in, resolve_by_name, resolve_indices, resolve_one
+from catalog_config import PROFILE
+from i18n import en as english
+from i18n import is_english, t
 from store.product_store import ProductDetail, ProductReview, ProductStore, price_display
 
 
@@ -90,26 +94,23 @@ class ProductDetailTool:
     ) -> ToolResult:
         last_hits = session.recall_hits()
         if not last_hits:
-            session.set("pending_detail", None)
-            return self._plain(
-                query,
-                "想详细了解哪款商品呀？先让我推荐几款，然后说「第一个再详细点」就可以。",
-            )
+            session.task.end_pending("detail_pick")
+            return self._plain(query, t("detail.need_list"))
 
         target_id, clarification, focus_query = self._resolve_target_id(query, last_hits, session, slots)
         if not target_id:
-            return self._plain(query, clarification or "想了解哪一款呢？可以说「第一个详细说说」。")
+            return self._plain(query, clarification or t("detail.ask_which"))
 
         # Clear resolved clarification state so it does not capture the next turn.
-        session.set("pending_detail", None)
+        session.task.end_pending("detail_pick")
 
         detail = self._store.get_product_detail(target_id)
         if detail is None:
-            return self._plain(query, "这款商品的详情资料暂时不完整，换一款我再帮你看看？")
+            return self._plain(query, t("detail.incomplete"))
 
         focus = _detect_focus_aspect(focus_query)
         evidence = self._retrieve_evidence(detail, focus_query, focus)
-        session.set("last_focus_product_id", detail.product_id)
+        session.task.focus_on(detail.product_id)
 
         payload = {
             "query": focus_query,
@@ -120,6 +121,7 @@ class ProductDetailTool:
 
         if not evidence:
             payload["evidence_note"] = "no_relevant_evidence"
+        payload.update(_catalog_facts(detail))
 
         return ToolResult(
             tool_name=self.name,
@@ -141,11 +143,11 @@ class ProductDetailTool:
 
         # First consume pending clarification so ordinals resolve within its candidate
         # subset rather than the complete previous result list.
-        pending = session.get("pending_detail")
+        pending = session.task.pending_data("detail_pick")
         if pending and pending.get("candidates"):
             return self._resolve_pending_detail(query, pending, session)
 
-        indices = resolve_indices(query, len(last_hits), focus_index=focus_index_in(last_hits, session))
+        indices = positions_in(query, last_hits, session, slots)
         if indices:
             index = indices[0]
             if 0 <= index < len(last_hits):
@@ -156,7 +158,7 @@ class ProductDetailTool:
         if len(name_matches) == 1:
             return last_hits[name_matches[0]]["product_id"], None, query
         if len(name_matches) > 1:
-            focus_id = session.get("last_focus_product_id")
+            focus_id = session.task.focus_product_id
             if focus_id:
                 matched_ids = {last_hits[i]["product_id"] for i in name_matches}
                 if str(focus_id) in matched_ids:
@@ -164,7 +166,7 @@ class ProductDetailTool:
             candidates = [
                 {
                     "product_id": last_hits[i]["product_id"],
-                    "title": searchable_hits[i].get("title", f"第{i + 1}款"),
+                    "title": searchable_hits[i].get("title", t("detail.first_n", index=i + 1)),
                     "brand": searchable_hits[i].get("brand", ""),
                     "category": searchable_hits[i].get("category", ""),
                     "sub_category": searchable_hits[i].get("sub_category", ""),
@@ -173,15 +175,14 @@ class ProductDetailTool:
                 for i in name_matches[:3]
             ]
             # Resolve by ordinal, unique name, then semantic matching over catalog fields.
-            picked = resolve_one(query, candidates)
+            picked = resolve_one(query, candidates) if PROFILE.capabilities.llm_target_resolution else None
             if picked is not None:
                 return str(candidates[picked]["product_id"]), None, query
             # Retain the clarification subset and requested focus for the next turn.
-            session.set("pending_detail", {"candidates": candidates, "focus_query": query})
-            titles = "、".join(str(c["title"])[:16] for c in candidates)
-            return None, f"你提到的商品有点多，是想了解「{titles}」里的哪一款？", query
+            session.task.ask("detail_pick", {"candidates": candidates, "focus_query": query})
+            return None, t("detail.too_many", titles=_titles(candidates)), query
 
-        focus_id = session.get("last_focus_product_id")
+        focus_id = session.task.focus_product_id
         if _is_attribute_followup(query) and focus_id and any(hit["product_id"] == focus_id for hit in last_hits):
             return str(focus_id), None, query
 
@@ -191,7 +192,7 @@ class ProductDetailTool:
         if _has_deictic(query) or len(last_hits) == 1:
             return last_hits[0]["product_id"], None, query
 
-        return None, "想了解哪一款呢？可以说「第一个评价怎么样」或「小米那款详细说说」。", query
+        return None, t("detail.ask_named"), query
 
     def _resolve_pending_detail(
         self,
@@ -211,7 +212,7 @@ class ProductDetailTool:
         # Temporarily clear pending state and try normal resolution for a topic change.
         candidate_ids = {str(c["product_id"]) for c in candidates}
         last_hits = session.recall_hits()
-        session.set("pending_detail", None)
+        session.task.end_pending("detail_pick")
         target_id, clarification, fallback_query = self._resolve_target_id(
             query, last_hits, session, {}
         )
@@ -220,9 +221,8 @@ class ProductDetailTool:
             return target_id, clarification, fallback_query
 
         # Restore pending state when the answer still needs clarification.
-        session.set("pending_detail", pending)
-        titles = "、".join(str(c.get("title", ""))[:16] for c in candidates[:3])
-        return None, f"想了解「{titles}」里的哪一款呢？说「第一款」或直接报品牌名都行。", query
+        session.task.ask("detail_pick", pending)
+        return None, t("detail.pick_from", titles=_titles(candidates[:3])), query
 
     def _hits_with_store_context(self, last_hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
         # 带上品类 / 子品类 / SKU 规格值：「耳机」能对应到「真无线耳机」那款，
@@ -238,7 +238,7 @@ class ProductDetailTool:
     ) -> list[dict[str, Any]]:
         evidence = self._retrieve_rag_evidence(detail, query, focus, limit=limit)
         if not evidence:
-            evidence = _fallback_evidence(detail, focus, limit=limit)
+            evidence = _fallback_evidence(detail, focus, limit=limit, query=query)
         return _prioritize_evidence(evidence, focus)[:limit]
 
     def _retrieve_rag_evidence(
@@ -248,6 +248,8 @@ class ProductDetailTool:
         focus: str,
         limit: int,
     ) -> list[dict[str, Any]]:
+        if not PROFILE.capabilities.vector_evidence and self._evidence_retriever is None:
+            return []
         try:
             retriever = self._evidence_retriever
             if retriever is None:
@@ -290,7 +292,29 @@ class ProductDetailTool:
         )
 
 
+def _titles(candidates: list[dict[str, Any]]) -> str:
+    if is_english():
+        return ", ".join(str(c.get("title", ""))[:40] for c in candidates)
+    return "、".join(str(c.get("title", ""))[:16] for c in candidates)
+
+
+def _catalog_facts(detail: ProductDetail) -> dict[str, Any]:
+    """Whole-product facts the shopper's question can be answered from, when the catalog has them."""
+    source = detail.catalog_source or {}
+    facts: dict[str, Any] = {}
+    if source.get("rating_number"):
+        facts["rating"] = {"average": source["average_rating"], "count": source["rating_number"]}
+    if detail.attributes:
+        facts["attributes"] = detail.attributes
+    claims = product_claims(detail.product_id)
+    if claims:
+        facts["graph_claims"] = claims
+    return facts
+
+
 def _detect_focus_aspect(query: str) -> str:
+    if is_english():
+        return next((focus for focus, pattern in english.DETAIL_FOCUS if pattern.search(query or "")), "general")
     text = query or ""
     for focus, keywords in _FOCUS_KEYWORDS:
         if any(keyword in text for keyword in keywords):
@@ -299,6 +323,8 @@ def _detect_focus_aspect(query: str) -> str:
 
 
 def _has_deictic(query: str) -> bool:
+    if is_english():
+        return english.DEICTIC_RE.search(query or "") is not None
     return any(word in (query or "") for word in _DEICTIC_WORDS)
 
 
@@ -332,6 +358,10 @@ def is_detail_selection_reply(query: str) -> bool:
     text = (query or "").strip()
     if not text:
         return False
+    if is_english():
+        if english.NEW_SEARCH_RE.search(text) or english.COMPARE_WORDS_RE.search(text):
+            return False
+        return bool(resolve_indices(text, 99)) or _has_deictic(text) or len(text.split()) <= 4
     if any(word in text for word in _NEW_SEARCH_WORDS):
         return False
     if any(word in text for word in _COMPARE_INTENT_WORDS):
@@ -346,6 +376,8 @@ def is_detail_selection_reply(query: str) -> bool:
 
 def _is_attribute_followup(query: str) -> bool:
     text = query or ""
+    if is_english():
+        return _detect_focus_aspect(text) != "general" and bool(english.QUESTION_RE.search(text)) and not english.NEW_SEARCH_RE.search(text)
     has_attribute = any(keyword in text for _, keywords in _FOCUS_KEYWORDS for keyword in keywords)
     has_question = any(word in text for word in ("怎么样", "如何", "好吗", "好不好", "有没有", "表现"))
     is_new_search = any(word in text for word in ("推荐", "找", "有哪些", "有什么", "想买", "给我"))
@@ -363,15 +395,15 @@ def _product_payload(detail: ProductDetail) -> dict[str, Any]:
     }
 
 
-def _fallback_evidence(detail: ProductDetail, focus: str, limit: int) -> list[dict[str, Any]]:
+def _fallback_evidence(detail: ProductDetail, focus: str, limit: int, query: str = "") -> list[dict[str, Any]]:
     evidence: list[dict[str, Any]] = []
 
     if detail.marketing_description:
         evidence.append(
             {
                 "source_type": "marketing_description",
-                "title": "商品描述",
-                "text": detail.marketing_description,
+                "title": t("source.marketing_description"),
+                "text": relevant_excerpt(detail.marketing_description, query, _LISTING_EXCERPT) if is_english() else detail.marketing_description,
                 "score": None,
                 "metadata": {"product_id": detail.product_id},
             }
@@ -382,7 +414,7 @@ def _fallback_evidence(detail: ProductDetail, focus: str, limit: int) -> list[di
         evidence.append(
             {
                 "source_type": "product_profile",
-                "title": "规格概况",
+                "title": t("source.product_profile"),
                 "text": sku_summary,
                 "score": None,
                 "metadata": {"product_id": detail.product_id},
@@ -401,10 +433,15 @@ def _fallback_evidence(detail: ProductDetail, focus: str, limit: int) -> list[di
         )
 
     reviews = _reviews_for_focus(detail.reviews, focus)
+    if is_english():
+        reviews = sorted(reviews, key=lambda review: -overlap(review.content, query))
     for review in reviews[:4]:
         evidence.append(_review_evidence(detail.product_id, review))
 
     return _prioritize_evidence(evidence, focus)[:limit]
+
+
+_LISTING_EXCERPT = 700
 
 
 def _reviews_for_focus(reviews: list[ProductReview], focus: str) -> list[ProductReview]:
@@ -419,7 +456,7 @@ def _reviews_for_focus(reviews: list[ProductReview], focus: str) -> list[Product
 def _review_evidence(product_id: str, review: ProductReview) -> dict[str, Any]:
     return {
         "source_type": "user_review",
-        "title": f"{review.nickname} · {review.rating} 星",
+        "title": t("review.title", nickname=review.nickname, rating=review.rating),
         "text": review.content,
         "score": None,
         "metadata": {
@@ -458,11 +495,13 @@ def _sku_summary(detail: ProductDetail) -> str:
     if not detail.skus:
         return ""
     specs = []
+    item, group = (", ", "; ") if is_english() else ("、", "；")
     for sku in detail.skus[:4]:
         if sku.properties:
-            specs.append("、".join(f"{key}:{value}" for key, value in sku.properties.items()))
-    joined = "；".join(specs)
-    return f"共有 {len(detail.skus)} 个在售规格。{joined}" if joined else f"共有 {len(detail.skus)} 个在售规格。"
+            specs.append(item.join(f"{key}: {value}" if is_english() else f"{key}:{value}" for key, value in sku.properties.items()))
+    return f"{t('detail.sku_count', count=len(detail.skus))} {group.join(specs)}".strip() if is_english() else (
+        f"{t('detail.sku_count', count=len(detail.skus))}{group.join(specs)}"
+    )
 
 
 def _score_from_distance(distance: float | None) -> float | None:
@@ -472,15 +511,13 @@ def _score_from_distance(distance: float | None) -> float | None:
 
 
 def _source_title(source_type: str) -> str:
-    return {
-        "user_review": "用户评价",
-        "official_faq": "官方问答",
-        "marketing_description": "商品描述",
-        "product_profile": "规格概况",
-    }.get(source_type, source_type or "商品证据")
+    known = {"user_review", "official_faq", "marketing_description", "product_profile"}
+    return t(f"source.{source_type}") if source_type in known else (source_type or t("source.other"))
 
 
 def _composer_hint(focus: str, has_evidence: bool) -> str:
+    if is_english():  # The English detail prompt carries these rules, keyed by payload.focus_aspect.
+        return ""
     if focus in {"general", "performance"}:
         evidence_rule = "证据不足时要说目前资料有限，不要编造。" if not has_evidence else "必须基于 payload.evidence 回答，不要编造。"
         focus_rule = (

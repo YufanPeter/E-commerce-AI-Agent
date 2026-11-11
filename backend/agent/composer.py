@@ -35,6 +35,7 @@ from typing import Any
 
 from agent.session import AgentSession
 from agent.tools.base import ToolResult
+from i18n import en as english
 from llm.cache import TTLCache
 from llm.client import close_stream, get_client, get_model_id
 
@@ -205,7 +206,11 @@ _FEW_SHOT: list[dict[str, str]] = [
 
 # payload 里塞 LLM 不需要的字段（如 evidence chunk）只会浪费 token。
 # 这里裁剪只保留对话术有用的精简字段。
-_HIT_KEEP_KEYS = ("title", "brand", "category", "sub_category", "price_display", "price", "base_price", "score", "price_range", "budget", "evidence")
+_HIT_KEEP_KEYS = (
+    "title", "brand", "category", "sub_category", "price_display", "price", "base_price", "score", "price_range", "budget",
+    "evidence", "rating", "attribute_checks", "graph_evidence",
+)
+_DETAIL_FACT_KEYS = ("rating", "attributes", "graph_claims")
 
 
 def _trim_hit_for_llm(h: dict[str, Any]) -> dict[str, Any]:
@@ -250,6 +255,7 @@ def _trim_payload_for_llm(payload: dict[str, Any]) -> dict[str, Any]:
         trimmed["focus_aspect"] = payload.get("focus_aspect")
     if payload.get("evidence"):
         trimmed["evidence"] = payload.get("evidence")
+    trimmed.update({key: payload[key] for key in _DETAIL_FACT_KEYS if payload.get(key)})
     contextual = payload.get("contextual_search")
     if isinstance(contextual, dict):
         trimmed["contextual_search"] = {
@@ -264,12 +270,16 @@ def _trim_payload_for_llm(payload: dict[str, Any]) -> dict[str, Any]:
     parsed = (payload.get("debug") or {}).get("parsed") or payload.get("parsed") or {}
     trimmed["parsed"] = {
         k: parsed.get(k)
-        for k in ("category", "sub_category", "max_price", "min_price", "brand_include", "brand_exclude", "negative_ingredients")
+        for k in ("category", "sub_category", "sub_category_exclude", "max_price", "min_price", "price_target", "brand_include", "brand_exclude", "negative_ingredients")
         if parsed.get(k)
     }
     # Product lists use ``products`` in the new format and ``hits`` in the old format.
     hits = payload.get("products") or payload.get("hits") or []
     trimmed["hits"] = [_trim_hit_for_llm(h) for h in hits]
+    notes = payload.get("item_notes") or {}
+    for hit in trimmed["hits"]:
+        if notes.get(hit.get("productId")):
+            hit["note"] = notes[hit["productId"]]
     # 多需求场景：透传分组结构，让 composer 按需求分组介绍。
     groups = payload.get("groups")
     if isinstance(groups, list):
@@ -304,13 +314,14 @@ def _build_messages(tool_result: ToolResult) -> list[dict[str, str]]:
         user_msg_parts.append(f"hint: {tool_result.composer_hint}")
     plain = _is_plain_text_tool(tool_result)
     is_compare = isinstance(tool_result.payload.get("comparison"), dict)
-    if plain:
-        system_prompt = PRODUCT_DETAIL_SYSTEM_PROMPT
-    elif is_compare:
-        system_prompt = COMPARE_SYSTEM_PROMPT
+    from catalog_config import PROFILE
+
+    if PROFILE.locale == "en":
+        prompts, examples = (english.DETAIL_SYSTEM, english.COMPARE_SYSTEM, english.COMPOSER_SYSTEM), english.COMPOSER_FEW_SHOT
     else:
-        system_prompt = SYSTEM_PROMPT
-    few_shot = [] if plain or is_compare else _FEW_SHOT
+        prompts, examples = (PRODUCT_DETAIL_SYSTEM_PROMPT, COMPARE_SYSTEM_PROMPT, SYSTEM_PROMPT), _FEW_SHOT
+    system_prompt = prompts[0] if plain else prompts[1] if is_compare else prompts[2]
+    few_shot = [] if plain or is_compare else examples
     return [
         {"role": "system", "content": system_prompt},
         *few_shot,
@@ -626,7 +637,21 @@ def _fallback_description(hit: dict[str, Any], title: str) -> str:
     return f"{title}整体匹配你的需求，可以先点开详情看看。"
 
 
+def _writes_from_template() -> bool:
+    """English copy without a model, for when CARTPILOT_AMAZON_LLM is off."""
+    from catalog_config import PROFILE
+
+    return PROFILE.locale == "en" and not PROFILE.capabilities.llm_copy
+
+
 def _fallback_structured(tool_result: ToolResult) -> dict[str, Any]:
+    from catalog_config import PROFILE
+
+    if PROFILE.locale == "en":
+        from agent.amazon import reply
+
+        result = reply(tool_result)
+        return result if isinstance(result, dict) else {"opening": result, "items": [], "followup": []}
     payload = tool_result.payload or {}
     comparison = payload.get("comparison")
     if isinstance(comparison, dict):
@@ -660,6 +685,13 @@ def _fallback_structured(tool_result: ToolResult) -> dict[str, Any]:
 
 
 def _fallback_json_response(tool_result: ToolResult) -> str:
+    from catalog_config import PROFILE
+
+    if PROFILE.locale == "en":
+        from agent.amazon import reply
+
+        result = reply(tool_result)
+        return result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
     payload = tool_result.payload or {}
     if _is_plain_text_tool(tool_result):
         product = payload.get("product") or {}
@@ -705,6 +737,8 @@ class AnswerComposer:
             return tool_result.narrative_override
         if not tool_result.needs_composer:
             return ""
+        if _writes_from_template():
+            return _fallback_json_response(tool_result)
 
         if not _is_plain_text_tool(tool_result):
             cached = _NARRATIVE_CACHE.get(_cache_key(tool_result))
@@ -756,6 +790,17 @@ class AnswerComposer:
             return
         if not tool_result.needs_composer:
             yield {"type": "final", "data": ""}
+            return
+        if _writes_from_template():
+            response = _fallback_structured(tool_result) if not _is_plain_text_tool(tool_result) else None
+            if response is None:
+                text = _fallback_json_response(tool_result)
+                yield {"type": "token", "data": text}
+                yield {"type": "final", "data": text}
+                return
+            for part in _events_from_structured(response):
+                yield {"type": "narrative", "data": part}
+            yield {"type": "final", "data": json.dumps(response, ensure_ascii=False)}
             return
 
         if _is_plain_text_tool(tool_result):

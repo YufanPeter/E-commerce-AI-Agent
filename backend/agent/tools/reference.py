@@ -3,6 +3,8 @@ from __future__ import annotations
 """Lightweight reference parsing for conversational tool targets."""
 
 import re
+from i18n import en as english
+from i18n import is_english
 
 
 _CN_NUM = {
@@ -20,7 +22,12 @@ _CN_NUM = {
 }
 
 _ORDINAL_RE = re.compile(r"第\s*([0-9]+|[一二两三四五六七八九十])\s*(?:个|款|件|种)?")
-_BARE_NUM_RE = re.compile(r"(?<!\d)([1-9])(?!\d)")
+# A digit touching a letter, a preceding Latin word or a unit belongs to a model name
+# or quantity ("Mate 6", "5G", "2 件"), so it is not a list position.
+_BARE_NUM_RE = re.compile(
+    r"(?<![\dA-Za-z.+\-])(?<![A-Za-z] )([1-9])(?![\dA-Za-z.+\-])"
+    r"(?!\s*(?:件|个|瓶|盒|箱|袋|桶|双|条|支|份|罐|包|台|部|码|寸|英寸|克|毫升|升))"
+)
 _LAST_RE = re.compile(r"(?:最后|末尾|最末)\s*(?:一)?\s*(?:个|款|件|种)?")
 
 
@@ -86,6 +93,22 @@ def resolve_indices(query: str, hit_count: int, focus_index: int | None = None) 
         return []
 
     text = query or ""
+    if is_english() and not re.search(r"[\u4e00-\u9fff]", text):
+        words = {"first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5}
+        relative = re.search(r"\b(previous|next)\s+(?:one|item|product)\b", text, re.I)
+        if relative and focus_index is not None:
+            index = focus_index + (-1 if relative[1].lower() == "previous" else 1)
+            return [index] if 0 <= index < hit_count else []
+        indices = [
+            (hit_count if m[1].lower() == "last" else words[m[1].lower()]) - 1 if m[1]
+            else int(m[2] or m[3] or m[4]) - 1
+            for m in english.LIST_POSITION_RE.finditer(text)
+        ]
+        if not indices and text.strip().isdigit():
+            indices = [int(text.strip()) - 1]
+        if not indices and re.search(r"\b(?:both|these two|top two)\b", text, re.I):
+            indices = list(range(min(2, hit_count)))
+        return list(dict.fromkeys(i for i in indices if 0 <= i < hit_count))
     if any(word in text for word in ("全部", "所有", "都对比", "都看看")):
         return list(range(hit_count))
 
@@ -134,7 +157,17 @@ _GENERIC_NAME_TOKENS: frozenset[str] = frozenset({
 
 
 def _name_tokens(text: str) -> list[str]:
-    return [tok for tok in _NAME_TOKEN_RE.findall(text or "") if tok not in _GENERIC_NAME_TOKENS]
+    tokens = [tok for tok in _NAME_TOKEN_RE.findall(text or "") if tok not in _GENERIC_NAME_TOKENS]
+    if is_english():
+        return [tok for tok in tokens if not tok.isascii() or (len(tok) >= 3 and tok.casefold() not in english.NAME_STOPWORDS)]
+    return tokens
+
+
+def _names(token: str, text: str) -> bool:
+    """Whether the message contains a token; English needs the whole word ("air" is not in "pair")."""
+    if is_english() and token.isascii():
+        return re.search(rf"(?<![A-Za-z0-9-]){re.escape(token)}(?![A-Za-z0-9-])", text, re.I) is not None
+    return (token.lower() in text.lower()) if token.isascii() else (token in text)
 
 
 def _attribute_tokens(hit: dict) -> list[str]:
@@ -171,9 +204,8 @@ def _attribute_matches(query: str, hit: dict) -> bool:
     text = query or ""
     # "42 码" → "42码"，和库里 canonical 值对齐
     text = re.sub(r"(\d)\s+(码|号|寸|英寸|GB|L)", r"\1\2", text)
-    lowered = text.lower()
     for tok in _attribute_tokens(hit):
-        if (tok.lower() in lowered) if tok.isascii() else (tok in text):
+        if _names(tok, text):
             return True
     stems = _color_stems_in(text)
     if not stems:
@@ -187,6 +219,12 @@ def _attribute_matches(query: str, hit: dict) -> bool:
     return False
 
 
+def _shared_tokens(token_lists: list[list[str]]) -> set[str]:
+    """Words in every candidate's name, which cannot tell the candidates apart."""
+    sets = [{tok.casefold() for tok in tokens if tok.isascii()} for tokens in token_lists]
+    return set.intersection(*sets) if sets else set()
+
+
 def resolve_by_name(query: str, hits: list[dict]) -> list[int]:
     """按品牌/名称/规格值把用户这句话映射到 hits 里的商品，返回命中的 0-based 索引。
 
@@ -195,19 +233,13 @@ def resolve_by_name(query: str, hits: list[dict]) -> list[int]:
     规格值（「黑色」「42码」）出现在 query 里也算命中——这就是「黑色那个」的来源。
     命中可能为 0/1/多个——调用方据此决定精确加购还是反问，因此这里偏召回、不强求唯一。"""
     text = query or ""
-    lowered = text.lower()
     name_matches: list[int] = []
     attr_matches: list[int] = []
+    token_lists = [_name_tokens(hit.get("title", "")) + _name_tokens(hit.get("brand", "")) for hit in hits]
+    shared = _shared_tokens(token_lists) if is_english() and len(hits) > 1 else set()
     for i, hit in enumerate(hits):
-        tokens = _name_tokens(hit.get("title", "")) + _name_tokens(hit.get("brand", ""))
-        for tok in tokens:
-            if tok.isascii():
-                hit_in = tok.lower() in lowered
-            else:
-                hit_in = tok in text
-            if hit_in:
-                name_matches.append(i)
-                break
+        if any(_names(tok, text) for tok in token_lists[i] if tok.casefold() not in shared):
+            name_matches.append(i)
         if _attribute_matches(text, hit):
             attr_matches.append(i)
     # 规格值要在候选之间有区分度：四款跑鞋都有 42 码，「42 码的」就不指向任何一款
@@ -238,6 +270,14 @@ _ACTION_STOPWORDS = (
 )
 
 
+_ENGLISH_ACTION_WORDS = re.compile(
+    r"\b(?:add|put|buy|get|grab|order|purchase|please|pls|the|a|an|this|that|these|those|it|them|one|ones|to|my|"
+    r"shopping|cart|in|into|i|want|would|like|can|could|you|me|of|and|for|\d+)\b|[,.!?]",
+    re.I,
+)
+_ENGLISH_ORDINAL_ONLY = re.compile(r"(?:first|second|third|fourth|fifth|last)?", re.I)
+
+
 def extract_name_query(query: str) -> str:
     """Extract catalog-search keywords from an add-to-cart utterance.
 
@@ -248,6 +288,9 @@ def extract_name_query(query: str) -> str:
     text = (query or "").strip()
     if not text:
         return ""
+    if is_english():
+        cleaned = " ".join(_ENGLISH_ACTION_WORDS.sub(" ", text).split())
+        return "" if _ENGLISH_ORDINAL_ONLY.fullmatch(cleaned or "") else cleaned
     for word in _ACTION_STOPWORDS:
         text = text.replace(word, " ")
     # Collapse whitespace and remove residual punctuation.

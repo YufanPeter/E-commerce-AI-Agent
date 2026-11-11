@@ -90,7 +90,7 @@ class _MixedRetriever:
 
 def _session_with_hits(hits=None) -> AgentSession:
     session = AgentSession(session_id="t")
-    session.set("last_hits", hits or _HITS)
+    session.task.show("search", hits or _HITS)
     return session
 
 
@@ -111,7 +111,7 @@ def test_resolves_explicit_index_to_second_product():
 
     assert result.needs_composer is True
     assert result.payload["product"]["product_id"] == "p2"
-    assert session.get("last_focus_product_id") == "p2"
+    assert session.task.focus_product_id == "p2"
 
 
 def test_resolves_title_keyword():
@@ -135,7 +135,7 @@ def test_multiple_name_matches_asks_clarification(monkeypatch):
     assert result.needs_composer is False
     assert "哪一款" in (result.narrative_override or "")
     # A clarification must retain the candidate subset and original question for the next turn.
-    pending = session.get("pending_detail")
+    pending = session.task.pending_data("detail_pick")
     assert pending is not None
     assert [c["product_id"] for c in pending["candidates"]] == ["p2", "p3"]
 
@@ -149,7 +149,7 @@ def test_pending_ordinal_reply_maps_to_candidate_subset_not_global_list(monkeypa
 
     first = tool.run("小米的续航怎么样", session, {})
     assert first.needs_composer is False  # Clarify first.
-    assert session.get("pending_detail") is not None
+    assert session.task.pending_data("detail_pick") is not None
 
     second = tool.run("第一款", session, {})
     # The first candidate in [p2, p3] is p2, not p1 from global `last_hits`.
@@ -157,7 +157,7 @@ def test_pending_ordinal_reply_maps_to_candidate_subset_not_global_list(monkeypa
     # Preserve the original performance focus instead of degrading to general.
     assert second.payload["focus_aspect"] == "performance"
     # Clear pending state after successful resolution so it cannot affect the next turn.
-    assert session.get("pending_detail") is None
+    assert session.task.pending_data("detail_pick") is None
 
 
 def test_pending_brand_reply_maps_to_candidate(monkeypatch):
@@ -178,18 +178,18 @@ def test_pending_topic_change_releases_clarification(monkeypatch):
     tool = ProductDetailTool(product_store=_FakeStore(), evidence_retriever=_EmptyRetriever())
 
     tool.run("小米的续航怎么样", session, {})
-    assert session.get("pending_detail") is not None
+    assert session.task.pending_data("detail_pick") is not None
 
     # A topic change naming another product should release the pending candidate set.
     third = tool.run("理肤泉那款敏感肌能用吗", session, {})
     assert third.payload["product"]["product_id"] == "p1"
-    assert session.get("pending_detail") is None
+    assert session.task.pending_data("detail_pick") is None
 
 
 
 def test_focus_product_disambiguates_multiple_name_matches():
     session = _session_with_hits()
-    session.set("last_focus_product_id", "p2")
+    session.task.focus_on("p2")
 
     result = ProductDetailTool(product_store=_FakeStore(), evidence_retriever=_EmptyRetriever()).run(
         "小米的续航怎么样", session, {}
@@ -202,7 +202,7 @@ def test_focus_product_disambiguates_multiple_name_matches():
 
 def test_bare_attribute_followup_uses_focused_product():
     session = _session_with_hits()
-    session.set("last_focus_product_id", "p2")
+    session.task.focus_on("p2")
 
     result = ProductDetailTool(product_store=_FakeStore(), evidence_retriever=_EmptyRetriever()).run(
         "续航怎么样", session, {}
@@ -315,7 +315,7 @@ def test_llm_disambiguates_multiple_name_matches(monkeypatch):
     # Resolve p2 directly without clarification or pending state.
     assert result.needs_composer is True
     assert result.payload["product"]["product_id"] == "p2"
-    assert session.get("pending_detail") is None
+    assert session.task.pending_data("detail_pick") is None
     # Candidates need structured fields to support the LLM decision.
     assert "sub_category" in captured["candidates"][0]
 
@@ -333,7 +333,7 @@ def test_llm_unavailable_falls_back_to_clarification(monkeypatch):
 
     assert result.needs_composer is False
     assert "哪一款" in (result.narrative_override or "")
-    assert session.get("pending_detail") is not None
+    assert session.task.pending_data("detail_pick") is not None
 
 
 def test_llm_picks_within_pending_candidates(monkeypatch):
@@ -346,7 +346,7 @@ def test_llm_picks_within_pending_candidates(monkeypatch):
     tool = ProductDetailTool(product_store=_FakeStore(), evidence_retriever=_EmptyRetriever())
     first = tool.run("小米的续航怎么样", session, {})
     assert first.needs_composer is False
-    assert session.get("pending_detail") is not None
+    assert session.task.pending_data("detail_pick") is not None
 
     # On the second turn, use subcategory semantics to select tablet p2 from [p2, p3].
     def fake_pick(query, candidates, timeout=5.0):
@@ -360,7 +360,7 @@ def test_llm_picks_within_pending_candidates(monkeypatch):
     assert second.payload["product"]["product_id"] == "p2"
     # Preserve the original performance focus.
     assert second.payload["focus_aspect"] == "performance"
-    assert session.get("pending_detail") is None
+    assert session.task.pending_data("detail_pick") is None
 
 
 def test_llm_pick_candidate_returns_none_on_few_candidates():

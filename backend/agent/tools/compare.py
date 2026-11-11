@@ -29,8 +29,10 @@ from store.sku_select import mentioned_constraints, sku_to_dict
 from agent.session import AgentSession
 from agent.tools.base import ToolResult
 from agent.tools.resolve import resolve_many
-from agent.tools.reference import resolve_by_name, resolve_indices
+from agent.tools.resolve import resolve_by_name, resolve_indices
+from catalog_config import PROFILE
 from agent.tools.resolve import enrich_candidates, focus_index_in
+from i18n import is_english, t
 from store.product_store import ProductStore
 
 
@@ -63,15 +65,12 @@ class CompareTool:
 
         # 规格切换：上一轮刚出过对比表，这句只是「换成 512G 的 / 看看白色的」——
         # 不重新选商品，只换规格重算同一张表。
-        last_cmp = session.get("last_comparison")
+        last_cmp = session.task.comparison
         if last_cmp and not slots.get("product_ids") and is_spec_switch_reply(query, last_cmp):
             return self._switch_specs(query, session, last_cmp)
 
         if len(last_hits) < 2:
-            return self._plain(
-                "还没有可对比的商品哦，先让我帮你推荐几款，"
-                "然后说「对比一下第一个和第二个」就可以。"
-            )
+            return self._plain(t("compare.none"))
 
         # The comparison screen may provide product IDs directly.
         explicit_ids = slots.get("product_ids")
@@ -82,7 +81,7 @@ class CompareTool:
             # 规则定位不到 2 款 → 用共享分层 resolver 的 LLM 语义兼底再试一次
             # （如「对比华为耳机和小米手机」这类口语品类词）。只有凑足 2 款才采纳，
             # 避免把“只点名了一款”的场景幻出第二款（那是故意的反问）。
-            if len(product_ids) < 2:
+            if len(product_ids) < 2 and PROFILE.capabilities.llm_target_resolution:
                 llm_ids = self._resolve_targets_llm(query, last_hits)
                 if len(llm_ids) >= 2:
                     product_ids = llm_ids
@@ -90,14 +89,11 @@ class CompareTool:
         if len(product_ids) < 2:
             # Mark a pending comparison before asking, so an ordinal answer returns to
             # this tool. Candidates are the complete last-hit set and need not be copied.
-            session.set("pending_compare", {"hit_count": len(last_hits)})
-            return self._plain(
-                "想对比哪几款呢？可以说「对比第一个和第三个」，"
-                "或者「对比华为和小米那两款」。"
-            )
+            session.task.ask("compare_pick", {"hit_count": len(last_hits)})
+            return self._plain(t("compare.ask_which"))
 
         # Clear resolved pending state so it does not capture the next turn.
-        session.set("pending_compare", None)
+        session.task.end_pending("compare_pick")
 
         details = []
         for pid in product_ids:
@@ -105,7 +101,7 @@ class CompareTool:
             if detail is not None:
                 details.append(detail)
         if len(details) < 2:
-            return self._plain("这些商品的资料不太全，换两款再试试对比？")
+            return self._plain(t("compare.incomplete"))
 
         focus = slots.get("focus") or query
         budget_max, budget_min = _budget_from_session(session)
@@ -124,23 +120,19 @@ class CompareTool:
                 comparison = build_comparison(details, focus=focus)
         except Exception:  # noqa: BLE001 - 兜底，绝不让对比把整个 turn 打挂
             logger.exception("build_comparison failed")
-            return self._plain("对比生成出了点问题，稍后再试或换两款商品？")
-        _remember_comparison(session, comparison, details)
-
-        # Store compared products so later turns can refer to them by position.
-        session.set(
-            "last_hits",
-            [
-                {"product_id": p["product_id"], "title": p["title"]}
-                for p in comparison["products"]
-            ],
+            return self._plain(t("compare.failed"))
+        # The compared products become the list later turns count through.
+        session.task.show(
+            "compare",
+            [{"product_id": p["product_id"], "title": p["title"]} for p in comparison["products"]],
         )
+        _remember_comparison(session, comparison, details)
 
         # 表本身零 LLM、立刻可用；差异解读和选购建议交给 composer 流式补上。
         return ToolResult(
             tool_name=self.name,
             payload={"action": "compare", "query": query, "comparison": comparison},
-            composer_hint="用户在对比这几款商品，请解读差异并给出选购建议。",
+            composer_hint=t("compare.hint"),
         )
 
     def _resolve_targets(
@@ -151,6 +143,11 @@ class CompareTool:
         Explicit names take priority over generic demonstratives, followed by ordinals.
         If no target is stated, use the first two products.
         """
+        if not PROFILE.capabilities.llm_target_resolution:
+            indices = resolve_indices(query, len(last_hits), focus_index)
+            if not indices:
+                indices = resolve_by_name(query, last_hits)
+            return [last_hits[i]["product_id"] for i in indices[:_MAX_COMPARE]]
         strict_named = _resolve_context_names(query, last_hits)
         # 名称匹配用补齐了 SKU 规格值的候选：「黑色那款和白色那款对比」也能定位。
         enriched_hits = enrich_candidates(last_hits, self._store)
@@ -200,8 +197,8 @@ class CompareTool:
         selections = dict(last_cmp.get("selections") or {})
         details = [d for d in (self._store.get_product_detail(pid) for pid in product_ids) if d is not None]
         if len(details) < 2:
-            session.set("last_comparison", None)
-            return self._plain("刚才的对比表找不到了，再说一次要对比哪两款？")
+            session.task.comparison = None
+            return self._plain(t("compare.lost"))
 
         named = _resolve_context_names(query, [{"product_id": d.product_id, "title": d.title, "brand": d.brand} for d in details])
         targets = [details[i] for i in named] if named else details
@@ -221,7 +218,7 @@ class CompareTool:
                 selections[d.product_id] = min(matched, key=lambda s: s["price"])["sku_id"]
                 changed = True
         if not changed:
-            return self._plain("这两款里没有找到你说的规格，可以说「换成 512G 的」或「看看白色的」。")
+            return self._plain(t("compare.spec_missing"))
 
         budget_max, budget_min = _budget_from_session(session)
         try:
@@ -230,13 +227,14 @@ class CompareTool:
             )
         except Exception:  # noqa: BLE001
             logger.exception("build_comparison failed on spec switch")
-            return self._plain("对比生成出了点问题，稍后再试？")
+            return self._plain(t("compare.retry"))
         _remember_comparison(session, comparison, details)
-        labels = "」「".join(f"{p['title'][:12]} {p['sku']['label']}" for p in comparison["products"] if p.get("sku"))
+        joiner = ", " if is_english() else "」「"
+        labels = joiner.join(f"{p['title'][:12 if not is_english() else 30]} {p['sku']['label']}" for p in comparison["products"] if p.get("sku"))
         return ToolResult(
             tool_name=self.name,
             payload={"action": "compare", "comparison": comparison},
-            narrative_override=f"已按「{labels}」重新对比，看下面的表～",
+            narrative_override=t("compare.respecced", labels=labels),
             needs_composer=False,
         )
 
@@ -259,13 +257,13 @@ def _budget_from_session(session: AgentSession) -> tuple[float | None, float | N
 
 def _remember_comparison(session: AgentSession, comparison: dict[str, Any], details: list[Any]) -> None:
     """记住这张表的商品、选中规格和各自可选规格值，供「换成 512G 的」接续。"""
-    session.set("last_comparison", {
+    session.task.comparison = {
         "product_ids": [p["product_id"] for p in comparison["products"]],
         "selections": {p["product_id"]: p["sku"]["sku_id"] for p in comparison["products"] if p.get("sku")},
         "options": {
             d.product_id: _option_values(d) for d in details
         },
-    })
+    }
 
 
 def _option_values(detail: Any) -> dict[str, list[str]]:

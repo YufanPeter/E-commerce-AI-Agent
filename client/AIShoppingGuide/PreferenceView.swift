@@ -51,7 +51,7 @@ final class PreferenceStore: ObservableObject {
     }
 
     func undo(token: String) async {
-        await perform(failure: "撤销失败，请再试一次") {
+        await perform(failure: "Could not undo that change. Try again.") {
             try await self.service.undoMemory(userID: self.userID, undoToken: token)
         }
     }
@@ -62,25 +62,25 @@ final class PreferenceStore: ObservableObject {
         guard !clean.isEmpty else { return false }
         isSending = true
         defer { isSending = false }
-        return await perform(failure: "没有记住，请检查网络后再试") {
+        return await perform(failure: "Could not save the memory. Check the connection and try again.") {
             try await self.service.tellMemory(userID: self.userID, text: clean)
         }
     }
 
     func confirm(_ item: MemoryItemPayload) async {
-        await perform(failure: "操作失败，请再试一次") {
+        await perform(failure: "That action failed. Try again.") {
             try await self.service.confirmMemory(userID: self.userID, itemID: item.id)
         }
     }
 
     func reject(_ item: MemoryItemPayload) async {
-        await perform(failure: "操作失败，请再试一次") {
+        await perform(failure: "That action failed. Try again.") {
             try await self.service.rejectMemory(userID: self.userID, itemID: item.id)
         }
     }
 
     func forget(_ item: MemoryItemPayload) async {
-        await perform(failure: "删除失败，请再试一次") {
+        await perform(failure: "Could not delete the memory. Try again.") {
             try await self.service.deleteMemory(userID: self.userID, itemID: item.id)
         }
     }
@@ -89,16 +89,16 @@ final class PreferenceStore: ObservableObject {
         do {
             memory = try await service.setPersonalization(userID: userID, enabled: enabled)
         } catch {
-            toast = Toast(message: "设置没有保存，请再试一次", undoToken: nil)
+            toast = Toast(message: "Could not save settings. Try again.", undoToken: nil)
         }
     }
 
     func clearAll() async {
         do {
             memory = try await service.clearMemory(userID: userID)
-            toast = Toast(message: "已清空全部记忆", undoToken: nil)
+            toast = Toast(message: "All memories cleared", undoToken: nil)
         } catch {
-            toast = Toast(message: "清空失败，请再试一次", undoToken: nil)
+            toast = Toast(message: "Could not clear memories. Try again.", undoToken: nil)
         }
     }
 
@@ -125,7 +125,7 @@ struct PreferenceView: View {
     @State private var showActivity = false
     @FocusState private var inputFocused: Bool
 
-    private let examples = ["我是油皮", "我平时穿 42 码", "我一直不买华为", "我一般预算 300 到 500", "我对酒精过敏"]
+    private let examples = ["I have oily skin", "I usually wear size 9", "I avoid Nike", "My budget is usually between $30 and $50", "I am allergic to latex"]
 
     var body: some View {
         NavigationStack {
@@ -156,23 +156,23 @@ struct PreferenceView: View {
             }
             .scrollDismissesKeyboard(.interactively)
             .background(AppTheme.background)
-            .navigationTitle("记忆")
+            .navigationTitle("Memory")
             .overlay(alignment: .bottom) { toastView }
             .task { await preferenceStore.load() }
             .onChange(of: isVisible) { _, visible in
                 if visible { Task { await preferenceStore.load() } }
             }
             .confirmationDialog(
-                "清空全部记忆？",
+                "Clear all memories?",
                 isPresented: $showClearConfirm,
                 titleVisibility: .visible
             ) {
-                Button("清空，不可恢复", role: .destructive) {
+                Button("Clear permanently", role: .destructive) {
                     Task { await preferenceStore.clearAll() }
                 }
-                Button("取消", role: .cancel) {}
+                Button("Cancel", role: .cancel) {}
             } message: {
-                Text("导购会忘掉你的偏好和最近的行为记录。")
+                Text("This removes your preferences and recent activity.")
             }
         }
     }
@@ -182,11 +182,11 @@ struct PreferenceView: View {
     /// 标题下的一句话。具体记了什么下面都列着，这里不再重复。
     private func overview(_ memory: MemoryViewPayload) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(memory.count == 0 ? "导购还不了解你" : "导购记得 \(memory.count) 件关于你的事")
+            Text(memory.count == 0 ? "No memories yet" : "\(memory.count) saved memories")
                 .font(.subheadline)
                 .foregroundStyle(AppTheme.textSecondary)
             if !memory.personalizationEnabled {
-                Label("推荐暂时不参考这些记忆", systemImage: "pause.circle")
+                Label("Recommendations are not using memory", systemImage: "pause.circle")
                     .font(.caption.weight(.medium))
                     .foregroundStyle(AppTheme.primary)
             }
@@ -201,7 +201,7 @@ struct PreferenceView: View {
         let canSend = !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !preferenceStore.isSending
         return VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
-                TextField("告诉导购一件事", text: $draft, axis: .vertical)
+                TextField("Tell your shopping assistant something", text: $draft, axis: .vertical)
                     .lineLimit(1...3)
                     .font(.subheadline)
                     .focused($inputFocused)
@@ -224,7 +224,7 @@ struct PreferenceView: View {
                 }
                 .buttonStyle(.tactile)
                 .disabled(!canSend)
-                .accessibilityLabel("告诉导购")
+                .accessibilityLabel("Save a memory")
             }
             .padding(.leading, 16)
             .padding(.trailing, 6)
@@ -264,7 +264,7 @@ struct PreferenceView: View {
 
     private func suggestionsSection(_ items: [MemoryItemPayload]) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            sectionTitle("要记住这些吗？")
+            sectionTitle("Suggestions to remember")
             VStack(spacing: 0) {
                 ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                     if index > 0 { rowDivider }
@@ -284,23 +284,23 @@ struct PreferenceView: View {
                     .foregroundStyle(AppTheme.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
                 if let evidence = item.evidence, !evidence.isEmpty {
-                    Text(item.source == "inferred" ? evidence : "你说过「\(evidence)」")
+                    Text(item.source == "inferred" ? evidence : "You said: \(evidence)")
                         .font(.caption)
                         .foregroundStyle(AppTheme.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                Text("确认后：\(item.effect)")
+                Text("If confirmed: \(item.effect)")
                     .font(.caption)
                     .foregroundStyle(item.needsCare ? AppTheme.error : AppTheme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 8) {
-                    Button("记住") { Task { await preferenceStore.confirm(item) } }
+                    Button("Save") { Task { await preferenceStore.confirm(item) } }
                         .font(.footnote.weight(.semibold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 20)
                         .frame(minHeight: 36)
                         .background(AppTheme.primary, in: Capsule())
-                    Button("不对") { Task { await preferenceStore.reject(item) } }
+                    Button("Dismiss") { Task { await preferenceStore.reject(item) } }
                         .font(.footnote.weight(.medium))
                         .foregroundStyle(AppTheme.textSecondary)
                         .padding(.horizontal, 14)
@@ -358,7 +358,7 @@ struct PreferenceView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.tactile)
-            .accessibilityLabel("忘掉 \(item.label)")
+            .accessibilityLabel("Forget \(item.label)")
             .padding(.top, 2)
         }
         .padding(.leading, 14)
@@ -387,7 +387,7 @@ struct PreferenceView: View {
 
     private func rowProvenance(_ item: MemoryItemPayload) -> String {
         if let evidence = item.evidence, !evidence.isEmpty, item.source != "inferred" {
-            return "你说过「\(evidence)」"
+            return "You said: \(evidence)"
         }
         if let evidence = item.evidence, !evidence.isEmpty {
             return "\(item.sourceLabel)：\(evidence)"
@@ -396,7 +396,7 @@ struct PreferenceView: View {
     }
 
     private func rowEffect(_ item: MemoryItemPayload) -> String {
-        item.useCount > 0 ? "\(item.effect) · 已用于 \(item.useCount) 次推荐" : item.effect
+        item.useCount > 0 ? "\(item.effect) · Used in \(item.useCount) recommendations" : item.effect
     }
 
     // MARK: 空状态
@@ -409,10 +409,10 @@ struct PreferenceView: View {
                 .frame(width: 32, height: 32)
                 .background(AppTheme.secondary, in: Circle())
             VStack(alignment: .leading, spacing: 4) {
-                Text("不用填表")
+                Text("Tell us what matters to you")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(AppTheme.textPrimary)
-                Text("聊天时说到肤质、尺码、不买的品牌，导购会记下来，也可以直接在上面告诉它。一次性的需求不会被记住。")
+                Text("Save preferences such as your size or brands to avoid. One-time requests stay in the conversation.")
                     .font(.caption)
                     .foregroundStyle(AppTheme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -437,10 +437,10 @@ struct PreferenceView: View {
                         .frame(width: 32, height: 32)
                         .background(AppTheme.secondary, in: Circle())
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("最近的行为")
+                        Text("Recent activity")
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(AppTheme.textPrimary)
-                        Text("导购据此猜你的偏好，猜到的会先问你")
+                        Text("Activity can suggest preferences for you to review.")
                             .font(.caption)
                             .foregroundStyle(AppTheme.textSecondary)
                     }
@@ -496,10 +496,10 @@ struct PreferenceView: View {
                 set: { enabled in Task { await preferenceStore.setPersonalization(enabled) } }
             )) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("推荐时用这些记忆")
+                    Text("Use memory in recommendations")
                         .font(.subheadline.weight(.medium))
                         .foregroundStyle(AppTheme.textPrimary)
-                    Text(memory.personalizationEnabled ? "关闭后记忆还在，只是暂时不起作用" : "现在的推荐不参考任何记忆")
+                    Text(memory.personalizationEnabled ? "Turning this off keeps your saved memories." : "Recommendations are not using your memories.")
                         .font(.caption)
                         .foregroundStyle(AppTheme.textSecondary)
                 }
@@ -510,7 +510,7 @@ struct PreferenceView: View {
             if memory.count > 0 || !memory.activity.isEmpty {
                 Divider().padding(.leading, 14)
                 Button { showClearConfirm = true } label: {
-                    Text("清空全部记忆")
+                    Text("Clear all memories")
                         .font(.subheadline)
                         .foregroundStyle(AppTheme.error)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -536,10 +536,10 @@ struct PreferenceView: View {
             Image(systemName: "wifi.exclamationmark")
                 .font(.title2)
                 .foregroundStyle(AppTheme.textSecondary)
-            Text("连不上服务，暂时看不到记忆")
+            Text("Could not connect to load memory.")
                 .font(.subheadline)
                 .foregroundStyle(AppTheme.textPrimary)
-            Button("重试") { Task { await preferenceStore.load() } }
+            Button("Try again") { Task { await preferenceStore.load() } }
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(AppTheme.primary)
                 .frame(minWidth: 88, minHeight: 44)
@@ -568,7 +568,7 @@ struct PreferenceView: View {
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
                 if let token = toast.undoToken {
-                    Button("撤销") {
+                    Button("Undo") {
                         preferenceStore.toast = nil
                         Task { await preferenceStore.undo(token: token) }
                     }
@@ -608,14 +608,14 @@ enum MemoryActivityTime {
 
     private static let relative: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
-        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.locale = Locale(identifier: "en_US")
         formatter.unitsStyle = .short
         return formatter
     }()
 
     static func relative(from raw: String, now: Date = Date()) -> String? {
         guard let date = parser.date(from: raw) else { return nil }
-        if now.timeIntervalSince(date) < 60 { return "刚刚" }
+        if now.timeIntervalSince(date) < 60 { return "Just now" }
         return relative.localizedString(for: date, relativeTo: now)
     }
 }
@@ -628,26 +628,26 @@ extension MemoryViewPayload {
     static let preview = MemoryViewPayload(
         userID: "preview",
         personalizationEnabled: true,
-        summary: "肤质：油皮、不买 华为",
+        summary: "Oily skin, avoid Nike",
         groups: [
-            MemoryGroupPayload(name: "关于你", items: [
-                MemoryItemPayload(id: "1", kind: "attribute", group: "关于你", label: "肤质：油皮", scope: "美妆护肤", source: "stated", sourceLabel: "你在对话里说的", evidence: "我是油皮，用什么洗面奶好", effect: "解说时结合", needsCare: false, useCount: 0),
+            MemoryGroupPayload(name: "About you", items: [
+                MemoryItemPayload(id: "1", kind: "attribute", group: "About you", label: "Skin type: oily", scope: "Beauty & Personal Care", source: "stated", sourceLabel: "Stated in chat", evidence: "I have oily skin. Which face wash should I use?", effect: "Used to explain recommendations", needsCare: false, useCount: 0),
             ]),
-            MemoryGroupPayload(name: "品牌", items: [
-                MemoryItemPayload(id: "2", kind: "brand_avoid", group: "品牌", label: "不买 华为", scope: nil, source: "stated", sourceLabel: "你在对话里说的", evidence: "我一直不买华为", effect: "硬性排除，不会再推荐", needsCare: false, useCount: 3),
+            MemoryGroupPayload(name: "Brands", items: [
+                MemoryItemPayload(id: "2", kind: "brand_avoid", group: "Brands", label: "Avoid Nike", scope: nil, source: "stated", sourceLabel: "Stated in chat", evidence: "I avoid Nike", effect: "Excluded from recommendations", needsCare: false, useCount: 3),
             ]),
         ],
         suggestions: [
-            MemoryItemPayload(id: "3", kind: "avoid_term", group: "关于你", label: "避开 酒精", scope: nil, source: "stated", sourceLabel: "你在对话里说的", evidence: "我对酒精过敏", effect: "硬性排除，含这个成分的不推荐", needsCare: true, useCount: 0),
-            MemoryItemPayload(id: "4", kind: "brand_like", group: "品牌", label: "喜欢 小米", scope: nil, source: "inferred", sourceLabel: "从你的行为推测", evidence: "最近加购 2 次、看详情 3 次", effect: "排序时优先", needsCare: false, useCount: 0),
+            MemoryItemPayload(id: "3", kind: "avoid_term", group: "About you", label: "Avoid latex", scope: nil, source: "stated", sourceLabel: "Stated in chat", evidence: "I am allergic to latex", effect: "Products containing this ingredient are excluded", needsCare: true, useCount: 0),
+            MemoryItemPayload(id: "4", kind: "brand_like", group: "Brands", label: "Likes Garmin", scope: nil, source: "inferred", sourceLabel: "Inferred from activity", evidence: "2 cart adds and 3 detail views", effect: "Preferred in ranking", needsCare: false, useCount: 0),
         ],
         activity: [
-            MemoryActivityPayload(id: "1", type: "add_cart", text: "加购了 小米 17 Max", at: ""),
+            MemoryActivityPayload(id: "1", type: "add_cart", text: "Added a Garmin watch", at: ""),
         ],
         count: 2
     )
 }
 
-#Preview("记忆") {
+#Preview("Memory") {
     PreferenceView(preferenceStore: PreferenceStore(service: MockPreferenceService()))
 }

@@ -9,14 +9,15 @@ FAQ 和评价。它不做语义检索，也不生成推荐理由；这些交给 
 
 import argparse
 import json
+import re
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Sequence
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_DB_PATH = PROJECT_ROOT / "backend" / "storage" / "ecommerce_agent.sqlite3"
+from catalog_config import DEFAULT_DB_PATH, PROFILE
+from i18n import format_money, is_english
 
 
 @dataclass(frozen=True)
@@ -24,6 +25,10 @@ class PriceRange:
     min_price: float
     max_price: float
     sku_count: int
+
+    @property
+    def is_reference(self) -> bool:
+        return self.sku_count == 0
 
 
 @dataclass(frozen=True)
@@ -81,6 +86,8 @@ class ProductDetail:
     marketing_description: str
     faqs: list[ProductFaq]
     reviews: list[ProductReview]
+    catalog_source: dict[str, Any] | None = None
+    attributes: dict[str, list[str]] = field(default_factory=dict)
 
 
 class ProductStore:
@@ -225,6 +232,11 @@ class ProductStore:
             matched: list[str] = []
             for row in brand_rows:
                 brand = row["brand"]
+                if is_english():
+                    # A partial or common-word hit would hijack phrases like "the first one".
+                    if english_brand_named(brand.lower(), t):
+                        matched.append(brand)
+                    continue
                 for tok in brand.lower().split():
                     if len(tok) >= 2 and tok in t:
                         matched.append(brand)
@@ -271,6 +283,21 @@ class ProductStore:
                 """,
                 (product_id,),
             ).fetchone()
+            catalog_source = None
+            attributes: dict[str, list[str]] = {}
+            if row is not None and PROFILE.source_metadata:
+                source = conn.execute(
+                    "SELECT dataset, parent_asin, category_path, price_usd, average_rating, rating_number "
+                    "FROM amazon_product_metadata WHERE product_id = ?",
+                    (product_id,),
+                ).fetchone()
+                catalog_source = dict(source) if source is not None else None
+                for item in conn.execute(
+                    "SELECT attribute, value FROM product_attributes WHERE product_id = ? AND status = 'observed' "
+                    "ORDER BY attribute, value",
+                    (product_id,),
+                ):
+                    attributes.setdefault(item["attribute"], []).append(item["value"])
 
         if row is None:
             return None
@@ -293,6 +320,8 @@ class ProductStore:
             marketing_description=row["marketing_description"],
             faqs=self.get_faqs(product_id),
             reviews=self.get_reviews(product_id),
+            catalog_source=catalog_source,
+            attributes=attributes,
         )
 
     def get_skus(
@@ -391,7 +420,7 @@ class ProductStore:
     def connect(self) -> sqlite3.Connection:
         """Create a SQLite connection configured with a row factory."""
         if not self.db_path.exists():
-            raise FileNotFoundError(f"SQLite 商品库不存在：{self.db_path}")
+            raise FileNotFoundError(f"Catalog database not found: {self.db_path}")
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
@@ -421,6 +450,19 @@ class ProductStore:
         )
 
 
+_COMMON_WORD_BRANDS = {
+    "the", "first", "second", "third", "last", "one", "two", "cart", "add", "buy", "this", "that", "it",
+    "black", "white", "red", "blue", "green", "pink", "gray", "large", "medium", "small", "size", "color",
+    "best", "new", "more", "only", "simple", "generic", "standard",
+}
+
+
+def english_brand_named(brand: str, text: str) -> bool:
+    if len(brand) < 3 or brand in _COMMON_WORD_BRANDS:
+        return False
+    return re.search(rf"(?<![\w]){re.escape(brand)}(?![\w])", text) is not None
+
+
 def placeholders(count: int) -> str:
     return ", ".join("?" for _ in range(count))
 
@@ -443,9 +485,11 @@ def sku_from_row(row: sqlite3.Row) -> ProductSku:
 
 def price_display(price_range: PriceRange) -> str:
     """单价「¥450」；多规格给完整区间「¥450 – ¥900」，不再只报「¥450 起」。"""
+    if price_range.is_reference:
+        return f"${price_range.min_price:,.2f} (reference)"
     if price_range.min_price == price_range.max_price:
-        return f"¥{price_range.min_price:g}"
-    return f"¥{price_range.min_price:g} – ¥{price_range.max_price:g}"
+        return format_money(price_range.min_price)
+    return f"{format_money(price_range.min_price)} – {format_money(price_range.max_price)}"
 
 
 def parse_args() -> argparse.Namespace:

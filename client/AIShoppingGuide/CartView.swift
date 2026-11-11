@@ -64,7 +64,7 @@ struct CartView: View {
             ZStack(alignment: .bottom) {
                 VStack(spacing: 0) {
                     if items.isEmpty {
-                        ContentUnavailableView("购物车为空", systemImage: "cart", description: Text("从导购推荐里加入商品后会显示在这里。"))
+                        ContentUnavailableView("Your cart is empty", systemImage: "cart", description: Text("Items you add from recommendations will appear here."))
                             .foregroundStyle(AppTheme.textSecondary)
                             .padding(.horizontal, 28)
                             .padding(.bottom, 90)
@@ -73,7 +73,7 @@ struct CartView: View {
                             VStack(alignment: .leading, spacing: 14) {
                                 cartOverviewCard
 
-                                Text("商品清单")
+                                Text("Cart items")
                                     .font(.subheadline.weight(.semibold))
                                     .foregroundStyle(AppTheme.textPrimary)
                                     .padding(.horizontal, 2)
@@ -121,7 +121,7 @@ struct CartView: View {
                 .presentationCornerRadius(28)
             }
             .background(AppTheme.background)
-            .navigationTitle(itemCount > 0 ? "购物车(\(itemCount))" : "购物车")
+            .navigationTitle(itemCount > 0 ? "Cart (\(itemCount))" : "Cart")
             .navigationDestination(item: $selectedProduct) { product in
                 ProductDetailView(product: product) { product, selectedOptions, quantity in
                     addToCart(product, selectedOptions: selectedOptions, quantity: quantity)
@@ -147,14 +147,14 @@ struct CartView: View {
             onCheckout: { showCheckoutConfirm = true }
         )
         .confirmationDialog(
-            "确认下单 \(selectedItemCount) 件，合计 \(selectedTotalText)？",
+            "Place an order for \(selectedItemCount) items totaling \(selectedTotalText)?",
             isPresented: $showCheckoutConfirm,
             titleVisibility: .visible
         ) {
-            Button("确认下单") { checkout() }
-            Button("取消", role: .cancel) {}
+            Button("Place order") { checkout() }
+            Button("Cancel", role: .cancel) {}
         } message: {
-            Text("寄到默认地址，实付以下单时的价格为准。")
+            Text("Ships to the default address. Your total is confirmed at checkout.")
         }
         .alert(
             checkoutMessage ?? "",
@@ -163,7 +163,7 @@ struct CartView: View {
                 set: { if !$0 { checkoutMessage = nil } }
             )
         ) {
-            Button("好", role: .cancel) {}
+            Button("OK", role: .cancel) {}
         }
         .padding(.horizontal, 20)
         .padding(.top, 12)
@@ -175,11 +175,11 @@ struct CartView: View {
 
     private var cartOverviewCard: some View {
         HStack(spacing: 12) {
-            cartOverviewMetric(title: "清单", value: "\(currentItemIDs.count) 款")
+            cartOverviewMetric(title: "Products", value: "\(currentItemIDs.count) products")
             Divider().frame(height: 34)
-            cartOverviewMetric(title: "数量", value: "\(itemCount) 件")
+            cartOverviewMetric(title: "Quantity", value: "\(itemCount) items")
             Divider().frame(height: 34)
-            cartOverviewMetric(title: "合计", value: selectedItemCount > 0 ? selectedTotalText : "未选择")
+            cartOverviewMetric(title: "Total", value: selectedItemCount > 0 ? selectedTotalText : "Nothing selected")
         }
         .padding(14)
         .frame(maxWidth: .infinity)
@@ -354,7 +354,7 @@ struct CartView: View {
         guard !ids.isEmpty, !isCheckingOut else { return }
         // 本地还没同步到后端的行不能下单，否则用户看到的合计和实际下单的对不上
         guard ids.count == selectedItems.count else {
-            checkoutMessage = "有商品还没同步好，请稍后再试"
+            checkoutMessage = "Some items are still syncing. Try again in a moment."
             return
         }
         isCheckingOut = true
@@ -363,12 +363,12 @@ struct CartView: View {
                 let result = try await cartService.checkoutAgentCart(cartItemIDs: ids)
                 await MainActor.run {
                     applyCartSnapshot(result.cart)
-                    checkoutMessage = "下单成功，共 \(result.order.itemCount) 件，合计 \(formattedPrice(result.order.total))"
+                    checkoutMessage = "Order placed: \(result.order.itemCount) items totaling \(formattedPrice(result.order.total))."
                     isCheckingOut = false
                 }
             } catch {
                 await MainActor.run {
-                    checkoutMessage = "下单失败，请再试一次"
+                    checkoutMessage = "Could not place the order. Try again."
                     isCheckingOut = false
                 }
             }
@@ -441,7 +441,7 @@ struct CartRow: View {
         HStack(alignment: .top, spacing: 10) {
             CartSelectionButton(
                 isSelected: isSelected,
-                accessibilityLabel: isSelected ? "取消选择 \(item.product.title)" : "选择 \(item.product.title)",
+                accessibilityLabel: isSelected ? "Deselect \(item.product.title)" : "Select \(item.product.title)",
                 action: onToggleSelection
             )
             .padding(.top, 22)
@@ -495,7 +495,7 @@ struct CartRow: View {
                         .foregroundStyle(AppTheme.textSecondary)
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel("修改规格，当前 \(item.specificationSummary)")
+                    .accessibilityLabel("Change options. Current: \(item.specificationSummary)")
                 }
 
                 HStack(alignment: .center, spacing: 10) {
@@ -588,13 +588,13 @@ private struct CartCheckoutBar: View {
             CartSelectionButton(
                 isSelected: isAllSelected,
                 isMixed: isPartiallySelected,
-                title: "全选",
-                accessibilityLabel: isAllSelected ? "取消全选" : "全选商品",
+                title: "Select all",
+                accessibilityLabel: isAllSelected ? "Deselect all" : "Select all items",
                 action: onToggleAll
             )
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(hasSelection ? "已选 \(selectedCount) 件" : "请选择商品")
+                Text(hasSelection ? "\(selectedCount) selected" : "Select items")
                     .font(.caption.weight(.medium))
                     .foregroundStyle(AppTheme.textSecondary)
                 Text(totalText)
@@ -604,7 +604,7 @@ private struct CartCheckoutBar: View {
             .frame(maxWidth: .infinity, alignment: .leading)
 
             Button(action: onCheckout) {
-                Text(isCheckingOut ? "下单中" : (hasSelection ? "结算(\(selectedCount))" : "结算"))
+                Text(isCheckingOut ? "Placing order…" : (hasSelection ? "Checkout (\(selectedCount))" : "Checkout"))
                     .font(.headline)
                     .foregroundStyle(.white)
                     .frame(minWidth: 92)
@@ -641,7 +641,7 @@ private struct CartSpecificationEditorSheet: View {
             .background(AppTheme.background)
             .safeAreaInset(edge: .bottom) {
                 Button(action: onConfirm) {
-                    Text("确认修改规格")
+                    Text("Save options")
                         .font(.headline)
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
@@ -654,7 +654,7 @@ private struct CartSpecificationEditorSheet: View {
                 .padding(.bottom, 12)
                 .background(AppTheme.surface)
             }
-            .navigationTitle("修改规格")
+            .navigationTitle("Change options")
             .navigationBarTitleDisplayMode(.inline)
         }
     }
@@ -672,7 +672,7 @@ private struct CartSpecificationEditorSheet: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(AppTheme.textPrimary)
                     .lineLimit(2)
-                Text(selectedSpecificationSummary.isEmpty ? "请选择规格" : selectedSpecificationSummary)
+                Text(selectedSpecificationSummary.isEmpty ? "Choose options" : selectedSpecificationSummary)
                     .font(.caption)
                     .foregroundStyle(AppTheme.textSecondary)
                     .lineLimit(1)
@@ -784,7 +784,7 @@ struct QuantityControl: View {
                         .toolbar {
                             ToolbarItemGroup(placement: .keyboard) {
                                 Spacer()
-                                Button("完成") {
+                                Button("Done") {
                                     commitDraft()
                                     isFocused = false
                                 }
@@ -800,7 +800,7 @@ struct QuantityControl: View {
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel("修改数量，当前 \(quantity)")
+                    .accessibilityLabel("Change quantity. Current: \(quantity)")
                 }
             }
             .frame(width: 42, height: 32)

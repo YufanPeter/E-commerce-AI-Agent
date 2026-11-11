@@ -1,0 +1,34 @@
+{
+  "taxonomy": {
+    "watch": "Electronics > Wearable Technology > Smartwatches",
+    "band": "Cell Phones & Accessories > Accessories > Smartwatch Accessories > Smartwatch Bands",
+    "stand": "Electronics > Computers & Accessories > Laptop Accessories > Stands",
+    "running": "Clothing, Shoes & Jewelry > Men > Shoes > Athletic > Running > Road Running",
+    "coffee": "Home & Kitchen > Kitchen & Dining > Coffee, Tea & Espresso > Coffee Makers > Coffee Machines",
+    "skillet": "Home & Kitchen > Kitchen & Dining > Cookware > Pots & Pans > Skillets",
+    "face_spf": "Beauty & Personal Care > Skin Care > Sunscreens & Tanning Products > Sunscreens > Facial Sunscreens",
+    "body_spf": "Beauty & Personal Care > Skin Care > Sunscreens & Tanning Products > Sunscreens > Body Sunscreens"
+  },
+  "retrieval": [
+    {"id":"watch-type","query":"Show me smartwatches, not watch bands","cells":["watch"],"hard_negative_cells":["band"]},
+    {"id":"watch-80","query":"Find smartwatches at most $80, no watch bands","cells":["watch"],"max_usd":80,"hard_negative_cells":["band"]},
+    {"id":"watch-50","query":"Find smartwatches at most $50, no watch bands","cells":["watch"],"max_usd":50,"hard_negative_cells":["band"]},
+    {"id":"watch-garmin","query":"Only Garmin smartwatches","cells":["watch"],"brands":["Garmin"],"hard_negative_cells":["band"]},
+    {"id":"watch-not-apple","query":"Smartwatches, but exclude Apple and watch bands","cells":["watch"],"exclude_brands":["Apple"],"hard_negative_cells":["band"]},
+    {"id":"watch-gps","query":"Smartwatches with built-in GPS","cells":["watch"],"attribute":{"field":"gps_mode","equals":"built_in"},"hard_negative_cells":["band"]},
+    {"id":"band-25","query":"Watch bands at most $25, not the watch itself","cells":["band"],"max_usd":25,"hard_negative_cells":["watch"]},
+    {"id":"stand-50","query":"Laptop stands at most $50","cells":["stand"],"max_usd":50},
+    {"id":"stand-vivo","query":"Only VIVO laptop stands","cells":["stand"],"brands":["VIVO"]},
+    {"id":"run-100","query":"Men's road running shoes at most $100","cells":["running"],"max_usd":100},
+    {"id":"run-brooks","query":"Men's road running shoes by Brooks","cells":["running"],"brands":["Brooks"]},
+    {"id":"run-drop","query":"Men's road running shoes with a heel-to-toe drop of at least 8 mm","cells":["running"],"attribute":{"field":"heel_drop_mm","min":8}},
+    {"id":"coffee-150","query":"Coffee makers at most $150","cells":["coffee"],"max_usd":150},
+    {"id":"coffee-cuisinart","query":"Only Cuisinart coffee makers","cells":["coffee"],"brands":["Cuisinart"]},
+    {"id":"coffee-tank","query":"Coffee makers with a water tank of at least 1 liter","cells":["coffee"],"attribute":{"field":"water_tank_ml","min":1000}},
+    {"id":"coffee-12-cup","query":"Coffee makers with a 12-cup carafe or rated 12-cup capacity","cells":["coffee"],"attribute":{"field":"carafe_cups","equals":12}},
+    {"id":"skillet-40","query":"Frying pans at most $40","cells":["skillet"],"max_usd":40},
+    {"id":"face-spf","query":"Facial sunscreen, not body sunscreen","cells":["face_spf"],"hard_negative_cells":["body_spf"]},
+    {"id":"body-spf-20","query":"Body sunscreen at most $20, not facial sunscreen","cells":["body_spf"],"max_usd":20,"hard_negative_cells":["face_spf"]},
+    {"id":"out-cat-food","query":"Find a bag of dry cat food","cells":[],"out_of_catalog":true}
+  ]
+}

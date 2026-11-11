@@ -16,6 +16,8 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from i18n import en as english
+from i18n import is_english
 from llm.client import get_client, get_model_id
 from search.llm_parser import _loads_arguments
 from search.query_understanding import load_taxonomy
@@ -53,8 +55,9 @@ _TOOL: dict[str, Any] = {
                             "value": {"type": "string", "description": "精炼后的值，如 油皮、42码、小米、轻量、有两个小孩、酒精。预算写成上限数字，如 3000。"},
                             "quote": {"type": "string", "description": "用户原话里支撑这条记忆的连续片段，必须逐字摘录。"},
                             "durable": {"type": "boolean", "description": "是用户长期的情况为 true；只是这一次的购物需求为 false。"},
+                            "category": {"type": ["string", "null"], "description": "预算只针对某个大类时填大类名（「护肤品一般 300 以内」填美妆护肤）；对所有东西都适用或不是预算时填 null。"},
                         },
-                        "required": ["kind", "value", "quote", "durable"],
+                        "required": ["kind", "value", "quote", "durable", "category"],
                         "additionalProperties": False,
                     },
                 }
@@ -74,7 +77,9 @@ _SYSTEM_PROMPT = """你负责判断用户这句话有没有透露【他本人长
 "我这人特别怕麻烦，东西好用就行" → 不确定算什么偏好，传空数组。
 "家里两个娃，零食得买小包装的" → household：有两个小孩。
 "用惯了小米，换别的不习惯" → brand_like：小米。
-"推荐一款轻便的电脑" → 空数组，这是一次性需求。"""
+"护肤品我一般控制在 300 以内" → budget：300，category 美妆护肤。
+"推荐一款轻便的电脑" → 空数组，这是一次性需求。
+"这款面霜预算 500" → 空数组，这是这一次的预算。"""
 
 
 @dataclass(frozen=True)
@@ -83,10 +88,40 @@ class ExtractedMemory:
     value: str
     quote: str
     needs_confirm: bool
+    # Top-level category a budget applies to; empty means every category.
+    scope: str = ""
+
+
+def budget_scopes() -> list[str]:
+    """Top-level categories a remembered budget can be limited to."""
+    from catalog_config import AMAZON_CATEGORIES
+
+    if is_english():
+        return list(AMAZON_CATEGORIES.values())
+    return sorted(set((load_taxonomy().get("sub_to_cat") or {}).values()))
+
+
+def _tool() -> dict[str, Any]:
+    tool = json.loads(json.dumps(_TOOL))
+    fields = tool["function"]["parameters"]["properties"]["memories"]["items"]["properties"]
+    fields["category"]["enum"] = [*budget_scopes(), None]
+    if not is_english():
+        return tool
+    tool["function"]["description"] = english.MEMORY_TOOL_DESCRIPTION
+    fields["value"]["description"] = english.MEMORY_VALUE_DESCRIPTION
+    fields["quote"]["description"] = english.MEMORY_QUOTE_DESCRIPTION
+    fields["durable"]["description"] = english.MEMORY_DURABLE_DESCRIPTION
+    fields["category"]["description"] = english.MEMORY_CATEGORY_DESCRIPTION
+    return tool
 
 
 def might_disclose(text: str) -> bool:
     """确定性预判，绝大多数纯购物句子不打 LLM。"""
+    if is_english():
+        return bool(
+            text and len(text) >= 4 and english.MEMORY_CUES_RE.search(text)
+            and not english.MEMORY_THIRD_PARTY_RE.search(text) and not english.MEMORY_ONE_OFF_RE.search(text)
+        )
     if not text or len(text) < 4 or any(hint in text for hint in _THIRD_PARTY_HINTS):
         return False
     if any(hint in text for hint in _ONE_OFF_HINTS):
@@ -104,6 +139,7 @@ def validate_memories(raw: list[dict[str, Any]], text: str) -> list[ExtractedMem
     brands = set(taxonomy.get("brands", []))
     for variants in (taxonomy.get("brand_expand") or {}).values():
         brands.update(variants)
+    scopes = set(budget_scopes())
     out: list[ExtractedMemory] = []
     seen: set[tuple[str, str]] = set()
     for item in raw:
@@ -124,7 +160,11 @@ def validate_memories(raw: list[dict[str, Any]], text: str) -> list[ExtractedMem
         if (kind, value) in seen:
             continue
         seen.add((kind, value))
-        out.append(ExtractedMemory(kind=kind, value=value, quote=quote, needs_confirm=kind in _CONFIRM_REQUIRED))
+        scope = str(item.get("category") or "") if kind == "budget" else ""
+        out.append(ExtractedMemory(
+            kind=kind, value=value, quote=quote, needs_confirm=kind in _CONFIRM_REQUIRED,
+            scope=scope if scope in scopes else "",
+        ))
     return out
 
 
@@ -134,10 +174,10 @@ def extract_with_llm(text: str, timeout: float = 5.0) -> list[ExtractedMemory]:
         response = get_client().chat.completions.create(
             model=get_model_id(role="fast"),
             messages=[
-                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "system", "content": english.MEMORY_SYSTEM if is_english() else _SYSTEM_PROMPT},
                 {"role": "user", "content": text},
             ],
-            tools=[_TOOL],
+            tools=[_tool()],
             tool_choice={"type": "function", "function": {"name": "record_memories"}},
             temperature=0.0,
             timeout=timeout,

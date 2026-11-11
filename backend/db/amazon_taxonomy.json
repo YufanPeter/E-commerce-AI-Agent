@@ -1,0 +1,1077 @@
+{
+ "version": "taxonomy-v1",
+ "groups": {
+  "Sunscreens": [
+   "sunscreens?",
+   "sunblocks?"
+  ],
+  "Fragrances": [
+   "fragrances?"
+  ],
+  "Screen Protectors": [
+   "screen protectors?"
+  ],
+  "Phone Cases": [
+   "(?:phone|iphone|smartphone|galaxy|pixel)(?: [\\w+]+){0,3}? cases?"
+  ],
+  "Cables": [
+   "cables?"
+  ],
+  "Headphones": [
+   "headphones?",
+   "headsets?"
+  ],
+  "T-Shirts": [
+   "t-?shirts?",
+   "tees?"
+  ],
+  "Dresses": [
+   "dress(?:es)?"
+  ]
+ },
+ "unavailable_terms": [
+  "smartphones?",
+  "(?:cell|mobile) phones?",
+  "iphones?",
+  "laptops?",
+  "tablets?",
+  "ipads?",
+  "televisions?",
+  "tvs?",
+  "cat food",
+  "dog food",
+  "pet food",
+  "blood pressure monitors?",
+  "windshield wipers?",
+  "yoga mats?",
+  "strollers?",
+  "diapers?"
+ ],
+ "nodes": [
+  {
+   "path": "Beauty & Personal Care > Foot, Hand & Nail Care > Nail Art & Polish > Nail Polish",
+   "label": "Nail Polish",
+   "group": null,
+   "role": "primary",
+   "audience": null,
+   "terms": [
+    "nail polish(?:es)?",
+    "nail lacquers?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Beauty & Personal Care > Fragrance > Men's > Eau de Toilette",
+   "label": "Men's Eau de Toilette",
+   "group": "Fragrances",
+   "role": "primary",
+   "audience": "men",
+   "terms": [
+    "men'?s (?:cologne|eau de toilette|fragrances?)",
+    "colognes?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Beauty & Personal Care > Fragrance > Women's > Eau de Parfum",
+   "label": "Women's Eau de Parfum",
+   "group": "Fragrances",
+   "role": "primary",
+   "audience": "women",
+   "terms": [
+    "women'?s (?:perfumes?|eau de parfum|fragrances?)",
+    "perfumes?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Beauty & Personal Care > Hair Care > Hair Accessories > Elastics & Ties",
+   "label": "Hair Ties",
+   "group": null,
+   "role": "primary",
+   "audience": null,
+   "terms": [
+    "hair (?:ties?|elastics?)",
+    "scrunchies?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Beauty & Personal Care > Hair Care > Hair Extensions, Wigs & Accessories > Hair Extensions",
+   "label": "Hair Extensions",
+   "group": null,
+   "role": "primary",
+   "audience": null,
+   "terms": [
+    "hair extensions?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Beauty & Personal Care > Hair Care > Hair Extensions, Wigs & Accessories > Wigs",
+   "label": "Wigs",
+   "group": null,
+   "role": "primary",
+   "audience": null,
+   "terms": [
+    "wigs?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Beauty & Personal Care > Hair Care > Shampoo & Conditioner > Conditioners",
+   "label": "Conditioners",
+   "group": null,
+   "role": "primary",
+   "audience": null,
+   "terms": [
+    "(?:hair )?conditioners?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Beauty & Personal Care > Hair Care > Shampoo & Conditioner > Shampoos",
+   "label": "Shampoos",
+   "group": null,
+   "role": "primary",
+   "audience": null,
+   "terms": [
+    "shampoos?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Beauty & Personal Care > Hair Care > Styling Products > Gels",
+   "label": "Hair Gels",
+   "group": null,
+   "role": "primary",
+   "audience": null,
+   "terms": [
+    "hair gels?",
+    "styling gels?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Beauty & Personal Care > Hair Care > Styling Tools & Appliances > Hair Brushes",
+   "label": "Hair Brushes",
+   "group": null,
+   "role": "primary",
+   "audience": null,
+   "terms": [
+    "hair ?brush(?:es)?",
+    "detangling brush(?:es)?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Beauty & Personal Care > Makeup > Eyes > Mascara",
+   "label": "Mascara",
+   "group": null,
+   "role": "primary",
+   "audience": null,
+   "terms": [
+    "mascaras?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Beauty & Personal Care > Makeup > Lips > Lipstick",
+   "label": "Lipstick",
+   "group": null,
+   "role": "primary",
+   "audience": null,
+   "terms": [
+    "lipsticks?",
+    "lip colors?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Beauty & Personal Care > Skin Care > Body > Cleansers > Body Washes",
+   "label": "Body Washes",
+   "group": null,
+   "role": "primary",
+   "audience": null,
+   "terms": [
+    "body wash(?:es)?",
+    "shower gels?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Beauty & Personal Care > Skin Care > Body > Cleansers > Soaps",
+   "label": "Bar Soaps",
+   "group": null,
+   "role": "primary",
+   "audience": null,
+   "terms": [
+    "(?:bar )?soaps?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Beauty & Personal Care > Skin Care > Body > Moisturizers > Lotions",
+   "label": "Body Lotions",
+   "group": null,
+   "role": "primary",
+   "audience": null,
+   "terms": [
+    "body lotions?",
+    "lotions?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Beauty & Personal Care > Skin Care > Face > Cleansers > Washes",
+   "label": "Face Washes",
+   "group": null,
+   "role": "primary",
+   "audience": null,
+   "terms": [
+    "face wash(?:es)?",
+    "facial cleansers?",
+    "face cleansers?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Beauty & Personal Care > Skin Care > Face > Creams & Moisturizers > Face Moisturizers",
+   "label": "Face Moisturizers",
+   "group": null,
+   "role": "primary",
+   "audience": null,
+   "terms": [
+    "face moisturizers?",
+    "facial moisturizers?",
+    "face creams?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Beauty & Personal Care > Skin Care > Face > Treatments & Masks > Serums",
+   "label": "Serums",
+   "group": null,
+   "role": "primary",
+   "audience": null,
+   "terms": [
+    "(?:face |facial )?serums?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Beauty & Personal Care > Skin Care > Sunscreens & Tanning Products > Sunscreens > Body Sunscreens",
+   "label": "Body Sunscreens",
+   "group": "Sunscreens",
+   "role": "primary",
+   "audience": null,
+   "terms": [
+    "body sunscreens?",
+    "sunscreens? for (?:the |my )?body"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Beauty & Personal Care > Skin Care > Sunscreens & Tanning Products > Sunscreens > Facial Sunscreens",
+   "label": "Facial Sunscreens",
+   "group": "Sunscreens",
+   "role": "primary",
+   "audience": null,
+   "terms": [
+    "fac(?:e|ial) sunscreens?",
+    "sunscreens? for (?:the |my )?face"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Beauty & Personal Care > Tools & Accessories > Makeup Brushes & Tools > Eye > False Eyelashes & Adhesives > False Lashes",
+   "label": "False Lashes",
+   "group": null,
+   "role": "primary",
+   "audience": null,
+   "terms": [
+    "false (?:eye)?lash(?:es)?",
+    "fake (?:eye)?lash(?:es)?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Cell Phones & Accessories > Accessories > Automobile Accessories > Cradles",
+   "label": "Phone Car Mounts",
+   "group": null,
+   "role": "accessory",
+   "audience": null,
+   "terms": [
+    "(?:phone )?car mounts?",
+    "phone (?:cradles?|holders?)"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Cell Phones & Accessories > Accessories > Chargers & Power Adapters > Wall Chargers",
+   "label": "Wall Chargers",
+   "group": null,
+   "role": "accessory",
+   "audience": null,
+   "terms": [
+    "wall chargers?",
+    "(?:phone |usb )?chargers?",
+    "power adapters?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Cell Phones & Accessories > Accessories > Maintenance, Upkeep & Repairs > Screen Protectors",
+   "label": "Phone Screen Protectors",
+   "group": "Screen Protectors",
+   "role": "accessory",
+   "audience": null,
+   "terms": [
+    "phone screen protectors?",
+    "iphone screen protectors?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Cell Phones & Accessories > Accessories > Smartwatch Accessories > Smartwatch Bands",
+   "label": "Smartwatch Bands",
+   "group": null,
+   "role": "accessory",
+   "audience": null,
+   "terms": [
+    "smart ?watch bands?",
+    "watch ?bands?",
+    "watch straps?",
+    "apple watch bands?"
+   ],
+   "accessory_for": [
+    "Smartwatches"
+   ]
+  },
+  {
+   "path": "Cell Phones & Accessories > Cases, Holsters & Sleeves > Basic Cases",
+   "label": "Phone Basic Cases",
+   "group": "Phone Cases",
+   "role": "accessory",
+   "audience": null,
+   "terms": [
+    "basic phone cases?",
+    "slim phone cases?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Cell Phones & Accessories > Cases, Holsters & Sleeves > Flip Cases",
+   "label": "Phone Flip Cases",
+   "group": "Phone Cases",
+   "role": "accessory",
+   "audience": null,
+   "terms": [
+    "flip (?:phone )?cases?",
+    "wallet (?:phone )?cases?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Clothing, Shoes & Jewelry > Men > Accessories > Wallets, Card Cases & Money Organizers > Wallets",
+   "label": "Men's Wallets",
+   "group": null,
+   "role": "primary",
+   "audience": "men",
+   "terms": [
+    "wallets?",
+    "card holders?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Clothing, Shoes & Jewelry > Men > Clothing > Active > Athletic Socks",
+   "label": "Men's Athletic Socks",
+   "group": null,
+   "role": "primary",
+   "audience": "men",
+   "terms": [
+    "(?:athletic |running |sports? )?socks?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Clothing, Shoes & Jewelry > Men > Clothing > Jeans",
+   "label": "Men's Jeans",
+   "group": null,
+   "role": "primary",
+   "audience": "men",
+   "terms": [
+    "jeans",
+    "denim pants"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Clothing, Shoes & Jewelry > Men > Clothing > Shirts > Casual Button-Down Shirts",
+   "label": "Men's Button-Down Shirts",
+   "group": null,
+   "role": "primary",
+   "audience": "men",
+   "terms": [
+    "button[- ](?:down|up) shirts?",
+    "dress shirts?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Clothing, Shoes & Jewelry > Men > Clothing > Shirts > T-Shirts",
+   "label": "Men's T-Shirts",
+   "group": "T-Shirts",
+   "role": "primary",
+   "audience": "men",
+   "terms": [
+    "men'?s t-?shirts?",
+    "men'?s tees?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Clothing, Shoes & Jewelry > Men > Shoes > Athletic > Running > Road Running",
+   "label": "Men's Road Running Shoes",
+   "group": null,
+   "role": "primary",
+   "audience": "men",
+   "terms": [
+    "(?:road )?running shoes?",
+    "jogging shoes?",
+    "running sneakers?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Clothing, Shoes & Jewelry > Men > Watches > Wrist Watches",
+   "label": "Men's Wrist Watches",
+   "group": null,
+   "role": "primary",
+   "audience": "men",
+   "terms": [
+    "wrist ?watch(?:es)?",
+    "men'?s watch(?:es)?",
+    "analog watch(?:es)?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Clothing, Shoes & Jewelry > Novelty & More > Clothing > Novelty > Men > Shirts > T-Shirts",
+   "label": "Novelty Men's T-Shirts",
+   "group": "T-Shirts",
+   "role": "primary",
+   "audience": "men",
+   "terms": [
+    "novelty t-?shirts?",
+    "graphic t-?shirts?",
+    "funny t-?shirts?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Clothing, Shoes & Jewelry > Women > Accessories > Sunglasses & Eyewear Accessories > Sunglasses",
+   "label": "Women's Sunglasses",
+   "group": null,
+   "role": "primary",
+   "audience": "women",
+   "terms": [
+    "sunglasses",
+    "shades"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Clothing, Shoes & Jewelry > Women > Clothing > Active > Active Shorts",
+   "label": "Women's Active Shorts",
+   "group": null,
+   "role": "primary",
+   "audience": "women",
+   "terms": [
+    "(?:active|athletic|running|workout|gym) shorts",
+    "shorts"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Clothing, Shoes & Jewelry > Women > Clothing > Dresses",
+   "label": "Women's Dresses",
+   "group": "Dresses",
+   "role": "primary",
+   "audience": "women",
+   "terms": [
+    "women'?s dress(?:es)?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Clothing, Shoes & Jewelry > Women > Clothing > Dresses > Casual",
+   "label": "Women's Casual Dresses",
+   "group": "Dresses",
+   "role": "primary",
+   "audience": "women",
+   "terms": [
+    "casual dress(?:es)?",
+    "sundress(?:es)?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Clothing, Shoes & Jewelry > Women > Clothing > Fashion Hoodies & Sweatshirts",
+   "label": "Women's Hoodies",
+   "group": null,
+   "role": "primary",
+   "audience": "women",
+   "terms": [
+    "hood(?:ie|y)s?",
+    "sweatshirts?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Clothing, Shoes & Jewelry > Women > Clothing > Lingerie, Sleep & Lounge > Lingerie > Bras > Everyday Bras",
+   "label": "Women's Everyday Bras",
+   "group": null,
+   "role": "primary",
+   "audience": "women",
+   "terms": [
+    "(?:everyday )?bras?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Clothing, Shoes & Jewelry > Women > Clothing > Tops, Tees & Blouses > Blouses & Button-Down Shirts",
+   "label": "Women's Blouses",
+   "group": null,
+   "role": "primary",
+   "audience": "women",
+   "terms": [
+    "blouses?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Clothing, Shoes & Jewelry > Women > Clothing > Tops, Tees & Blouses > T-Shirts",
+   "label": "Women's T-Shirts",
+   "group": "T-Shirts",
+   "role": "primary",
+   "audience": "women",
+   "terms": [
+    "women'?s t-?shirts?",
+    "women'?s tees?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Clothing, Shoes & Jewelry > Women > Clothing > Tops, Tees & Blouses > Tanks & Camis",
+   "label": "Women's Tanks & Camis",
+   "group": null,
+   "role": "primary",
+   "audience": "women",
+   "terms": [
+    "tank tops?",
+    "tanks?",
+    "camis?",
+    "camisoles?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Clothing, Shoes & Jewelry > Women > Clothing > Tops, Tees & Blouses > Tunics",
+   "label": "Women's Tunics",
+   "group": null,
+   "role": "primary",
+   "audience": "women",
+   "terms": [
+    "tunics?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Clothing, Shoes & Jewelry > Women > Jewelry > Necklaces > Pendant Necklaces",
+   "label": "Women's Pendant Necklaces",
+   "group": null,
+   "role": "primary",
+   "audience": "women",
+   "terms": [
+    "(?:pendant )?necklaces?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Clothing, Shoes & Jewelry > Women > Shoes > Fashion Sneakers",
+   "label": "Women's Fashion Sneakers",
+   "group": null,
+   "role": "primary",
+   "audience": "women",
+   "terms": [
+    "(?:fashion )?sneakers?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Clothing, Shoes & Jewelry > Women > Shoes > Slippers",
+   "label": "Women's Slippers",
+   "group": null,
+   "role": "primary",
+   "audience": "women",
+   "terms": [
+    "slippers?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Electronics > Accessories & Supplies > Power Strips & Surge Protectors > Power Strips",
+   "label": "Power Strips",
+   "group": null,
+   "role": "primary",
+   "audience": null,
+   "terms": [
+    "power strips?",
+    "surge protectors?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Electronics > Computers & Accessories > Computer Accessories & Peripherals > Cables & Accessories > Cables & Interconnects > Lightning Cables",
+   "label": "Lightning Cables",
+   "group": "Cables",
+   "role": "accessory",
+   "audience": null,
+   "terms": [
+    "lightning cables?",
+    "iphone (?:charging )?cables?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Electronics > Computers & Accessories > Computer Accessories & Peripherals > Cables & Accessories > Cables & Interconnects > USB Cables",
+   "label": "USB Cables",
+   "group": "Cables",
+   "role": "accessory",
+   "audience": null,
+   "terms": [
+    "usb(?:-c| c)? cables?",
+    "type[- ]c cables?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Electronics > Computers & Accessories > Computer Accessories & Peripherals > Keyboards, Mice & Accessories > Mice",
+   "label": "Computer Mice",
+   "group": null,
+   "role": "primary",
+   "audience": null,
+   "terms": [
+    "(?:computer |wireless |gaming )?mouse",
+    "(?:computer )?mice"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Electronics > Computers & Accessories > Computer Accessories & Peripherals > Memory Cards > Micro SD Cards",
+   "label": "Micro SD Cards",
+   "group": null,
+   "role": "primary",
+   "audience": null,
+   "terms": [
+    "micro ?sd(?: cards?)?",
+    "memory cards?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Electronics > Computers & Accessories > Data Storage > USB Flash Drives",
+   "label": "USB Flash Drives",
+   "group": null,
+   "role": "primary",
+   "audience": null,
+   "terms": [
+    "(?:usb )?flash drives?",
+    "thumb drives?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Electronics > Computers & Accessories > Laptop Accessories > Stands",
+   "label": "Laptop Stands",
+   "group": null,
+   "role": "accessory",
+   "audience": null,
+   "terms": [
+    "laptop stands?",
+    "notebook stands?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Electronics > Computers & Accessories > Tablet Accessories > Bags, Cases & Sleeves > Cases",
+   "label": "Tablet Cases",
+   "group": null,
+   "role": "accessory",
+   "audience": null,
+   "terms": [
+    "tablet cases?",
+    "ipad cases?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Electronics > Computers & Accessories > Tablet Accessories > Screen Protectors",
+   "label": "Tablet Screen Protectors",
+   "group": "Screen Protectors",
+   "role": "accessory",
+   "audience": null,
+   "terms": [
+    "tablet screen protectors?",
+    "ipad screen protectors?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Electronics > Headphones, Earbuds & Accessories > Cases",
+   "label": "Earbud Cases",
+   "group": null,
+   "role": "accessory",
+   "audience": null,
+   "terms": [
+    "earbuds? cases?",
+    "headphones? cases?",
+    "airpods? cases?"
+   ],
+   "accessory_for": [
+    "Earbud Headphones",
+    "Over-Ear Headphones"
+   ]
+  },
+  {
+   "path": "Electronics > Headphones, Earbuds & Accessories > Headphones & Earbuds > Earbud Headphones",
+   "label": "Earbud Headphones",
+   "group": "Headphones",
+   "role": "primary",
+   "audience": null,
+   "terms": [
+    "earbuds?",
+    "earphones?",
+    "in[- ]ear headphones?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Electronics > Headphones, Earbuds & Accessories > Headphones & Earbuds > Over-Ear Headphones",
+   "label": "Over-Ear Headphones",
+   "group": "Headphones",
+   "role": "primary",
+   "audience": null,
+   "terms": [
+    "over[- ]ear headphones?",
+    "around[- ]ear headphones?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Electronics > Portable Audio & Video > Portable Speakers & Docks > Portable Bluetooth Speakers",
+   "label": "Bluetooth Speakers",
+   "group": null,
+   "role": "primary",
+   "audience": null,
+   "terms": [
+    "(?:portable |bluetooth )+speakers?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Electronics > Television & Video > Accessories > Cables > HDMI Cables",
+   "label": "HDMI Cables",
+   "group": "Cables",
+   "role": "accessory",
+   "audience": null,
+   "terms": [
+    "hdmi cables?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Electronics > Television & Video > Accessories > Remote Controls",
+   "label": "Remote Controls",
+   "group": null,
+   "role": "accessory",
+   "audience": null,
+   "terms": [
+    "(?:tv )?remote controls?",
+    "tv remotes?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Electronics > Wearable Technology > Smartwatches",
+   "label": "Smartwatches",
+   "group": null,
+   "role": "primary",
+   "audience": null,
+   "terms": [
+    "smart ?watch(?:es)?",
+    "fitness watch(?:es)?",
+    "sports watch(?:es)?",
+    "apple watch(?:es)?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Home & Kitchen > Bedding > Bed Pillows & Positioners > Bed Pillows",
+   "label": "Bed Pillows",
+   "group": null,
+   "role": "primary",
+   "audience": null,
+   "terms": [
+    "bed pillows?",
+    "sleeping pillows?",
+    "pillows?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Home & Kitchen > Bedding > Blankets & Throws > Throws",
+   "label": "Throw Blankets",
+   "group": null,
+   "role": "primary",
+   "audience": null,
+   "terms": [
+    "throw blankets?",
+    "throws?",
+    "blankets?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Home & Kitchen > Bedding > Decorative Pillows, Inserts & Covers > Throw Pillow Covers",
+   "label": "Throw Pillow Covers",
+   "group": null,
+   "role": "primary",
+   "audience": null,
+   "terms": [
+    "(?:throw )?pillow covers?",
+    "cushion covers?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Home & Kitchen > Bedding > Sheets & Pillowcases > Pillowcases",
+   "label": "Pillowcases",
+   "group": null,
+   "role": "primary",
+   "audience": null,
+   "terms": [
+    "pillow ?cases?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Home & Kitchen > Bedding > Sheets & Pillowcases > Sheet & Pillowcase Sets",
+   "label": "Bedding Sets",
+   "group": null,
+   "role": "primary",
+   "audience": null,
+   "terms": [
+    "bedding sets?",
+    "sheet sets?",
+    "bed sheets?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Home & Kitchen > Event & Party Supplies > Decorations > Balloons",
+   "label": "Balloons",
+   "group": null,
+   "role": "primary",
+   "audience": null,
+   "terms": [
+    "balloons?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Home & Kitchen > Furniture > Bedroom Furniture > Mattresses & Box Springs > Mattresses",
+   "label": "Mattresses",
+   "group": null,
+   "role": "primary",
+   "audience": null,
+   "terms": [
+    "mattress(?:es)?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Home & Kitchen > Home Décor Products > Artificial Plants & Flowers > Artificial Flowers",
+   "label": "Artificial Flowers",
+   "group": null,
+   "role": "primary",
+   "audience": null,
+   "terms": [
+    "artificial flowers?",
+    "fake flowers?",
+    "silk flowers?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Home & Kitchen > Home Décor Products > Home Décor Accents > Collectible Figurines",
+   "label": "Collectible Figurines",
+   "group": null,
+   "role": "primary",
+   "audience": null,
+   "terms": [
+    "figurines?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Home & Kitchen > Home Décor Products > Home Décor Accents > Hanging Ornaments",
+   "label": "Hanging Ornaments",
+   "group": null,
+   "role": "primary",
+   "audience": null,
+   "terms": [
+    "hanging ornaments?",
+    "ornaments?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Home & Kitchen > Home Décor Products > Photo Albums, Frames & Accessories > Picture Frames > Wall & Tabletop Frames",
+   "label": "Picture Frames",
+   "group": null,
+   "role": "primary",
+   "audience": null,
+   "terms": [
+    "picture frames?",
+    "photo frames?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Home & Kitchen > Home Décor Products > Rugs, Pads & Protectors > Area Rugs",
+   "label": "Area Rugs",
+   "group": null,
+   "role": "primary",
+   "audience": null,
+   "terms": [
+    "area rugs?",
+    "rugs?",
+    "carpets?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Home & Kitchen > Home Décor Products > Window Treatments > Curtains & Drapes > Panels",
+   "label": "Curtain Panels",
+   "group": null,
+   "role": "primary",
+   "audience": null,
+   "terms": [
+    "curtains?",
+    "drapes?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Home & Kitchen > Kitchen & Dining > Coffee, Tea & Espresso > Coffee Makers > Coffee Machines",
+   "label": "Coffee Machines",
+   "group": null,
+   "role": "primary",
+   "audience": null,
+   "terms": [
+    "coffee (?:machines?|makers?)",
+    "coffeemakers?",
+    "espresso machines?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Home & Kitchen > Kitchen & Dining > Cookware > Pots & Pans > Skillets",
+   "label": "Skillets",
+   "group": null,
+   "role": "primary",
+   "audience": null,
+   "terms": [
+    "skillets?",
+    "frying pans?",
+    "non[- ]?stick pans?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Home & Kitchen > Kitchen & Dining > Dining & Entertaining > Glassware & Drinkware > Tumblers & Water Glasses",
+   "label": "Tumblers & Water Glasses",
+   "group": null,
+   "role": "primary",
+   "audience": null,
+   "terms": [
+    "tumblers?",
+    "water glass(?:es)?",
+    "drinking glass(?:es)?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Home & Kitchen > Kitchen & Dining > Dining & Entertaining > Novelty > Drinkware > Coffee Mugs",
+   "label": "Coffee Mugs",
+   "group": null,
+   "role": "primary",
+   "audience": null,
+   "terms": [
+    "(?:coffee )?mugs?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Home & Kitchen > Kitchen & Dining > Kitchen & Table Linens > Tablecloths",
+   "label": "Tablecloths",
+   "group": null,
+   "role": "primary",
+   "audience": null,
+   "terms": [
+    "table ?cloths?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Home & Kitchen > Kitchen & Dining > Storage & Organization > Food Storage > Food Containers > Container Sets",
+   "label": "Food Container Sets",
+   "group": null,
+   "role": "primary",
+   "audience": null,
+   "terms": [
+    "food (?:storage )?containers?",
+    "container sets?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Home & Kitchen > Seasonal Décor > Seasonal Lighting > Indoor String Lights",
+   "label": "Indoor String Lights",
+   "group": null,
+   "role": "primary",
+   "audience": null,
+   "terms": [
+    "string lights?",
+    "fairy lights?"
+   ],
+   "accessory_for": []
+  },
+  {
+   "path": "Home & Kitchen > Wall Art > Posters & Prints",
+   "label": "Posters & Prints",
+   "group": null,
+   "role": "primary",
+   "audience": null,
+   "terms": [
+    "posters?",
+    "wall art",
+    "art prints?"
+   ],
+   "accessory_for": []
+  }
+ ]
+}

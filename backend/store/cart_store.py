@@ -21,12 +21,13 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
+from i18n import t
 from store.order_store import insert_order
 from store.product_store import DEFAULT_DB_PATH, load_json_text
 
 
 DEMO_USER_ID = "demo_user"
-DEFAULT_ADDRESS = "默认地址（北京市朝阳区示例路 1 号 · 收货人：Demo User · 138****0000）"
+DEFAULT_ADDRESS = t("cart.default_address")
 
 
 @dataclass(frozen=True)
@@ -79,6 +80,10 @@ class OrderSummary:
             "item_count": sum(line.quantity for line in self.lines),
             "total": self.total,
         }
+
+
+class CartStockError(Exception):
+    """The requested SKU cannot supply the requested quantity."""
 
 
 class CartNotFoundError(Exception):
@@ -156,7 +161,8 @@ class CartStore:
         with self._connect() as conn:
             sku = self._resolve_sku(conn, product_id, sku_id)
             if sku is None:
-                raise CartNotFoundError(f"商品 {product_id} 没有可购买的 SKU")
+                raise CartNotFoundError(t("cart.error.no_sku", product_id=product_id))
+            self._require_stock(conn, user_id, sku, quantity)
             conn.execute(
                 """
                 INSERT INTO cart_items
@@ -191,12 +197,58 @@ class CartStore:
             self.remove_item(cart_item_id, user_id)
             return None
         with self._connect() as conn:
+            stock = conn.execute(
+                """
+                SELECT s.stock_qty FROM cart_items c JOIN product_skus s ON s.sku_id = c.sku_id
+                WHERE c.cart_item_id = ? AND c.user_id = ?
+                """,
+                (cart_item_id, user_id),
+            ).fetchone()
+            if stock is not None and quantity > int(stock["stock_qty"]):
+                raise CartStockError(t("cart.error.sold_out", stock=int(stock["stock_qty"])))
             cur = conn.execute(
                 "UPDATE cart_items SET quantity = ? WHERE cart_item_id = ? AND user_id = ?",
                 (quantity, cart_item_id, user_id),
             )
             if cur.rowcount == 0:
-                raise CartNotFoundError(f"购物车行 {cart_item_id} 不存在")
+                raise CartNotFoundError(t("cart.error.no_line", cart_item_id=cart_item_id))
+            conn.commit()
+            row = conn.execute(
+                """
+                SELECT c.cart_item_id, c.product_id, c.sku_id, c.selected_options_json,
+                       c.quantity, c.unit_price, c.selected, p.title
+                FROM cart_items c JOIN products p ON p.product_id = c.product_id
+                WHERE c.cart_item_id = ?
+                """,
+                (cart_item_id,),
+            ).fetchone()
+        return self._line_from_row(row)
+
+    def change_sku(self, cart_item_id: int, sku_id: str, user_id: str = DEMO_USER_ID) -> CartLine:
+        """Move a line to another SKU of the same product, merging if that SKU is already there."""
+        with self._connect() as conn:
+            line = conn.execute(
+                "SELECT product_id, quantity FROM cart_items WHERE cart_item_id = ? AND user_id = ?",
+                (cart_item_id, user_id),
+            ).fetchone()
+            if line is None:
+                raise CartNotFoundError(t("cart.error.no_line", cart_item_id=cart_item_id))
+            sku = self._resolve_sku(conn, line["product_id"], sku_id)
+            if sku is None:
+                raise CartNotFoundError(t("cart.error.no_sku", product_id=line["product_id"]))
+            existing = conn.execute(
+                "SELECT cart_item_id, quantity FROM cart_items WHERE user_id = ? AND sku_id = ? AND cart_item_id != ?",
+                (user_id, sku["sku_id"], cart_item_id),
+            ).fetchone()
+            quantity = int(line["quantity"]) + (int(existing["quantity"]) if existing else 0)
+            if quantity > int(sku["stock_qty"]):
+                raise CartStockError(t("cart.error.sold_out", stock=int(sku["stock_qty"])))
+            if existing:
+                conn.execute("DELETE FROM cart_items WHERE cart_item_id = ?", (existing["cart_item_id"],))
+            conn.execute(
+                "UPDATE cart_items SET sku_id = ?, selected_options_json = ?, unit_price = ?, quantity = ? WHERE cart_item_id = ?",
+                (sku["sku_id"], sku["properties_json"], float(sku["price"]), quantity, cart_item_id),
+            )
             conn.commit()
             row = conn.execute(
                 """
@@ -247,7 +299,7 @@ class CartStore:
         else:
             lines = [line for line in lines if line.selected]
         if not lines:
-            raise CartNotFoundError("购物车里没有可下单的商品")
+            raise CartNotFoundError(t("cart.error.nothing_to_order"))
         with self._connect() as conn:
             lines = [self._reprice(conn, line) for line in lines]
             total = round(sum(line.subtotal for line in lines), 2)
@@ -274,28 +326,40 @@ class CartStore:
 
     def _reprice(self, conn: sqlite3.Connection, line: CartLine) -> CartLine:
         row = conn.execute(
-            "SELECT price FROM product_skus WHERE sku_id = ? AND status = 'active'",
+            "SELECT price, stock_qty FROM product_skus WHERE sku_id = ? AND status = 'active'",
             (line.sku_id,),
         ).fetchone()
         if row is None:
-            raise CartNotFoundError(f"「{line.title}」这个规格已下架，请先从购物车移除")
+            raise CartNotFoundError(t("cart.error.delisted", title=line.title))
+        if int(row["stock_qty"]) < line.quantity:
+            raise CartStockError(t("cart.error.short_stock", title=line.title, stock=int(row["stock_qty"])))
         return replace(line, unit_price=float(row["price"]))
 
     # ------------------------------ Internal ------------------------------
+
+    @staticmethod
+    def _require_stock(conn: sqlite3.Connection, user_id: str, sku: sqlite3.Row, quantity: int) -> None:
+        """Reject an add that the SKU cannot supply, counting what is already in the cart."""
+        row = conn.execute(
+            "SELECT quantity FROM cart_items WHERE user_id = ? AND sku_id = ?", (user_id, sku["sku_id"])
+        ).fetchone()
+        in_cart = int(row["quantity"]) if row is not None else 0
+        if in_cart + quantity > int(sku["stock_qty"]):
+            raise CartStockError(t("cart.error.sold_out", stock=int(sku["stock_qty"])))
 
     def _resolve_sku(
         self, conn: sqlite3.Connection, product_id: str, sku_id: str | None
     ) -> sqlite3.Row | None:
         if sku_id:
             return conn.execute(
-                "SELECT sku_id, properties_json, price FROM product_skus "
+                "SELECT sku_id, properties_json, price, stock_qty FROM product_skus "
                 "WHERE sku_id = ? AND product_id = ? AND status = 'active'",
                 (sku_id, product_id),
             ).fetchone()
         # Default to the cheapest active SKU.
         return conn.execute(
-            "SELECT sku_id, properties_json, price FROM product_skus "
-            "WHERE product_id = ? AND status = 'active' ORDER BY price ASC, sku_id ASC LIMIT 1",
+            "SELECT sku_id, properties_json, price, stock_qty FROM product_skus "
+            "WHERE product_id = ? AND status = 'active' ORDER BY stock_qty > 0 DESC, price ASC, sku_id ASC LIMIT 1",
             (product_id,),
         ).fetchone()
 
