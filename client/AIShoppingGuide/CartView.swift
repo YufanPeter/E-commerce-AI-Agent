@@ -2,6 +2,7 @@ import SwiftUI
 
 struct CartView: View {
     @Binding var items: [CartItem]
+    var onStartShopping: () -> Void = {}
     @State private var editingSpecificationItem: CartSpecificationEditContext?
     @State private var draftSpecificationOptions: [String: String] = [:]
     @State private var specificationEditorDetent: PresentationDetent = .large
@@ -49,14 +50,19 @@ struct CartView: View {
     }
 
     private var bottomOverlayHeight: CGFloat {
-        AppTheme.cartCheckoutBottomPadding + 126
+        AppTheme.cartCheckoutBottomPadding + 72
+    }
+
+    /// 货币符号跟商品价格走（亚马逊数据是 $）
+    private var currencySymbol: String {
+        guard let item = items.first else { return "$" }
+        let display = item.product.priceDisplay(for: item.selectedOptions)
+        let symbol = display.prefix { !$0.isNumber }
+        return symbol.isEmpty ? "$" : String(symbol)
     }
 
     private func formattedPrice(_ value: Double) -> String {
-        if value.rounded(.towardZero) == value {
-            return "¥\(Int(value))"
-        }
-        return "¥\(String(format: "%.2f", value))"
+        "\(currencySymbol)\(String(format: "%.2f", value))"
     }
 
     var body: some View {
@@ -64,20 +70,10 @@ struct CartView: View {
             ZStack(alignment: .bottom) {
                 VStack(spacing: 0) {
                     if items.isEmpty {
-                        ContentUnavailableView("Your cart is empty", systemImage: "cart", description: Text("Items you add from recommendations will appear here."))
-                            .foregroundStyle(AppTheme.textSecondary)
-                            .padding(.horizontal, 28)
-                            .padding(.bottom, 90)
+                        emptyCart
                     } else {
                         ScrollView(showsIndicators: false) {
-                            VStack(alignment: .leading, spacing: 14) {
-                                cartOverviewCard
-
-                                Text("Cart items")
-                                    .font(.subheadline.weight(.semibold))
-                                    .foregroundStyle(AppTheme.textPrimary)
-                                    .padding(.horizontal, 2)
-
+                            LazyVStack(alignment: .leading, spacing: 0) {
                                 ForEach($items) { $item in
                                     CartRow(
                                         item: $item,
@@ -98,9 +94,14 @@ struct CartView: View {
                                             removeItem(id: item.id)
                                         }
                                     )
+                                    .padding(.vertical, 14)
+                                    if item.id != items.last?.id {
+                                        Divider().overlay(AppTheme.border)
+                                            .padding(.leading, 40)
+                                    }
                                 }
                             }
-                            .padding(18)
+                            .padding(.horizontal, 16)
                             .padding(.bottom, bottomOverlayHeight + 24)
                         }
                     }
@@ -122,6 +123,8 @@ struct CartView: View {
             }
             .background(AppTheme.background)
             .navigationTitle(itemCount > 0 ? "Cart (\(itemCount))" : "Cart")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(AppTheme.background, for: .navigationBar)
             .navigationDestination(item: $selectedProduct) { product in
                 ProductDetailView(product: product) { product, selectedOptions, quantity in
                     addToCart(product, selectedOptions: selectedOptions, quantity: quantity)
@@ -165,39 +168,43 @@ struct CartView: View {
         ) {
             Button("OK", role: .cancel) {}
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 12)
-        .padding(.bottom, 12)
-        .surfacePanel(cornerRadius: 24)
         .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(AppTheme.surface)
+        .overlay(alignment: .top) {
+            Rectangle().fill(AppTheme.border).frame(height: 0.5)
+        }
         .padding(.bottom, AppTheme.cartCheckoutBottomPadding)
     }
 
-    private var cartOverviewCard: some View {
-        HStack(spacing: 12) {
-            cartOverviewMetric(title: "Products", value: "\(currentItemIDs.count) products")
-            Divider().frame(height: 34)
-            cartOverviewMetric(title: "Quantity", value: "\(itemCount) items")
-            Divider().frame(height: 34)
-            cartOverviewMetric(title: "Total", value: selectedItemCount > 0 ? selectedTotalText : "Nothing selected")
-        }
-        .padding(14)
-        .frame(maxWidth: .infinity)
-        .surfacePanel(cornerRadius: 22)
-    }
-
-    private func cartOverviewMetric(title: String, value: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.caption.weight(.medium))
-                .foregroundStyle(AppTheme.textSecondary)
-            Text(value)
-                .font(.subheadline.weight(.bold))
+    private var emptyCart: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "cart")
+                .font(.system(size: 34, weight: .light))
+                .foregroundStyle(AppTheme.textTertiary)
+                .frame(width: 84, height: 84)
+                .background(AppTheme.secondary, in: Circle())
+            Text("Your cart is empty")
+                .font(.headline)
                 .foregroundStyle(AppTheme.textPrimary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.78)
+            Text("Items you add from recommendations show up here.")
+                .font(.subheadline)
+                .foregroundStyle(AppTheme.textSecondary)
+                .multilineTextAlignment(.center)
+            Button(action: onStartShopping) {
+                Text("Start shopping")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(AppTheme.background)
+                    .padding(.horizontal, 28)
+                    .padding(.vertical, 12)
+                    .background(AppTheme.primary, in: Capsule())
+            }
+            .buttonStyle(.tactile)
+            .padding(.top, 6)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.bottom, AppTheme.cartCheckoutBottomPadding + 40)
     }
 
     private func openSpecificationEditor(for item: CartItem) {
@@ -444,18 +451,24 @@ struct CartRow: View {
                 accessibilityLabel: isSelected ? "Deselect \(item.product.title)" : "Select \(item.product.title)",
                 action: onToggleSelection
             )
-            .padding(.top, 22)
+            .padding(.top, 30)
 
-            ProductRemoteImage(url: item.product.imageURL, cornerRadius: 16, placeholderIcon: "shippingbox")
-                .frame(width: 78, height: 78)
-                .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            ProductRemoteImage(url: item.product.imageURL, cornerRadius: 8, placeholderIcon: "shippingbox", contentMode: .fit)
+                .padding(6)
+                .frame(width: 88, height: 88)
+                .background(Color.white, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(AppTheme.border, lineWidth: 0.5)
+                )
+                .contentShape(Rectangle())
                 .onTapGesture(perform: onShowDetail)
                 .accessibilityAddTraits(.isButton)
 
             VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .top, spacing: 10) {
+                HStack(alignment: .top, spacing: 6) {
                     Text(item.product.title)
-                        .font(.headline)
+                        .font(.subheadline)
                         .foregroundStyle(AppTheme.textPrimary)
                         .lineLimit(2)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -464,22 +477,14 @@ struct CartRow: View {
                         .accessibilityAddTraits(.isButton)
 
                     Button(action: onRemove) {
-                        Image(systemName: "trash")
-                            .foregroundStyle(AppTheme.textSecondary)
-                            .frame(width: 32, height: 32)
+                        Image(systemName: "xmark")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(AppTheme.textTertiary)
+                            .frame(width: 28, height: 28)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                }
-
-                if !item.product.reason.isEmpty {
-                    Text(item.product.reason)
-                        .font(.caption)
-                        .foregroundStyle(AppTheme.textSecondary)
-                        .lineLimit(2)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
-                        .onTapGesture(perform: onShowDetail)
-                        .accessibilityAddTraits(.isButton)
+                    .accessibilityLabel("Remove \(item.product.title)")
                 }
 
                 if !item.specificationSummary.isEmpty {
@@ -487,12 +492,14 @@ struct CartRow: View {
                         HStack(spacing: 4) {
                             Text(item.specificationSummary)
                                 .lineLimit(1)
-
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 10, weight: .semibold))
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 9, weight: .semibold))
                         }
-                        .font(.caption2.weight(.medium))
+                        .font(.caption)
                         .foregroundStyle(AppTheme.textSecondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(AppTheme.secondary, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Change options. Current: \(item.specificationSummary)")
@@ -500,8 +507,8 @@ struct CartRow: View {
 
                 HStack(alignment: .center, spacing: 10) {
                     Text(item.product.priceDisplay(for: item.selectedOptions))
-                        .font(.headline)
-                        .foregroundStyle(AppTheme.error)
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(AppTheme.textPrimary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .contentShape(Rectangle())
                         .onTapGesture(perform: onShowDetail)
@@ -516,21 +523,11 @@ struct CartRow: View {
                             }
                         )
                     )
-                        .contentShape(Rectangle())
-                        .onTapGesture {}
                 }
             }
         }
-        .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .padding(12)
-        .surfacePanel(cornerRadius: 22)
-        .overlay(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .stroke(isSelected ? AppTheme.primary.opacity(0.52) : Color.clear, lineWidth: 1.4)
-        )
-        .animation(.easeOut(duration: 0.16), value: isSelected)
+        .contentShape(Rectangle())
     }
-
 }
 
 private struct CartSelectionButton: View {
@@ -544,18 +541,17 @@ private struct CartSelectionButton: View {
         Button(action: action) {
             HStack(spacing: 7) {
                 Image(systemName: symbolName)
-                    .font(.system(size: 24, weight: .semibold))
-                    .symbolRenderingMode(.hierarchical)
-                    .foregroundStyle(isSelected || isMixed ? AppTheme.primary : AppTheme.textSecondary.opacity(0.72))
-                    .frame(width: 28, height: 28)
+                    .font(.system(size: 21, weight: .regular))
+                    .foregroundStyle(isSelected || isMixed ? AppTheme.textPrimary : AppTheme.textTertiary)
+                    .frame(width: 26, height: 26)
 
                 if let title {
                     Text(title)
-                        .font(.subheadline.weight(.semibold))
+                        .font(.subheadline)
                         .foregroundStyle(AppTheme.textPrimary)
                 }
             }
-            .frame(minWidth: title == nil ? 38 : 0, minHeight: 38)
+            .frame(minWidth: title == nil ? 30 : 0, minHeight: 38)
             .contentShape(Rectangle())
         }
         .buttonStyle(.tactile)
@@ -584,40 +580,41 @@ private struct CartCheckoutBar: View {
     }
 
     var body: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 12) {
             CartSelectionButton(
                 isSelected: isAllSelected,
                 isMixed: isPartiallySelected,
-                title: "Select all",
+                title: "All",
                 accessibilityLabel: isAllSelected ? "Deselect all" : "Select all items",
                 action: onToggleAll
             )
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text(hasSelection ? "\(selectedCount) selected" : "Select items")
-                    .font(.caption.weight(.medium))
+            Spacer(minLength: 0)
+
+            VStack(alignment: .trailing, spacing: 1) {
+                Text("Subtotal")
+                    .font(.caption)
                     .foregroundStyle(AppTheme.textSecondary)
                 Text(totalText)
-                    .font(.title3.bold())
-                    .foregroundStyle(hasSelection ? AppTheme.primary : AppTheme.textSecondary)
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(AppTheme.textPrimary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
 
             Button(action: onCheckout) {
-                Text(isCheckingOut ? "Placing order…" : (hasSelection ? "Checkout (\(selectedCount))" : "Checkout"))
-                    .font(.headline)
-                    .foregroundStyle(.white)
-                    .frame(minWidth: 92)
-                    .padding(.horizontal, 18)
-                    .padding(.vertical, 13)
+                Text(isCheckingOut ? "Placing…" : (hasSelection ? "Checkout (\(selectedCount))" : "Checkout"))
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(AppTheme.background)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 12)
                     .background(
-                        hasSelection ? AppTheme.primary : AppTheme.textSecondary.opacity(0.36),
+                        hasSelection ? AppTheme.primary : AppTheme.textTertiary,
                         in: Capsule()
                     )
             }
             .buttonStyle(.tactile)
             .disabled(!hasSelection || isCheckingOut)
-            .disabled(!hasSelection)
         }
     }
 }
@@ -643,10 +640,10 @@ private struct CartSpecificationEditorSheet: View {
                 Button(action: onConfirm) {
                     Text("Save options")
                         .font(.headline)
-                        .foregroundStyle(.white)
+                        .foregroundStyle(AppTheme.background)
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 15)
-                        .background(AppTheme.primary, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        .padding(.vertical, 14)
+                        .background(AppTheme.primary, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
                 .buttonStyle(.tactile)
                 .padding(.horizontal, 20)
@@ -661,13 +658,13 @@ private struct CartSpecificationEditorSheet: View {
 
     private var header: some View {
         HStack(alignment: .top, spacing: 12) {
-            ProductRemoteImage(url: product.imageURL, cornerRadius: 16, placeholderIcon: "shippingbox")
+            ProductRemoteImage(url: product.imageURL, cornerRadius: 8, placeholderIcon: "shippingbox", contentMode: .fit)
                 .frame(width: 76, height: 76)
 
             VStack(alignment: .leading, spacing: 6) {
                 Text(product.priceDisplay(for: selectedOptions))
-                    .font(.title3.bold())
-                    .foregroundStyle(AppTheme.error)
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(AppTheme.textPrimary)
                 Text(product.title)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(AppTheme.textPrimary)
@@ -680,7 +677,7 @@ private struct CartSpecificationEditorSheet: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
-        .surfacePanel(cornerRadius: 20)
+        .surfacePanel(cornerRadius: 12)
     }
 
     private var specificationControls: some View {
@@ -705,13 +702,13 @@ private struct CartSpecificationEditorSheet: View {
             }
         }
         .padding(16)
-        .surfacePanel(cornerRadius: 20)
+        .surfacePanel(cornerRadius: 12)
     }
 
     private var selectedSpecificationSummary: String {
         selectedOptions
             .sorted { $0.key < $1.key }
-            .map { "\($0.key)：\($0.value)" }
+            .map { "\($0.key): \($0.value)" }
             .joined(separator: "  ")
     }
 }
@@ -725,17 +722,13 @@ private struct CartSpecificationOptionButton: View {
         Button(action: action) {
             Text(title)
                 .font(.subheadline.weight(.semibold))
-                .foregroundStyle(isSelected ? AppTheme.primary : AppTheme.textPrimary)
+                .foregroundStyle(AppTheme.textPrimary)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 10)
                 .padding(.horizontal, 8)
-                .background(
-                    isSelected ? AppTheme.primary.opacity(0.12) : AppTheme.surface,
-                    in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-                )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(isSelected ? AppTheme.primary : AppTheme.border, lineWidth: isSelected ? 1.2 : 0.7)
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(isSelected ? AppTheme.textPrimary : AppTheme.border, lineWidth: isSelected ? 1.5 : 1)
                 )
         }
         .buttonStyle(.tactile)
@@ -758,9 +751,6 @@ struct QuantityControl: View {
             }
             .disabled(quantity <= minQuantity)
             .opacity(quantity <= minQuantity ? 0.35 : 1)
-
-            Divider()
-                .frame(height: 20)
 
             Group {
                 if isEditing {
@@ -803,10 +793,7 @@ struct QuantityControl: View {
                     .accessibilityLabel("Change quantity. Current: \(quantity)")
                 }
             }
-            .frame(width: 42, height: 32)
-
-            Divider()
-                .frame(height: 20)
+            .frame(width: 32, height: 28)
 
             quantityButton(systemName: "plus") {
                 quantity = min(maxQuantity, quantity + 1)
@@ -814,20 +801,18 @@ struct QuantityControl: View {
             .disabled(quantity >= maxQuantity)
             .opacity(quantity >= maxQuantity ? 0.35 : 1)
         }
-        .frame(width: 116, height: 34)
-        .background(AppTheme.secondary, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .frame(width: 96, height: 30)
         .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(AppTheme.border, lineWidth: 0.6)
+            Capsule().stroke(AppTheme.border, lineWidth: 1)
         )
     }
 
     private func quantityButton(systemName: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 14, weight: .semibold))
+                .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(AppTheme.textPrimary)
-                .frame(width: 36, height: 32)
+                .frame(width: 32, height: 28)
         }
         .buttonStyle(.tactile)
     }

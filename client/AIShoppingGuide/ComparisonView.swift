@@ -80,7 +80,7 @@ struct ComparisonView: View {
             .disabled(!canCompare || isLoading)
         }
         .padding(16)
-        .surfacePanel(cornerRadius: 22)
+        .surfacePanel(cornerRadius: 12)
     }
 
     private var slotPickers: some View {
@@ -154,7 +154,7 @@ struct ComparisonView: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .surfacePanel(cornerRadius: 18)
+        .surfacePanel(cornerRadius: 12)
     }
 
     private func messageCard(_ text: String, isError: Bool = false) -> some View {
@@ -212,7 +212,7 @@ struct ComparisonTable: View {
                     .transition(.opacity)
             }
         }
-        .surfacePanel(cornerRadius: 18)
+        .surfacePanel(cornerRadius: 12)
     }
 
     private var header: some View {

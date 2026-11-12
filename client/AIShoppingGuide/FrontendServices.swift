@@ -1322,6 +1322,8 @@ extension Product {
         )
         self.faqs = payload.faqs
         self.referenceOnly = payload.priceType == "reference"
+        self.rating = payload.catalogSource?.averageRating
+        self.ratingCount = payload.catalogSource?.ratingNumber
     }
 }
 
@@ -1359,5 +1361,24 @@ private extension ProductReview {
             content: evidence.snippet,
             polarity: nil
         )
+    }
+}
+
+extension RESTProductService {
+    /// 最近的订单，连同每个商品的图片地址（订单表里不存图）。
+    func fetchOrders(userID: String = UserIdentity.defaultUserID) async throws -> (orders: [OrderPayload], images: [String: URL]) {
+        let url = baseURL.appendingPathComponent("orders").appendingPathComponent(userID)
+        let (data, response) = try await session.data(from: url)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw RESTServiceError.invalidResponse
+        }
+        let orders = try JSONDecoder().decode(OrderListEnvelope.self, from: data).orders
+        let ids = Array(Set(orders.flatMap { $0.lines.map(\.productID) }))
+        guard !ids.isEmpty else { return (orders, [:]) }
+        let products = (try? await fetchProducts(productIDs: ids)) ?? []
+        let images = products.reduce(into: [String: URL]()) { result, payload in
+            if let url = Product(payload: payload).imageURL { result[payload.productID] = url }
+        }
+        return (orders, images)
     }
 }

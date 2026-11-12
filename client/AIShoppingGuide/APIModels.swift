@@ -138,6 +138,18 @@ struct ProductPayload: Identifiable, Codable, Hashable {
     let updatedAt: Date?
     var faqs: [ProductFAQ]? = nil
     var priceType: String? = nil
+    /// 亚马逊目录的来源信息，带平均评分和评分人数；中文目录没有。
+    var catalogSource: CatalogSourcePayload? = nil
+}
+
+struct CatalogSourcePayload: Codable, Hashable {
+    let averageRating: Double?
+    let ratingNumber: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case averageRating = "average_rating"
+        case ratingNumber = "rating_number"
+    }
 }
 
 struct ProductSearchRequest: Codable, Hashable {
@@ -598,6 +610,42 @@ struct PlacedOrderPayload: Codable, Hashable {
 struct PlacedOrderEnvelope: Codable {
     let order: PlacedOrderPayload
 }
+
+/// 「我的」页的历史订单（GET /orders/{user_id}）
+struct OrderPayload: Codable, Identifiable, Hashable {
+    let orderID: String
+    let status: String
+    let total: Double
+    let createdAt: String
+    let lines: [OrderLinePayload]
+
+    var id: String { orderID }
+    var itemCount: Int { lines.reduce(0) { $0 + $1.quantity } }
+
+    enum CodingKeys: String, CodingKey {
+        case status, total, lines
+        case orderID = "order_id"
+        case createdAt = "created_at"
+    }
+}
+
+struct OrderLinePayload: Codable, Hashable {
+    let productID: String
+    let title: String
+    let quantity: Int
+    let unitPrice: Double
+
+    enum CodingKeys: String, CodingKey {
+        case title, quantity
+        case productID = "product_id"
+        case unitPrice = "unit_price"
+    }
+}
+
+struct OrderListEnvelope: Codable {
+    let orders: [OrderPayload]
+}
+
 
 // MARK: - 记忆页
 

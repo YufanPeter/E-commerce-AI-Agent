@@ -3,16 +3,18 @@ import SwiftUI
 
 struct ProductDetailView: View {
     let product: Product
+    /// AI 在聊天里写的推荐理由；从购物车等地方打开时没有。
+    let recommendation: String?
     let onAddToCart: (Product, [String: String], Int) -> Void
 
     @State private var selectedOptions: [String: String]
     @State private var quantity = 1
-    @State private var showSpecificationSheet = false
-    @State private var specificationSheetDetent: PresentationDetent = .large
     @State private var showSuccessToast = false
     @State private var toastID = UUID()
     @State private var successQuantity = 1
     @State private var successSummary = ""
+    @State private var isListingExpanded = false
+    @State private var isTitleExpanded = false
 
     private var toastBottomPadding: CGFloat {
         stickyButtonBottomPadding + 74
@@ -28,9 +30,11 @@ struct ProductDetailView: View {
 
     init(
         product: Product,
+        recommendation: String? = nil,
         onAddToCart: @escaping (Product, [String: String], Int) -> Void
     ) {
         self.product = product
+        self.recommendation = recommendation
         self.onAddToCart = onAddToCart
         _selectedOptions = State(initialValue: product.defaultSpecificationSelection)
     }
@@ -38,17 +42,49 @@ struct ProductDetailView: View {
     var body: some View {
         ZStack(alignment: .bottom) {
             ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 0) {
                     productHeroImage
-                    productSummaryPanel
-                    ProductAskSection(product: product)
 
-                    if !product.reviews.isEmpty {
-                        ProductReviewsSection(reviews: product.reviews)
+                    VStack(alignment: .leading, spacing: 0) {
+                        productInfo
+                            .padding(.vertical, 16)
+
+                        if hasChoices {
+                            sectionDivider
+                            optionPicker
+                                .padding(.vertical, 16)
+                        }
+
+                        // 这里只放 AI 的一两句推荐理由；商家原文在下面，默认折叠
+                        if let recommendation, !recommendation.isEmpty {
+                            whyThisOne(recommendation)
+                                .padding(.bottom, 16)
+                        }
+
+                        if !listingDescription.isEmpty {
+                            sectionDivider
+                            listingDescriptionBlock
+                                .padding(.vertical, 16)
+                        }
+
+                        if !(product.faqs ?? []).isEmpty {
+                            sectionDivider
+                            ProductFAQSection(faqs: product.faqs ?? [])
+                                .padding(.vertical, 16)
+                        }
+
+                        if !product.reviews.isEmpty {
+                            sectionDivider
+                            ProductReviewsSection(
+                                reviews: product.reviews,
+                                rating: product.rating,
+                                ratingCount: product.ratingCount
+                            )
+                            .padding(.vertical, 16)
+                        }
                     }
+                    .padding(.horizontal, 20)
                 }
-                .padding(20)
-                .padding(.top, 24)
                 .padding(.bottom, bottomOverlayHeight + 20)
             }
 
@@ -66,154 +102,211 @@ struct ProductDetailView: View {
                     .foregroundStyle(AppTheme.textSecondary)
                     .padding(.bottom, stickyButtonBottomPadding + 12)
             } else {
-                stickyAddToCartButton
+                purchaseBar
             }
         }
-        .sheet(isPresented: $showSpecificationSheet) {
-            AddToCartSheet(
-                product: product,
-                selectedOptions: $selectedOptions,
-                quantity: $quantity,
-                onConfirm: confirmAddToCart
-            )
-            .presentationDetents([.medium, .large], selection: $specificationSheetDetent)
-            .presentationDragIndicator(.visible)
-            .presentationCornerRadius(28)
-        }
         .background(AppTheme.background)
-        .navigationTitle("Product details")
+        .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                ListenHighlightsButton(product: product)
+            }
+        }
         .toolbarBackground(AppTheme.background, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
     }
 
-    private var stickyAddToCartButton: some View {
-        Button {
-            openSpecificationSheet()
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: "cart.badge.plus")
-                    .font(.headline.weight(.semibold))
+    private var sectionDivider: some View {
+        Rectangle().fill(AppTheme.border).frame(height: 0.5)
+    }
+
+    /// 底部购买栏：左边是当前规格的价格，右边加购。规格已在页面上选好，点了直接加。
+    private var purchaseBar: some View {
+        HStack(spacing: 14) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Price")
+                    .font(.caption)
+                    .foregroundStyle(AppTheme.textSecondary)
+                Text(product.priceDisplay(for: selectedOptions))
+                    .font(.headline)
+                    .foregroundStyle(AppTheme.textPrimary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+            }
+            Button {
+                confirmAddToCart()
+            } label: {
                 Text("Add to cart")
                     .font(.headline)
+                    .foregroundStyle(AppTheme.background)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(AppTheme.primary, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
-            .foregroundStyle(.white)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 15)
-            .background(AppTheme.primary, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .shadow(color: AppTheme.shadow.opacity(0.45), radius: 7, y: 2)
+            .buttonStyle(.tactile)
         }
-        .buttonStyle(.tactile)
         .padding(.horizontal, 20)
         .padding(.bottom, stickyButtonBottomPadding)
     }
 
+    /// 加购按钮和标签栏下面的实底，顶部一小段渐隐。半透明遮罩挡不住，正文会从按钮和标签栏之间透出来。
     private var detailBottomScrim: some View {
-        Rectangle()
-            .fill(AppTheme.surface.opacity(0.94))
-            .frame(height: bottomOverlayHeight)
-            .mask(
-                LinearGradient(
-                    colors: [.clear, .black.opacity(0.22), .black.opacity(0.58)],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
+        VStack(spacing: 0) {
+            LinearGradient(
+                colors: [AppTheme.background.opacity(0), AppTheme.background],
+                startPoint: .top,
+                endPoint: .bottom
             )
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-            .allowsHitTesting(false)
-            .ignoresSafeArea(edges: .bottom)
+            .frame(height: 22)
+            Color.clear
+                .frame(height: stickyButtonBottomPadding + 60)
+                .background(AppTheme.background.ignoresSafeArea(edges: .bottom))
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+        .allowsHitTesting(false)
     }
 
+    /// 商品图铺满宽度，白底，不加卡片和阴影
     private var productHeroImage: some View {
-        GeometryReader { geometry in
-            ProductRemoteImage(url: product.imageURL, cornerRadius: 24, placeholderIcon: "bag", contentMode: .fit)
-                .frame(width: geometry.size.width, height: geometry.size.width)
-                .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 24, style: .continuous)
-                        .stroke(AppTheme.border, lineWidth: 1)
-                )
-                .shadow(color: AppTheme.shadow.opacity(0.42), radius: 16, y: 8)
-        }
-        .aspectRatio(1, contentMode: .fit)
-    }
-
-    private var productSummaryPanel: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            productInfo
-
-            if !product.reason.isEmpty {
-                productTextBlock(title: "Why this product", text: product.reason, icon: "lightbulb")
-            }
-
-            if !product.tags.isEmpty {
-                productTags
-            }
-        }
-        .padding(16)
-        .surfacePanel(cornerRadius: 22)
+        ProductRemoteImage(url: product.imageURL, cornerRadius: 0, placeholderIcon: "bag", contentMode: .fit)
+            .padding(24)
+            .frame(maxWidth: .infinity)
+            .frame(height: 340)
+            .background(Color.white)
+            .overlay(alignment: .bottom) { sectionDivider }
     }
 
     private var productInfo: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             Text(product.priceDisplay(for: selectedOptions))
-                .font(.system(size: 32, weight: .bold))
-                .foregroundStyle(AppTheme.error)
+                .font(.system(size: 26, weight: .semibold))
+                .foregroundStyle(AppTheme.textPrimary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.72)
             Text(product.title)
-                .font(.title2.bold())
+                .font(.body)
                 .foregroundStyle(AppTheme.textPrimary)
-                .lineLimit(4)
+                .lineSpacing(2)
+                .lineLimit(isTitleExpanded ? nil : 3)
                 .fixedSize(horizontal: false, vertical: true)
+                .onTapGesture { withAnimation(.easeOut(duration: 0.18)) { isTitleExpanded.toggle() } }
+            if let rating = product.rating {
+                HStack(spacing: 6) {
+                    StarRow(rating: rating)
+                    Text(String(format: "%.1f", rating))
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(AppTheme.textPrimary)
+                    if let count = product.ratingCount, count > 0 {
+                        Text("· \(count.formatted()) ratings")
+                            .font(.footnote)
+                            .foregroundStyle(AppTheme.textSecondary)
+                    }
+                }
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func productTextBlock(title: String, text: String, icon: String) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
-            Label(title, systemImage: icon)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(AppTheme.primary)
+    private var hasChoices: Bool {
+        product.specifications.contains { $0.options.count > 1 }
+    }
+
+    /// 规格直接在页面上选，不再先弹一层选择页
+    private var optionPicker: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            ForEach(product.specifications.filter { $0.options.count > 1 }) { specification in
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 4) {
+                        Text("\(specification.name):")
+                            .foregroundStyle(AppTheme.textSecondary)
+                        Text(selectedOptions[specification.name] ?? "")
+                            .foregroundStyle(AppTheme.textPrimary)
+                    }
+                    .font(.subheadline)
+                    FlowLayout(spacing: 8) {
+                        ForEach(specification.options, id: \.self) { option in
+                            let isSelected = selectedOptions[specification.name] == option
+                            Button {
+                                selectedOptions[specification.name] = option
+                            } label: {
+                                Text(option)
+                                    .font(.subheadline)
+                                    .foregroundStyle(AppTheme.textPrimary)
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 8)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                            .stroke(isSelected ? AppTheme.textPrimary : AppTheme.border, lineWidth: isSelected ? 1.5 : 1)
+                                    )
+                            }
+                            .buttonStyle(.tactile)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func whyThisOne(_ text: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            AIByline(title: "Why this one")
             Text(text)
                 .font(.subheadline)
-                .foregroundStyle(AppTheme.textSecondary)
-                .lineSpacing(4)
+                .foregroundStyle(AppTheme.textPrimary)
+                .lineSpacing(3)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(AppTheme.secondary.opacity(0.48), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .background(AppTheme.secondary, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
-    private var productTags: some View {
-        ProductTagRow(tags: product.tags)
+    /// 商家原文。【卖点】各起一行，方便扫读。
+    private var listingDescription: String {
+        product.reason
+            .replacingOccurrences(of: "【", with: "\n【")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var listingDescriptionBlock: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("About this item")
+                .font(.headline)
+                .foregroundStyle(AppTheme.textPrimary)
+            Text(listingDescription)
+                .font(.subheadline)
+                .foregroundStyle(AppTheme.textSecondary)
+                .lineSpacing(4)
+                .lineLimit(isListingExpanded ? nil : 4)
+                .fixedSize(horizontal: false, vertical: true)
+            Button(isListingExpanded ? "Show less" : "Show more") {
+                withAnimation(.easeOut(duration: 0.2)) {
+                    isListingExpanded.toggle()
+                }
+            }
+            .font(.subheadline.weight(.medium))
+            .foregroundStyle(AppTheme.textPrimary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var selectedSpecificationSummary: String {
         selectedOptions
             .sorted { $0.key < $1.key }
-            .map { "\($0.key)：\($0.value)" }
+            .map { "\($0.key): \($0.value)" }
             .joined(separator: "  ")
-    }
-
-    private func openSpecificationSheet() {
-        specificationSheetDetent = .large
-        showSpecificationSheet = true
     }
 
     private func confirmAddToCart() {
         onAddToCart(product, selectedOptions, quantity)
         successQuantity = quantity
         successSummary = selectedSpecificationSummary
-        showSpecificationSheet = false
         toastID = UUID()
         let currentToastID = toastID
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) {
-            withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
-                showSuccessToast = true
-            }
+        withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
+            showSuccessToast = true
         }
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
@@ -225,60 +318,80 @@ struct ProductDetailView: View {
     }
 }
 
-/// 详情页的导购入口：听亮点，以及来自商品问答的常见问题。
-private struct ProductAskSection: View {
+/// 五颗星，按评分填满、半颗或空心
+struct StarRow: View {
+    let rating: Double
+    var size: CGFloat = 11
+
+    var body: some View {
+        HStack(spacing: 1) {
+            ForEach(1...5, id: \.self) { index in
+                let value = rating - Double(index - 1)
+                Image(systemName: value >= 0.75 ? "star.fill" : (value >= 0.25 ? "star.leadinghalf.filled" : "star"))
+                    .font(.system(size: size))
+                    .foregroundStyle(AppTheme.star)
+            }
+        }
+        .accessibilityLabel(String(format: "%.1f out of 5 stars", rating))
+    }
+}
+
+/// 导航栏右上角的"听亮点"小按钮
+private struct ListenHighlightsButton: View {
     let product: Product
 
     @StateObject private var speaker = HighlightsSpeaker()
-    @State private var openFAQ: String?
-
     private let productService = RESTProductService()
 
-    private var faqs: [ProductFAQ] { product.faqs ?? [] }
+    var body: some View {
+        Button {
+            Task { await toggle() }
+        } label: {
+            Group {
+                if speaker.state == .loading {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Image(systemName: speaker.state == .speaking ? "stop.circle" : "speaker.wave.2")
+                }
+            }
+            .foregroundStyle(AppTheme.textPrimary)
+        }
+        .disabled(speaker.state == .loading)
+        .accessibilityLabel(speaker.state == .speaking ? "Stop audio" : "Listen to highlights")
+        .onDisappear { speaker.stop() }
+    }
+
+    /// 优先念模型写的短卖点，取不到就念商品介绍。
+    private func toggle() async {
+        if speaker.state == .speaking {
+            speaker.stop()
+            return
+        }
+        speaker.state = .loading
+        let pitch = await productService.fetchProductPitch(productID: product.id)
+        let text = [pitch, product.reason].compactMap { $0 }.first { !$0.isEmpty } ?? product.title
+        speaker.speak(text)
+    }
+}
+
+/// 商品问答：问题一行一条，点开看回答
+private struct ProductFAQSection: View {
+    let faqs: [ProductFAQ]
+    @State private var openFAQ: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Button {
-                Task { await toggleHighlights() }
-            } label: {
-                HStack(spacing: 8) {
-                    Group {
-                        if speaker.state == .loading {
-                            ProgressView().controlSize(.small).tint(AppTheme.primary)
-                        } else {
-                            Image(systemName: speaker.state == .speaking ? "stop.fill" : "speaker.wave.2.fill")
-                                .font(.system(size: 12, weight: .semibold))
-                        }
-                    }
-                    .frame(width: 16, height: 16)
-                    Text(speaker.state == .speaking ? "Stop audio" : "Listen to highlights")
-                        .font(.subheadline.weight(.medium))
-                }
-                .foregroundStyle(AppTheme.primary)
-                .padding(.horizontal, 14)
-                .frame(minHeight: 38)
-                .background(AppTheme.secondary, in: Capsule())
-            }
-            .buttonStyle(.tactile)
-            .disabled(speaker.state == .loading)
-
-            if !faqs.isEmpty {
-                Text("Frequently asked questions")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(AppTheme.textSecondary)
-                    .padding(.top, 2)
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(faqs.enumerated()), id: \.element.id) { index, faq in
-                        if index > 0 { Divider() }
-                        faqRow(faq)
-                    }
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Questions and answers")
+                .font(.headline)
+                .foregroundStyle(AppTheme.textPrimary)
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(faqs.enumerated()), id: \.element.id) { index, faq in
+                    if index > 0 { Divider() }
+                    faqRow(faq)
                 }
             }
         }
-        .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .surfacePanel(cornerRadius: 22)
-        .onDisappear { speaker.stop() }
     }
 
     private func faqRow(_ faq: ProductFAQ) -> some View {
@@ -315,18 +428,6 @@ private struct ProductAskSection: View {
                     .transition(.opacity)
             }
         }
-    }
-
-    /// 优先念模型写的短卖点，取不到就念商品介绍。
-    private func toggleHighlights() async {
-        if speaker.state == .speaking {
-            speaker.stop()
-            return
-        }
-        speaker.state = .loading
-        let pitch = await productService.fetchProductPitch(productID: product.id)
-        let text = [pitch, product.reason].compactMap { $0 }.first { !$0.isEmpty } ?? product.title
-        speaker.speak(text)
     }
 }
 
@@ -370,16 +471,21 @@ private final class HighlightsSpeaker: NSObject, ObservableObject, AVSpeechSynth
 
 private struct ProductReviewsSection: View {
     let reviews: [ProductReview]
+    let rating: Double?
+    let ratingCount: Int?
+
     @State private var isExpanded = false
     @State private var selectedRating: Int?
     @State private var sortMode: ReviewSortMode = .defaultOrder
 
+    private let collapsedCount = 2
+
     private var visibleReviews: [ProductReview] {
-        isExpanded ? filteredAndSortedReviews : Array(filteredAndSortedReviews.prefix(3))
+        isExpanded ? filteredAndSortedReviews : Array(filteredAndSortedReviews.prefix(collapsedCount))
     }
 
     private var hiddenReviewCount: Int {
-        max(0, filteredAndSortedReviews.count - 3)
+        max(0, filteredAndSortedReviews.count - collapsedCount)
     }
 
     private var filteredAndSortedReviews: [ProductReview] {
@@ -413,18 +519,25 @@ private struct ProductReviewsSection: View {
         Array(Set(reviews.map(\.rating))).sorted(by: >)
     }
 
+    /// 商品整体评分；后端没给就用已加载评论的平均分
+    private var overallRating: Double {
+        if let rating { return rating }
+        guard !reviews.isEmpty else { return 0 }
+        return Double(reviews.map(\.rating).reduce(0, +)) / Double(reviews.count)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("Customer reviews")
-                    .font(.headline)
-                    .foregroundStyle(AppTheme.textPrimary)
-                Text("\(filteredAndSortedReviews.count) of \(reviews.count)")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(AppTheme.textSecondary)
-                Spacer(minLength: 12)
+            Text("Customer reviews")
+                .font(.headline)
+                .foregroundStyle(AppTheme.textPrimary)
+
+            summary
+
+            HStack(spacing: 8) {
                 ratingMenu
                 sortMenu
+                Spacer(minLength: 0)
             }
 
             if visibleReviews.isEmpty {
@@ -432,14 +545,15 @@ private struct ProductReviewsSection: View {
                     .font(.subheadline)
                     .foregroundStyle(AppTheme.textSecondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.vertical, 10)
+                    .padding(.vertical, 6)
             } else {
-                VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 0) {
                     ForEach(visibleReviews) { review in
-                        ProductReviewRow(review: review)
-                        if review.id != visibleReviews.last?.id {
+                        if review.id != visibleReviews.first?.id {
                             Divider().overlay(AppTheme.border)
                         }
+                        ProductReviewRow(review: review)
+                            .padding(.vertical, 12)
                     }
                 }
             }
@@ -450,16 +564,15 @@ private struct ProductReviewsSection: View {
                         isExpanded.toggle()
                     }
                 } label: {
-                    HStack(spacing: 5) {
-                        Text(isExpanded ? "Show fewer reviews" : "Show \(hiddenReviewCount) more reviews")
-                        Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                            .font(.caption.weight(.semibold))
-                    }
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(AppTheme.primary)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 9)
-                    .background(AppTheme.softPurple.opacity(0.55), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    Text(isExpanded ? "Show fewer reviews" : "See \(hiddenReviewCount) more reviews")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(AppTheme.textPrimary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 11)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .stroke(AppTheme.border, lineWidth: 1)
+                        )
                 }
                 .buttonStyle(.tactile)
             }
@@ -475,8 +588,41 @@ private struct ProductReviewsSection: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(16)
-        .surfacePanel(cornerRadius: 20)
+    }
+
+    private var summary: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Text(String(format: "%.1f", overallRating))
+                .font(.system(size: 34, weight: .semibold))
+                .foregroundStyle(AppTheme.textPrimary)
+            VStack(alignment: .leading, spacing: 3) {
+                StarRow(rating: overallRating, size: 13)
+                Text(ratingCountText)
+                    .font(.footnote)
+                    .foregroundStyle(AppTheme.textSecondary)
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    private var ratingCountText: String {
+        if let ratingCount, ratingCount > 0 {
+            return "\(ratingCount.formatted()) global ratings"
+        }
+        return "\(reviews.count) reviews"
+    }
+
+    private func filterChip(_ title: String, systemImage: String) -> some View {
+        HStack(spacing: 4) {
+            Text(title)
+            Image(systemName: systemImage)
+                .font(.caption2.weight(.semibold))
+        }
+        .font(.footnote)
+        .foregroundStyle(AppTheme.textPrimary)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(AppTheme.secondary, in: Capsule())
     }
 
     private var sortMenu: some View {
@@ -493,13 +639,8 @@ private struct ProductReviewsSection: View {
                 }
             }
         } label: {
-            Image(systemName: "arrow.up.arrow.down")
-                .font(.system(size: 15, weight: .semibold))
-            .foregroundStyle(AppTheme.primary)
-            .frame(width: 34, height: 34)
-            .background(AppTheme.secondary.opacity(0.64), in: Capsule())
-            .overlay(Capsule().stroke(AppTheme.border, lineWidth: 1))
-            .accessibilityLabel("Sort reviews")
+            filterChip(sortMode == .defaultOrder ? "Sort" : sortMode.title, systemImage: "chevron.down")
+                .accessibilityLabel("Sort reviews")
         }
         .buttonStyle(.plain)
     }
@@ -528,13 +669,8 @@ private struct ProductReviewsSection: View {
                 }
             }
         } label: {
-            Image(systemName: selectedRating == nil ? "star" : "star.fill")
-                .font(.system(size: 15, weight: .semibold))
-            .foregroundStyle(AppTheme.primary)
-            .frame(width: 34, height: 34)
-            .background(AppTheme.secondary.opacity(0.64), in: Capsule())
-            .overlay(Capsule().stroke(AppTheme.border, lineWidth: 1))
-            .accessibilityLabel("Filter by rating")
+            filterChip(selectedRating.map { "\($0) stars" } ?? "All ratings", systemImage: "chevron.down")
+                .accessibilityLabel("Filter by rating")
         }
         .buttonStyle(.plain)
     }
@@ -561,37 +697,22 @@ private struct ProductReviewRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .center, spacing: 10) {
+            HStack(alignment: .center, spacing: 8) {
+                StarRow(rating: Double(review.rating), size: 11)
                 Text(review.nickname)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(AppTheme.textPrimary)
+                    .font(.footnote)
+                    .foregroundStyle(AppTheme.textSecondary)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.82)
-                Spacer(minLength: 8)
-                RatingStars(rating: review.rating)
             }
 
             Text(review.content)
                 .font(.subheadline)
-                .foregroundStyle(AppTheme.textSecondary)
+                .foregroundStyle(AppTheme.textPrimary)
+                .lineSpacing(3)
+                .lineLimit(6)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-private struct RatingStars: View {
-    let rating: Int
-
-    var body: some View {
-        HStack(spacing: 2) {
-            ForEach(1...5, id: \.self) { index in
-                Image(systemName: index <= rating ? "star.fill" : "star")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(index <= rating ? AppTheme.primary : AppTheme.textSecondary.opacity(0.45))
-            }
-        }
-        .accessibilityLabel("\(rating) stars")
     }
 }
 
@@ -616,12 +737,12 @@ struct AddToCartSheet: View {
             .background(AppTheme.background)
             .safeAreaInset(edge: .bottom) {
                 Button(action: onConfirm) {
-                    Text("Confirm add to cart")
+                    Text("Add to cart")
                         .font(.headline)
-                        .foregroundStyle(.white)
+                        .foregroundStyle(AppTheme.background)
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 15)
-                        .background(AppTheme.primary, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        .padding(.vertical, 14)
+                        .background(AppTheme.primary, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
                 .buttonStyle(.tactile)
                 .padding(.horizontal, 20)
@@ -642,8 +763,8 @@ struct AddToCartSheet: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 Text(product.priceDisplay(for: selectedOptions))
-                    .font(.title3.bold())
-                    .foregroundStyle(AppTheme.error)
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(AppTheme.textPrimary)
                 Text(product.title)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(AppTheme.textPrimary)
@@ -655,7 +776,7 @@ struct AddToCartSheet: View {
             }
         }
         .padding(14)
-        .surfacePanel(cornerRadius: 20)
+        .surfacePanel(cornerRadius: 12)
     }
 
     private var specificationControls: some View {
@@ -680,7 +801,7 @@ struct AddToCartSheet: View {
             }
         }
         .padding(16)
-        .surfacePanel(cornerRadius: 20)
+        .surfacePanel(cornerRadius: 12)
     }
 
     private var quantityControl: some View {
@@ -691,13 +812,13 @@ struct AddToCartSheet: View {
             QuantityControl(quantity: $quantity)
         }
         .padding(16)
-        .surfacePanel(cornerRadius: 20)
+        .surfacePanel(cornerRadius: 12)
     }
 
     private var selectedSpecificationSummary: String {
         selectedOptions
             .sorted { $0.key < $1.key }
-            .map { "\($0.key)：\($0.value)" }
+            .map { "\($0.key): \($0.value)" }
             .joined(separator: "  ")
     }
 }
@@ -711,17 +832,13 @@ private struct SpecificationOptionButton: View {
         Button(action: action) {
             Text(title)
                 .font(.subheadline.weight(.semibold))
-                .foregroundStyle(isSelected ? AppTheme.primary : AppTheme.textPrimary)
+                .foregroundStyle(AppTheme.textPrimary)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 10)
                 .padding(.horizontal, 8)
-                .background(
-                    isSelected ? AppTheme.primary.opacity(0.12) : AppTheme.surface,
-                    in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-                )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(isSelected ? AppTheme.primary : AppTheme.border, lineWidth: isSelected ? 1.2 : 0.7)
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(isSelected ? AppTheme.textPrimary : AppTheme.border, lineWidth: isSelected ? 1.5 : 1)
                 )
         }
         .buttonStyle(.tactile)
@@ -751,7 +868,7 @@ private struct AddToCartSuccessToast: View {
             Spacer(minLength: 0)
         }
         .padding(14)
-        .surfacePanel(cornerRadius: 20)
+        .surfacePanel(cornerRadius: 12)
     }
 
     private var detailText: String {

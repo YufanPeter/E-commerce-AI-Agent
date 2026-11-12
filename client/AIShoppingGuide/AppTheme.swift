@@ -2,19 +2,22 @@ import SwiftUI
 import UIKit
 
 struct AppTheme {
-    // White and warm beige surfaces with a restrained terracotta accent.
-    static let primary = Color.dynamic(lightHex: "CE8763", darkHex: "EBA886")      // 浅陶土/暖赭强调色
-    static let secondary = Color.dynamic(lightHex: "F5EFE7", darkHex: "2A231D")     // 浅米填充
-    static let softBlue = Color.dynamic(lightHex: "F6F0E8", darkHex: "211C17")      // 用户气泡（浅米）
-    static let softPurple = Color.dynamic(lightHex: "F4EEE5", darkHex: "241E18")    // 芯片/规格填充（浅米）
-    static let background = Color.dynamic(lightHex: "FBFAF7", darkHex: "13110F")     // 近白·极淡米底
-    static let surface = Color.dynamic(lightHex: "FFFFFF", darkHex: "1E1A16")        // 卡片表面（纯白）
-    static let textPrimary = Color.dynamic(lightHex: "2B2520", darkHex: "F2ECE4")    // 暖近黑
-    static let textSecondary = Color.dynamic(lightHex: "8A7E72", darkHex: "A89C8E")  // 暖灰
-    static let success = Color.dynamic(lightHex: "3F9F6B", darkHex: "5BD08C")
-    static let error = Color.dynamic(lightHex: "D2543E", darkHex: "F0846E")
+    // 电商常见的中性底色：白底、浅灰填充、近黑文字。主操作用墨色，陶土色只留给 AI 的标记。
+    static let primary = Color.dynamic(lightHex: "1D1D1F", darkHex: "F5F5F7")      // 主操作（墨色）
+    static let brand = Color.dynamic(lightHex: "C8693F", darkHex: "E89A72")        // AI 标记专用
+    static let secondary = Color.dynamic(lightHex: "F4F4F5", darkHex: "2C2C2E")     // 浅灰填充
+    static let softBlue = Color.dynamic(lightHex: "F2F2F4", darkHex: "2C2C2E")      // 用户气泡
+    static let softPurple = Color.dynamic(lightHex: "F4F4F5", darkHex: "2C2C2E")    // 标签/规格填充
+    static let background = Color.dynamic(lightHex: "FFFFFF", darkHex: "000000")
+    static let surface = Color.dynamic(lightHex: "FFFFFF", darkHex: "1C1C1E")
+    static let textPrimary = Color.dynamic(lightHex: "1D1D1F", darkHex: "F5F5F7")
+    static let textSecondary = Color.dynamic(lightHex: "6E6E73", darkHex: "A1A1A6")
+    static let textTertiary = Color.dynamic(lightHex: "A1A1A6", darkHex: "6E6E73")
+    static let success = Color.dynamic(lightHex: "1F8A4C", darkHex: "4CD47F")
+    static let error = Color.dynamic(lightHex: "D2382B", darkHex: "FF6B5E")
+    static let star = Color.dynamic(lightHex: "E8A317", darkHex: "F5B73B")
     static let border = Color.dynamic(
-        light: UIColor(hex: "2B2520").withAlphaComponent(0.08),
+        light: UIColor.black.withAlphaComponent(0.09),
         dark: UIColor.white.withAlphaComponent(0.11)
     )
     static let liquidOverlay = Color.dynamic(
@@ -30,12 +33,12 @@ struct AppTheme {
         dark: UIColor.white.withAlphaComponent(0.05)
     )
     static let tabBarSurface = Color.dynamic(
-        light: UIColor.white.withAlphaComponent(0.96),
-        dark: UIColor(hex: "1D1916").withAlphaComponent(0.96)
+        light: UIColor.white,
+        dark: UIColor(hex: "1C1C1E")
     )
     static let tabSelectionSurface = Color.dynamic(
-        light: UIColor(hex: "F2E8DE"),
-        dark: UIColor(hex: "2A241E")
+        light: UIColor(hex: "F4F4F5"),
+        dark: UIColor(hex: "2C2C2E")
     )
     static let shadow = Color.dynamic(
         light: UIColor(hex: "2B1E12").withAlphaComponent(0.05),
@@ -46,12 +49,12 @@ struct AppTheme {
         dark: UIColor(hex: "E89A72").withAlphaComponent(0.04)
     )
 
-    static let bottomTabBarHeight: CGFloat = 72
-    static let bottomTabBarBottomPadding: CGFloat = -14
+    static let bottomTabBarHeight: CGFloat = 52
+    static let bottomTabBarBottomPadding: CGFloat = 0
     static let goldenRatioMinor: CGFloat = 0.382
-    static let guideComposerTabGap: CGFloat = 16
+    static let guideComposerTabGap: CGFloat = 10
     static let guideComposerBottomPadding = bottomTabBarHeight + bottomTabBarBottomPadding + guideComposerTabGap
-    static let cartCheckoutTabGap: CGFloat = 22
+    static let cartCheckoutTabGap: CGFloat = 0
     static let cartCheckoutBottomPadding = bottomTabBarHeight + bottomTabBarBottomPadding + cartCheckoutTabGap
 }
 
@@ -110,9 +113,8 @@ struct SurfacePanelModifier: ViewModifier {
             .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .stroke(AppTheme.border, lineWidth: 1)
+                    .stroke(AppTheme.border, lineWidth: 0.5)
             )
-            .shadow(color: AppTheme.shadow.opacity(0.45), radius: 5, y: 2)
     }
 }
 
@@ -130,7 +132,8 @@ extension View {
         modifier(GlassPanelModifier(cornerRadius: cornerRadius))
     }
 
-    func surfacePanel(cornerRadius: CGFloat = 20) -> some View {
+    /// 卡片只用细线，不加阴影；圆角统一偏小，避免满屏圆胖卡片
+    func surfacePanel(cornerRadius: CGFloat = 12) -> some View {
         modifier(SurfacePanelModifier(cornerRadius: cornerRadius))
     }
 

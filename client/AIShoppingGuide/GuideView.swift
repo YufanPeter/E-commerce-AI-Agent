@@ -120,6 +120,9 @@ struct GuideView: View {
                     chatList
                 }
 
+                bottomDock
+                    .zIndex(0.5)
+
                 composerStack
                     .padding(.horizontal, 16)
                     .background(
@@ -175,7 +178,7 @@ struct GuideView: View {
                 .presentationDragIndicator(.visible)
             }
             .navigationDestination(item: $productDetailContext) { context in
-                ProductDetailView(product: context.product) { product, selectedOptions, quantity in
+                ProductDetailView(product: context.product, recommendation: context.recommendation) { product, selectedOptions, quantity in
                     addToCart(product, selectedOptions: selectedOptions, quantity: quantity)
                 }
             }
@@ -257,47 +260,42 @@ struct GuideView: View {
     }
 
     private var header: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("CartPilot")
-                    .font(.custom("Georgia", size: 30).weight(.regular))
-                    .tracking(0.3)
-                    .scaleEffect(x: 1.06, y: 1, anchor: .leading)
-                    .foregroundStyle(AppTheme.textPrimary)
-                Text("Shopping assistant")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(AppTheme.textSecondary)
-            }
+        HStack(spacing: 4) {
+            Text("CartPilot")
+                .font(.custom("Georgia", size: 24).weight(.regular))
+                .tracking(0.3)
+                .foregroundStyle(AppTheme.textPrimary)
             Spacer()
-            Button {
-                startNewConversation()
-            } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: "square.and.pencil")
-                        .font(.system(size: 15, weight: .semibold))
-                    Text("New chat")
-                        .font(.subheadline.weight(.semibold))
-                }
-                .foregroundStyle(AppTheme.primary)
-                .padding(.horizontal, 14)
-                .frame(height: 40)
-                .surfacePanel(cornerRadius: 20)
-            }
-            .buttonStyle(.tactile)
             Button {
                 showHistory = true
             } label: {
                 Image(systemName: "clock.arrow.circlepath")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(AppTheme.primary)
+                    .font(.system(size: 18, weight: .regular))
+                    .foregroundStyle(AppTheme.textPrimary)
                     .frame(width: 40, height: 40)
-                    .surfacePanel(cornerRadius: 20)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.tactile)
+            .accessibilityLabel("Chat history")
+            Button {
+                startNewConversation()
+            } label: {
+                Image(systemName: "square.and.pencil")
+                    .font(.system(size: 18, weight: .regular))
+                    .foregroundStyle(AppTheme.textPrimary)
+                    .frame(width: 40, height: 40)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.tactile)
+            .accessibilityLabel("New chat")
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 18)
-        .padding(.bottom, 8)
+        .padding(.leading, 20)
+        .padding(.trailing, 10)
+        .padding(.top, 10)
+        .padding(.bottom, 6)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(AppTheme.border).frame(height: 0.5)
+        }
     }
 
     private var chatList: some View {
@@ -465,118 +463,105 @@ struct GuideView: View {
         .accessibilityAddTraits(.isButton)
     }
 
-    /// Empty state with a quiet greeting and simple category shortcuts, shown only before the conversation has messages.
-    /// Data comes from the inventory-backed `/suggestions` endpoint and disappears after the user starts a search.
+    /// 首页：接着逛的商品、分类入口和热门搜索，用户一开始搜索就消失。
+    /// 数据来自按库存生成的 `/suggestions` 和首页推荐接口。
     private var emptyState: some View {
-        VStack(alignment: .leading, spacing: 22) {
-            VStack(alignment: .leading, spacing: 6) {
-                HomeGreeting(text: homeGreeting)
-                Text(homeFeed?.isReturning == true ? "Welcome back. What are you shopping for?" : "Tell me what you’re shopping for.")
-                    .font(.subheadline)
-                    .foregroundStyle(AppTheme.textSecondary)
-                    .modifier(StaggeredAppear(index: 1))
-            }
-
-            if !cartItems.isEmpty || homeFeed?.entries.isEmpty == false {
-                VStack(spacing: 8) {
-                    if !cartItems.isEmpty {
-                        homeEntry(title: "\(cartItems.count) products in your cart", imageURL: nil, action: onOpenCart)
-                            .modifier(StaggeredAppear(index: 2))
-                    }
-                    ForEach(Array((homeFeed?.entries ?? []).enumerated()), id: \.element.id) { index, entry in
-                        homeEntry(title: entry.title, imageURL: entry.imageURL) {
-                            send(entry.query)
+        VStack(alignment: .leading, spacing: 26) {
+            if let entries = homeFeed?.entries, !entries.isEmpty {
+                VStack(alignment: .leading, spacing: 10) {
+                    homeSectionTitle("Pick up where you left off")
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(alignment: .top, spacing: 12) {
+                            ForEach(entries) { entry in
+                                recentEntry(entry)
+                            }
                         }
-                        .modifier(StaggeredAppear(index: index + 3))
                     }
+                    .scrollClipDisabled()
                 }
+                .modifier(StaggeredAppear(index: 1))
             }
 
-            VStack(alignment: .leading, spacing: 10) {
-                homeSectionTitle("Browse categories")
-                FlowLayout(spacing: 10) {
-                    ForEach(displayedCategories) { category in
+            VStack(alignment: .leading, spacing: 12) {
+                homeSectionTitle("Shop by category")
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8, alignment: .top), count: 4), spacing: 16) {
+                    ForEach(displayedCategories.prefix(8)) { category in
                         Button {
                             send(category.query)
                         } label: {
-                            HStack(spacing: 6) {
+                            VStack(spacing: 7) {
                                 Image(systemName: category.icon)
-                                    .font(.system(size: 14, weight: .regular))
-                                    .foregroundStyle(AppTheme.textSecondary)
-                                Text(category.name)
-                                    .font(.subheadline)
+                                    .font(.system(size: 21, weight: .regular))
                                     .foregroundStyle(AppTheme.textPrimary)
+                                    .frame(width: 56, height: 56)
+                                    .background(AppTheme.secondary, in: Circle())
+                                Text(category.shortName)
+                                    .font(.caption)
+                                    .foregroundStyle(AppTheme.textPrimary)
+                                    .multilineTextAlignment(.center)
+                                    .lineLimit(2)
+                                    .fixedSize(horizontal: false, vertical: true)
                             }
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 9)
-                            .background(AppTheme.surface, in: Capsule())
-                            .overlay(Capsule().stroke(AppTheme.border, lineWidth: 1))
+                            .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.tactile)
                     }
                 }
             }
-            .modifier(StaggeredAppear(index: 5))
+            .modifier(StaggeredAppear(index: 2))
 
             VStack(alignment: .leading, spacing: 10) {
-                homeSectionTitle("Popular searches")
+                homeSectionTitle("Trending searches")
                 FlowLayout(spacing: 8) {
-                    ForEach(Array(displayedHotSearches.prefix(6)), id: \.self) { query in
-                        Button(query) { send(query) }
-                            .font(.subheadline)
-                            .foregroundStyle(AppTheme.primary)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(AppTheme.secondary.opacity(0.7), in: Capsule())
-                            .buttonStyle(.tactile)
+                    ForEach(Array(displayedHotSearches.prefix(8)), id: \.self) { query in
+                        Button {
+                            send(query)
+                        } label: {
+                            Text(query)
+                                .font(.footnote)
+                                .foregroundStyle(AppTheme.textPrimary)
+                                .lineLimit(1)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 7)
+                                .background(AppTheme.secondary, in: Capsule())
+                        }
+                        .buttonStyle(.tactile)
                     }
                 }
             }
-            .modifier(StaggeredAppear(index: 6))
+            .modifier(StaggeredAppear(index: 3))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.top, 6)
-    }
-
-    private var homeGreeting: String {
-        switch Calendar.current.component(.hour, from: Date()) {
-        case 5..<11: return "Good morning"
-        case 11..<13: return "Good afternoon"
-        case 13..<18: return "Good afternoon"
-        default: return "Good evening"
-        }
+        .padding(.top, 14)
     }
 
     private func homeSectionTitle(_ text: String) -> some View {
         Text(text)
-            .font(.footnote.weight(.semibold))
-            .foregroundStyle(AppTheme.textSecondary)
+            .font(.headline)
+            .foregroundStyle(AppTheme.textPrimary)
     }
 
-    private func homeEntry(title: String, imageURL: URL?, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 12) {
-                if let imageURL {
-                    ProductRemoteImage(url: imageURL, cornerRadius: 10, placeholderIcon: "shippingbox")
-                        .frame(width: 40, height: 40)
-                } else {
-                    Image(systemName: "cart")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(AppTheme.primary)
-                        .frame(width: 40, height: 40)
-                        .background(AppTheme.secondary, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                }
-                Text(title)
-                    .font(.subheadline.weight(.medium))
+    /// 接着逛：商品图加品类名，点了按原来的问题再搜一次
+    private func recentEntry(_ entry: HomeFeed.Entry) -> some View {
+        Button {
+            send(entry.query)
+        } label: {
+            VStack(alignment: .leading, spacing: 6) {
+                ProductRemoteImage(url: entry.imageURL, cornerRadius: 10, placeholderIcon: "shippingbox", contentMode: .fit)
+                    .padding(8)
+                    .frame(width: 104, height: 104)
+                    .background(Color.white, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(AppTheme.border, lineWidth: 0.5)
+                    )
+                Text(entry.title.replacingOccurrences(of: "Keep browsing ", with: ""))
+                    .font(.caption)
                     .foregroundStyle(AppTheme.textPrimary)
-                    .lineLimit(1)
-                Spacer(minLength: 8)
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(AppTheme.textSecondary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    .frame(width: 104, alignment: .leading)
             }
-            .padding(10)
-            .surfacePanel(cornerRadius: 16)
         }
         .buttonStyle(.tactile)
     }
@@ -613,7 +598,7 @@ struct GuideView: View {
                     }
                     .padding(14)
                     .frame(width: 156, alignment: .leading)
-                    .surfacePanel(cornerRadius: 22)
+                    .surfacePanel(cornerRadius: 12)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
@@ -767,7 +752,28 @@ struct GuideView: View {
     }
 
     private var jumpButtonBottomPadding: CGFloat {
-        composerHeight + composerBottomPadding + 16
+        composerHeight + composerBottomPadding + Self.dockFadeHeight + 12
+    }
+
+    private static let dockFadeHeight: CGFloat = 22
+
+    /// 输入框和底部标签栏下面的实底。它们原本直接浮在聊天内容上，滚动时文字和图片会从
+    /// 两者之间和背后透出来；铺一块实底，顶部留一小段渐隐，内容滚到这里就淡出。
+    private var bottomDock: some View {
+        VStack(spacing: 0) {
+            LinearGradient(
+                colors: [AppTheme.background.opacity(0), AppTheme.background],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .frame(height: Self.dockFadeHeight)
+            Color.clear
+                .frame(height: composerHeight + composerBottomPadding + 8)
+                .background(AppTheme.background.ignoresSafeArea(edges: .bottom))
+        }
+        .frame(maxWidth: .infinity)
+        .allowsHitTesting(false)
+        .opacity(isVoiceOverlayPresented ? 0 : 1)
     }
 
     private var latestAssistantMessage: ChatMessage? {
@@ -2222,7 +2228,11 @@ struct GuideView: View {
     }
 
     private func openProductDetail(_ product: Product) {
-        productDetailContext = ProductDetailContext(product: product)
+        // 详情页的"为什么推荐"用 AI 在聊天里写的那句理由，取最近一次推荐它的回答
+        let recommendation = messages.reversed().lazy
+            .compactMap { $0.recommendationDescription(for: product.id) }
+            .first
+        productDetailContext = ProductDetailContext(product: product, recommendation: recommendation)
     }
 
     private func addToCart(
@@ -2271,6 +2281,8 @@ struct MessageRow: View {
         let description: String?
         /// 这款商品是所属分区的第一款时，在卡片上方显示分区标题。
         var groupHeader: String? = nil
+        /// 所属分区，分区页签按它筛选
+        var group: String? = nil
         
         init(product: Product, description: String?) {
             self.id = product.id
@@ -2282,8 +2294,12 @@ struct MessageRow: View {
             lhs.product.id == rhs.product.id
                 && lhs.description == rhs.description
                 && lhs.groupHeader == rhs.groupHeader
+                && lhs.group == rhs.group
         }
     }
+
+    /// 选中的分区页签；nil 表示第一个分区
+    @State private var selectedGroup: String?
     
     private var parsedStructuredContent: StructuredContent? {
         guard let structured = message.structuredContent else {
@@ -2362,6 +2378,7 @@ struct MessageRow: View {
                     return cleaned.isEmpty ? nil : cleaned
                 } ?? (product.reason.isEmpty ? nil : product.reason)
                 var section = ProductSection(product: product, description: description)
+                section.group = item?.group.flatMap { $0.isEmpty ? nil : $0 }
                 if let group = item?.group, !group.isEmpty, group != currentGroup {
                     section.groupHeader = group
                     currentGroup = group
@@ -2410,34 +2427,17 @@ struct MessageRow: View {
                             .padding(.vertical, 11)
                             .background(bubbleColor, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                     } else {
-                    // 1. Opening message
+                    // 1. 开场白：不套气泡，像店员直接说话，顶上一个小标签表明是 AI
                     if let opening = openingText {
-                        Text(opening)
-                            .font(.subheadline)
-                            .foregroundStyle(AppTheme.textPrimary)
-                            .lineSpacing(6)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 11)
-                            .background(bubbleColor, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                    .stroke(AppTheme.border, lineWidth: message.sender == .ai ? 1 : 0)
-                            )
+                        VStack(alignment: .leading, spacing: 6) {
+                            AIByline()
+                            aiProse(opening)
+                        }
                     }
 
                     if parsedStructuredContent == nil && message.products.isEmpty {
                         ForEach(Array(middleParagraphs.enumerated()), id: \.offset) { _, paragraph in
-                            Text(paragraph)
-                                .font(.subheadline)
-                                .foregroundStyle(AppTheme.textPrimary)
-                                .lineSpacing(6)
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 11)
-                                .background(bubbleColor, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                        .stroke(AppTheme.border, lineWidth: message.sender == .ai ? 1 : 0)
-                                )
+                            aiProse(paragraph)
                         }
                     }
                     
@@ -2460,56 +2460,71 @@ struct MessageRow: View {
                             .transition(.opacity)
                     }
 
-                    // 2. 商品卡片 + 解说交替展示
-                    ForEach(productSections) { section in
-                        if let header = section.groupHeader {
-                            ProductSectionHeader(title: header) {
-                                onSeeMore(header)
-                            }
-                            .modifier(GhostReveal(isActive: isRevealingStructuredContent))
-                        }
-
-                        ProductCard(
-                            product: section.product,
-                            onDetail: { onProductTap(section.product) },
-                            onAddToCart: onAddToCart
-                        )
-                        .modifier(GhostReveal(isActive: isRevealingStructuredContent))
-                        .transition(.offset(y: 16))
-
-                        if let description = section.description {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(description)
-                                    .font(.subheadline)
-                                    .foregroundStyle(AppTheme.textPrimary)
-                                    .lineSpacing(4)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                Button("View details") {
-                                    onProductTap(section.product)
+                    // 2. 商品列表：多个分区时用页签切换，每行一件商品，AI 理由压成行内一句
+                    if !productSections.isEmpty {
+                        VStack(alignment: .leading, spacing: 0) {
+                            if groupNames.count > 1 {
+                                GroupTabs(
+                                    groups: groupNames,
+                                    counts: groupCounts,
+                                    selected: activeGroup
+                                ) { group in
+                                    withAnimation(.easeOut(duration: 0.18)) { selectedGroup = group }
                                 }
-                                .font(.footnote.weight(.medium))
-                                .foregroundStyle(AppTheme.primary)
-                                .buttonStyle(.tactile)
+                                .modifier(GhostReveal(isActive: isRevealingStructuredContent))
+                            } else if let only = groupNames.first {
+                                Text(only)
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(AppTheme.textPrimary)
+                                    .padding(.vertical, 6)
                             }
-                            .padding(.horizontal, 10)
-                            .padding(.bottom, 6)
-                            .modifier(GhostReveal(isActive: isRevealingStructuredContent))
+
+                            ForEach(visibleSections) { section in
+                                ProductCard(
+                                    product: section.product,
+                                    aiNote: section.description,
+                                    onDetail: { onProductTap(section.product) },
+                                    onAddToCart: onAddToCart
+                                )
+                                .modifier(GhostReveal(isActive: isRevealingStructuredContent))
+                                .transition(.opacity)
+                                if section.id != visibleSections.last?.id {
+                                    Divider()
+                                }
+                            }
+
+                            if let group = activeGroup, message.state == .ready {
+                                Button {
+                                    onSeeMore(group)
+                                } label: {
+                                    HStack(spacing: 4) {
+                                        Text("More like these")
+                                        Image(systemName: "chevron.right")
+                                            .font(.caption2.weight(.semibold))
+                                    }
+                                    .font(.footnote.weight(.medium))
+                                    .foregroundStyle(AppTheme.textPrimary)
+                                }
+                                .buttonStyle(.tactile)
+                                .padding(.top, 4)
+                            }
                         }
                     }
 
                     if let closingSummary {
-                        Text(highlightingProductNames(closingSummary))
-                            .font(.subheadline)
-                            .foregroundStyle(AppTheme.textPrimary)
-                            .lineSpacing(6)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 11)
-                            .background(bubbleColor, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                    .stroke(AppTheme.border, lineWidth: message.sender == .ai ? 1 : 0)
-                            )
-                            .transition(.opacity.combined(with: .move(edge: .top)))
+                        // 结论单独放进浅灰底的小框，和上面的商品列表分开，一眼能找到"怎么选"
+                        VStack(alignment: .leading, spacing: 6) {
+                            AIByline(title: "How to choose")
+                            Text(highlightingProductNames(closingSummary))
+                                .font(.subheadline)
+                                .foregroundStyle(AppTheme.textPrimary)
+                                .lineSpacing(4)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(AppTheme.secondary, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .transition(.opacity)
                     }
                     
                     // 3. 追问 Prompt（点击直接发送）
@@ -2519,13 +2534,18 @@ struct MessageRow: View {
                                 Button(action: {
                                     onFollowUpTap(prompt)
                                 }) {
-                                    Text(prompt)
-                                        .font(.subheadline)
-                                        .foregroundStyle(AppTheme.primary)
-                                        .padding(.horizontal, 14)
-                                        .padding(.vertical, 8)
-                                        .background(AppTheme.secondary.opacity(0.7), in: Capsule())
-                                        .overlay(Capsule().stroke(AppTheme.border, lineWidth: 1))
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "arrow.turn.down.right")
+                                            .font(.caption2.weight(.semibold))
+                                            .foregroundStyle(AppTheme.textTertiary)
+                                        Text(prompt)
+                                            .font(.subheadline)
+                                            .foregroundStyle(AppTheme.textPrimary)
+                                            .multilineTextAlignment(.leading)
+                                    }
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 8)
+                                    .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(AppTheme.border, lineWidth: 1))
                                 }
                                 .buttonStyle(.tactile)
                             }
@@ -2555,17 +2575,7 @@ struct MessageRow: View {
                     }
                     }
                 } else if shouldShowStreamingPlainText {
-                    Text(message.text)
-                        .font(.subheadline)
-                        .foregroundStyle(AppTheme.textPrimary)
-                        .lineSpacing(6)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 11)
-                        .background(bubbleColor, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                .stroke(AppTheme.border, lineWidth: message.sender == .ai ? 1 : 0)
-                        )
+                    aiProse(message.text)
                 } else if !displayText.isEmpty {
                     loadingText
                 }
@@ -2629,12 +2639,12 @@ struct MessageRow: View {
                     Button {
                         onCompareTap(message.products)
                     } label: {
-                        Label("Compare products", systemImage: "square.split.2x1")
+                        Label("Compare these", systemImage: "square.split.2x1")
                             .font(.footnote.weight(.semibold))
-                            .foregroundStyle(AppTheme.primary)
-                            .padding(.horizontal, 14)
+                            .foregroundStyle(AppTheme.textPrimary)
+                            .padding(.horizontal, 12)
                             .padding(.vertical, 8)
-                            .background(AppTheme.softPurple, in: Capsule())
+                            .background(AppTheme.secondary, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                     }
                     .buttonStyle(.tactile)
                 }
@@ -2649,8 +2659,42 @@ struct MessageRow: View {
                 }
             }
 
-            if message.sender == .ai { Spacer(minLength: 44) }
+            if message.sender == .ai { Spacer(minLength: 0) }
         }
+    }
+
+    /// AI 的正文：不套气泡，直接排版
+    private func aiProse(_ text: String) -> some View {
+        Text(text)
+            .font(.subheadline)
+            .foregroundStyle(AppTheme.textPrimary)
+            .lineSpacing(5)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// 出现过的分区，按首次出现的顺序
+    private var groupNames: [String] {
+        var seen: [String] = []
+        for group in productSections.compactMap(\.group) where !seen.contains(group) {
+            seen.append(group)
+        }
+        return seen
+    }
+
+    private var groupCounts: [String: Int] {
+        Dictionary(grouping: productSections.compactMap(\.group), by: { $0 }).mapValues(\.count)
+    }
+
+    private var activeGroup: String? {
+        let groups = groupNames
+        if let selectedGroup, groups.contains(selectedGroup) { return selectedGroup }
+        return groups.first
+    }
+
+    /// 多个分区时只显示当前页签的商品
+    private var visibleSections: [ProductSection] {
+        guard groupNames.count > 1, let active = activeGroup else { return productSections }
+        return productSections.filter { $0.group == active }
     }
     
     @ViewBuilder
@@ -2686,17 +2730,7 @@ struct MessageRow: View {
                 if message.text.count < 10 {
                     ClaudeStyleLoadingStatus(text: message.state.rawValue)
                 } else {
-                    Text(message.text)
-                        .font(.subheadline)
-                        .foregroundStyle(AppTheme.textPrimary)
-                        .lineSpacing(6)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 11)
-                        .background(bubbleColor, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                .stroke(AppTheme.border, lineWidth: message.sender == .ai ? 1 : 0)
-                        )
+                    aiProse(message.text)
                 }
             }
         case .understanding, .retrieving, .generating:
@@ -2794,36 +2828,6 @@ private struct StreamingPulseIndicator: View {
                 phase = (phase + 1) % 3
             }
         }
-    }
-}
-
-/// 首页问候：逐字出现。
-private struct HomeGreeting: View {
-    let text: String
-
-    @State private var revealed = 0
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    var body: some View {
-        // 隐藏的完整文字先占好高度，逐字出现时下面的内容不会跳
-        Text(text)
-            .font(.system(size: 26, weight: .semibold))
-            .hidden()
-            .overlay(alignment: .leading) {
-                Text(String(text.prefix(reduceMotion ? text.count : revealed)))
-                    .font(.system(size: 26, weight: .semibold))
-                    .foregroundStyle(AppTheme.textPrimary)
-            }
-            .accessibilityLabel(text)
-            .task(id: text) {
-                guard !reduceMotion else { return }
-                revealed = 0
-                for count in 1...max(text.count, 1) {
-                    guard !Task.isCancelled else { return }
-                    revealed = count
-                    try? await Task.sleep(nanoseconds: 70_000_000)
-                }
-            }
     }
 }
 
@@ -3573,6 +3577,8 @@ struct ComposerAction: View {
 /// 回答流里的紧凑商品卡：左图右文，一屏能看到多款。点卡片进详情，点按钮直接加购。
 struct ProductCard: View {
     let product: Product
+    /// AI 对这件商品的一句话理由，灰色小字放在价格下面
+    var aiNote: String? = nil
     let onDetail: () -> Void
     let onAddToCart: (Product, [String: String], Int) -> Void
 
@@ -3583,10 +3589,12 @@ struct ProductCard: View {
 
     init(
         product: Product,
+        aiNote: String? = nil,
         onDetail: @escaping () -> Void,
         onAddToCart: @escaping (Product, [String: String], Int) -> Void
     ) {
         self.product = product
+        self.aiNote = aiNote
         self.onDetail = onDetail
         self.onAddToCart = onAddToCart
         _selectedOptions = State(initialValue: product.defaultSpecificationSelection)
@@ -3596,51 +3604,59 @@ struct ProductCard: View {
         product.specifications.contains { $0.options.count > 1 }
     }
 
+    /// 电商列表的商品行：左图右文，标题两行、评分、价格和加购，最后一行是 AI 的理由。
+    /// 不套卡片，行与行之间由列表画分隔线。
     var body: some View {
-        HStack(alignment: .center, spacing: 12) {
-            ProductRemoteImage(url: product.imageURL, cornerRadius: 12, placeholderIcon: "shippingbox", contentMode: .fit)
-                .frame(width: 108, height: 108)
-                .background(Color.white, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        HStack(alignment: .top, spacing: 12) {
+            ProductRemoteImage(url: product.imageURL, cornerRadius: 8, placeholderIcon: "shippingbox", contentMode: .fit)
+                .frame(width: 92, height: 92)
+                .background(Color.white, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(AppTheme.border, lineWidth: 0.5))
 
-            VStack(alignment: .leading, spacing: 5) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text(product.title)
-                    .font(.subheadline.weight(.semibold))
+                    .font(.subheadline)
                     .foregroundStyle(AppTheme.textPrimary)
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
 
-                tagLine
-
-                // 多规格显示完整区间，避免「¥480 起」让用户以为看中的规格也是这个价
-                Text(product.priceRangeDisplay)
-                    .font(.headline.bold())
-                    .foregroundStyle(AppTheme.error)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
+                if let rating = product.rating {
+                    RatingLine(rating: rating, count: product.ratingCount)
+                }
 
                 if let caption = product.budgetHint?.caption {
                     Text(caption)
-                        .font(.caption2.weight(.medium))
+                        .font(.caption)
                         .foregroundStyle(AppTheme.textSecondary)
                         .lineLimit(1)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 2)
-                        .background(AppTheme.secondary.opacity(0.6), in: Capsule())
                 }
 
-                if product.referenceOnly == true {
-                    Text("Availability unknown")
-                        .font(.caption2)
-                        .foregroundStyle(AppTheme.textSecondary)
-                } else {
-                    addButton.padding(.top, 2)
+                HStack(alignment: .center, spacing: 8) {
+                    // 多规格显示完整区间，避免「$25 起」让用户以为看中的规格也是这个价
+                    Text(product.priceRangeDisplay)
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(AppTheme.textPrimary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                    Spacer(minLength: 4)
+                    if product.referenceOnly == true {
+                        Text("Availability unknown")
+                            .font(.caption2)
+                            .foregroundStyle(AppTheme.textSecondary)
+                    } else {
+                        addButton
+                    }
+                }
+
+                if let aiNote, !aiNote.isEmpty {
+                    AINote(text: aiNote)
+                        .padding(.top, 2)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(10)
-        .surfacePanel(cornerRadius: 16)
-        .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .padding(.vertical, 12)
+        .contentShape(Rectangle())
         .onTapGesture(perform: onDetail)
         .accessibilityAction(named: "View details", onDetail)
         .sheet(isPresented: $showSpecSheet) {
@@ -3655,20 +3671,11 @@ struct ProductCard: View {
             )
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
-            .presentationCornerRadius(28)
+            .presentationCornerRadius(20)
         }
     }
 
-    @ViewBuilder
-    private var tagLine: some View {
-        if !product.tags.isEmpty {
-            Text(product.tags.prefix(2).joined(separator: " · "))
-                .font(.caption)
-                .foregroundStyle(AppTheme.textSecondary)
-                .lineLimit(1)
-        }
-    }
-
+    /// 小圆形加购按钮；多规格先弹选规格。
     private var addButton: some View {
         Button {
             if needsSpecChoice {
@@ -3677,21 +3684,16 @@ struct ProductCard: View {
                 commitAdd()
             }
         } label: {
-            HStack(spacing: 4) {
-                if justAdded {
-                    Image(systemName: "checkmark")
-                        .font(.caption2.weight(.bold))
-                }
-                Text(justAdded ? "Added" : (needsSpecChoice ? "Choose options" : "Add to cart"))
-            }
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(justAdded ? AppTheme.success : .white)
-            .padding(.horizontal, 14)
-            .frame(height: 30)
-            .background(justAdded ? AppTheme.success.opacity(0.14) : AppTheme.primary, in: Capsule())
+            Image(systemName: justAdded ? "checkmark" : "plus")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(justAdded ? AppTheme.success : AppTheme.textPrimary)
+                .frame(width: 32, height: 32)
+                .overlay(Circle().stroke(justAdded ? AppTheme.success : AppTheme.border, lineWidth: 1))
+                .contentShape(Circle())
         }
         .buttonStyle(.tactile)
         .disabled(justAdded)
+        .accessibilityLabel(justAdded ? "Added to cart" : (needsSpecChoice ? "Choose options" : "Add to cart"))
     }
 
     private func commitAdd() {
@@ -3774,7 +3776,7 @@ struct SpecSelectionCard: View {
         }
         .padding(14)
         .frame(maxWidth: 320, alignment: .leading)
-        .surfacePanel(cornerRadius: 22)
+        .surfacePanel(cornerRadius: 12)
     }
 
     private func chip(dimension: String, value: String) -> some View {
@@ -3811,6 +3813,11 @@ struct CategoryEntry: Identifiable {
 
     /// Natural-language search query sent to the agent when the shortcut is selected.
     var query: String { "Browse \(name)" }
+
+    /// 宫格里放不下长名字，取 & 前面的部分
+    var shortName: String {
+        name.components(separatedBy: " & ").first ?? name
+    }
 
     var icon: String {
         switch name {
@@ -4177,3 +4184,106 @@ private extension AgentStatusPhase {
     .background(AppTheme.background)
 }
 #endif
+
+
+/// "★ 4.5 (11,203)"：星级用金色，人数用浅灰，评分人数让评分有分量。
+struct RatingLine: View {
+    let rating: Double
+    let count: Int?
+
+    var body: some View {
+        HStack(spacing: 3) {
+            Image(systemName: "star.fill")
+                .font(.system(size: 10))
+                .foregroundStyle(AppTheme.star)
+            Text(String(format: "%.1f", rating))
+                .font(.caption.weight(.medium))
+                .foregroundStyle(AppTheme.textPrimary)
+            if let count, count > 0 {
+                Text("(\(count.formatted()))")
+                    .font(.caption)
+                    .foregroundStyle(AppTheme.textTertiary)
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// AI 写的内容统一用 ✦ + 灰字标出来，和商品本身的信息分开。
+struct AINote: View {
+    let text: String
+    var lineLimit: Int? = 2
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 5) {
+            Image(systemName: "sparkle")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(AppTheme.brand)
+            Text(text)
+                .font(.footnote)
+                .foregroundStyle(AppTheme.textSecondary)
+                .lineLimit(lineLimit)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+/// AI 回答顶部的小标签"✦ CartPilot"。
+struct AIByline: View {
+    var title = "CartPilot"
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "sparkle")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(AppTheme.brand)
+            Text(title)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(AppTheme.textSecondary)
+        }
+    }
+}
+
+
+/// 推荐结果的分区页签：文字 + 数量，选中的下面一条墨色线。
+private struct GroupTabs: View {
+    let groups: [String]
+    let counts: [String: Int]
+    let selected: String?
+    let onSelect: (String) -> Void
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 18) {
+                ForEach(groups, id: \.self) { group in
+                    let isSelected = group == selected
+                    Button {
+                        onSelect(group)
+                    } label: {
+                        VStack(spacing: 6) {
+                            HStack(spacing: 4) {
+                                Text(group)
+                                    .font(.subheadline.weight(isSelected ? .semibold : .regular))
+                                if let count = counts[group] {
+                                    Text("\(count)")
+                                        .font(.caption)
+                                        .foregroundStyle(AppTheme.textTertiary)
+                                }
+                            }
+                            .foregroundStyle(isSelected ? AppTheme.textPrimary : AppTheme.textSecondary)
+                            Rectangle()
+                                .fill(isSelected ? AppTheme.textPrimary : .clear)
+                                .frame(height: 2)
+                        }
+                        .fixedSize()
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(AppTheme.border).frame(height: 0.5)
+        }
+        .padding(.bottom, 2)
+    }
+}

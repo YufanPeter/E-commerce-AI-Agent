@@ -123,25 +123,30 @@ struct PreferenceView: View {
     @State private var draft = ""
     @State private var showClearConfirm = false
     @State private var showActivity = false
+    @State private var orders: [OrderPayload] = []
+    @State private var orderImages: [String: URL] = [:]
+    @State private var ordersLoaded = false
     @FocusState private var inputFocused: Bool
+
+    private let orderService = RESTProductService()
 
     private let examples = ["I have oily skin", "I usually wear size 9", "I avoid Nike", "My budget is usually between $30 and $50", "I am allergic to latex"]
 
     var body: some View {
         NavigationStack {
             ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 24) {
+                VStack(alignment: .leading, spacing: 28) {
+                    ordersSection
                     if preferenceStore.loadFailed {
                         failureCard
                     } else if let memory = preferenceStore.memory {
-                        overview(memory)
+                        VStack(alignment: .leading, spacing: 4) {
+                            sectionTitle("My preferences")
+                            overview(memory)
+                        }
                         tellSection(memory)
                         if !memory.suggestions.isEmpty { suggestionsSection(memory.suggestions) }
-                        if memory.groups.isEmpty && memory.suggestions.isEmpty {
-                            emptyExplanation
-                        } else {
-                            ForEach(memory.groups) { groupSection($0) }
-                        }
+                        ForEach(memory.groups) { groupSection($0) }
                         if !memory.activity.isEmpty { activitySection(memory.activity) }
                         settingsSection(memory)
                     } else {
@@ -151,19 +156,27 @@ struct PreferenceView: View {
                     }
                 }
                 .padding(.horizontal, 20)
-                .padding(.top, 2)
+                .padding(.top, 8)
                 .padding(.bottom, 120)
             }
             .scrollDismissesKeyboard(.interactively)
             .background(AppTheme.background)
-            .navigationTitle("Memory")
+            .navigationTitle("Me")
             .overlay(alignment: .bottom) { toastView }
-            .task { await preferenceStore.load() }
+            .task {
+                await preferenceStore.load()
+                await loadOrders()
+            }
             .onChange(of: isVisible) { _, visible in
-                if visible { Task { await preferenceStore.load() } }
+                if visible {
+                    Task {
+                        await preferenceStore.load()
+                        await loadOrders()
+                    }
+                }
             }
             .confirmationDialog(
-                "Clear all memories?",
+                "Clear all preferences?",
                 isPresented: $showClearConfirm,
                 titleVisibility: .visible
             ) {
@@ -182,17 +195,15 @@ struct PreferenceView: View {
     /// 标题下的一句话。具体记了什么下面都列着，这里不再重复。
     private func overview(_ memory: MemoryViewPayload) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(memory.count == 0 ? "No memories yet" : "\(memory.count) saved memories")
+            Text(memory.count == 0 ? "Nothing saved yet. Tell CartPilot what matters to you." : "\(memory.count) saved · used to tailor recommendations")
                 .font(.subheadline)
                 .foregroundStyle(AppTheme.textSecondary)
             if !memory.personalizationEnabled {
-                Label("Recommendations are not using memory", systemImage: "pause.circle")
+                Label("Recommendations are not using your preferences", systemImage: "pause.circle")
                     .font(.caption.weight(.medium))
                     .foregroundStyle(AppTheme.primary)
             }
         }
-        // 和系统大标题的左边缘对齐（标题比内容区靠左一点）
-        .padding(.leading, -3)
     }
 
     // MARK: 直接说
@@ -201,7 +212,7 @@ struct PreferenceView: View {
         let canSend = !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !preferenceStore.isSending
         return VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
-                TextField("Tell your shopping assistant something", text: $draft, axis: .vertical)
+                TextField("e.g. I wear size 9, I avoid latex", text: $draft, axis: .vertical)
                     .lineLimit(1...3)
                     .font(.subheadline)
                     .focused($inputFocused)
@@ -210,26 +221,26 @@ struct PreferenceView: View {
                 Button(action: send) {
                     Group {
                         if preferenceStore.isSending {
-                            ProgressView().tint(.white)
+                            ProgressView().tint(AppTheme.background)
                         } else {
                             Image(systemName: "arrow.up")
                                 .font(.system(size: 14, weight: .bold))
                         }
                     }
-                    .foregroundStyle(.white)
+                    .foregroundStyle(AppTheme.background)
                     .frame(width: 32, height: 32)
-                    .background(canSend || preferenceStore.isSending ? AppTheme.primary : AppTheme.textSecondary.opacity(0.35), in: Circle())
+                    .background(canSend || preferenceStore.isSending ? AppTheme.primary : AppTheme.textTertiary, in: Circle())
                     .frame(width: 44, height: 44)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.tactile)
                 .disabled(!canSend)
-                .accessibilityLabel("Save a memory")
+                .accessibilityLabel("Save preference")
             }
             .padding(.leading, 16)
             .padding(.trailing, 6)
             .frame(minHeight: 52)
-            .surfacePanel(cornerRadius: 26)
+            .surfacePanel(cornerRadius: 12)
 
             if memory.count == 0 {
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -237,9 +248,9 @@ struct PreferenceView: View {
                         ForEach(examples, id: \.self) { example in
                             Button(example) { draft = example; inputFocused = true }
                                 .font(.footnote)
-                                .foregroundStyle(AppTheme.primary)
+                                .foregroundStyle(AppTheme.textPrimary)
                                 .padding(.horizontal, 12)
-                                .padding(.vertical, 8)
+                                .padding(.vertical, 7)
                                 .background(AppTheme.secondary, in: Capsule())
                                 .buttonStyle(.tactile)
                         }
@@ -264,14 +275,16 @@ struct PreferenceView: View {
 
     private func suggestionsSection(_ items: [MemoryItemPayload]) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            sectionTitle("Suggestions to remember")
+            HStack(spacing: 6) {
+                AIByline(title: "Suggested from your activity")
+            }
             VStack(spacing: 0) {
                 ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                     if index > 0 { rowDivider }
                     suggestionRow(item)
                 }
             }
-            .surfacePanel(cornerRadius: 18)
+            .surfacePanel(cornerRadius: 12)
         }
     }
 
@@ -296,11 +309,11 @@ struct PreferenceView: View {
                 HStack(spacing: 8) {
                     Button("Save") { Task { await preferenceStore.confirm(item) } }
                         .font(.footnote.weight(.semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(AppTheme.background)
                         .padding(.horizontal, 20)
                         .frame(minHeight: 36)
                         .background(AppTheme.primary, in: Capsule())
-                    Button("Dismiss") { Task { await preferenceStore.reject(item) } }
+                    Button("Not now") { Task { await preferenceStore.reject(item) } }
                         .font(.footnote.weight(.medium))
                         .foregroundStyle(AppTheme.textSecondary)
                         .padding(.horizontal, 14)
@@ -325,7 +338,7 @@ struct PreferenceView: View {
                     memoryRow(item)
                 }
             }
-            .surfacePanel(cornerRadius: 18)
+            .surfacePanel(cornerRadius: 12)
         }
     }
 
@@ -343,7 +356,7 @@ struct PreferenceView: View {
                     .fixedSize(horizontal: false, vertical: true)
                 Text(rowEffect(item))
                     .font(.caption)
-                    .foregroundStyle(item.needsCare ? AppTheme.error : AppTheme.primary)
+                    .foregroundStyle(item.needsCare ? AppTheme.error : AppTheme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(.vertical, 14)
@@ -368,7 +381,7 @@ struct PreferenceView: View {
     private func memoryIcon(_ item: MemoryItemPayload, topInset: CGFloat = 12) -> some View {
         Image(systemName: memorySymbol(item.kind))
             .font(.system(size: 14, weight: .medium))
-            .foregroundStyle(item.needsCare ? AppTheme.error : AppTheme.primary)
+            .foregroundStyle(item.needsCare ? AppTheme.error : AppTheme.textPrimary)
             .frame(width: 32, height: 32)
             .background(AppTheme.secondary, in: Circle())
             .padding(.top, topInset)
@@ -376,7 +389,7 @@ struct PreferenceView: View {
 
     private func memorySymbol(_ kind: String) -> String {
         switch kind {
-        case "budget", "price_tier": return "yensign"
+        case "budget", "price_tier": return "dollarsign"
         case "brand_like": return "heart"
         case "brand_avoid": return "nosign"
         case "avoid_term": return "exclamationmark.shield"
@@ -390,37 +403,13 @@ struct PreferenceView: View {
             return "You said: \(evidence)"
         }
         if let evidence = item.evidence, !evidence.isEmpty {
-            return "\(item.sourceLabel)：\(evidence)"
+            return "\(item.sourceLabel): \(evidence)"
         }
         return item.sourceLabel
     }
 
     private func rowEffect(_ item: MemoryItemPayload) -> String {
         item.useCount > 0 ? "\(item.effect) · Used in \(item.useCount) recommendations" : item.effect
-    }
-
-    // MARK: 空状态
-
-    private var emptyExplanation: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: "text.bubble")
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(AppTheme.primary)
-                .frame(width: 32, height: 32)
-                .background(AppTheme.secondary, in: Circle())
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Tell us what matters to you")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(AppTheme.textPrimary)
-                Text("Save preferences such as your size or brands to avoid. One-time requests stay in the conversation.")
-                    .font(.caption)
-                    .foregroundStyle(AppTheme.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .surfacePanel(cornerRadius: 18)
     }
 
     // MARK: 最近的行为
@@ -433,7 +422,7 @@ struct PreferenceView: View {
                 HStack(spacing: 12) {
                     Image(systemName: "clock")
                         .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(AppTheme.primary)
+                        .foregroundStyle(AppTheme.textPrimary)
                         .frame(width: 32, height: 32)
                         .background(AppTheme.secondary, in: Circle())
                     VStack(alignment: .leading, spacing: 2) {
@@ -468,7 +457,7 @@ struct PreferenceView: View {
                 .transition(.opacity)
             }
         }
-        .surfacePanel(cornerRadius: 18)
+        .surfacePanel(cornerRadius: 12)
     }
 
     private func activityRow(_ event: MemoryActivityPayload) -> some View {
@@ -496,10 +485,10 @@ struct PreferenceView: View {
                 set: { enabled in Task { await preferenceStore.setPersonalization(enabled) } }
             )) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Use memory in recommendations")
+                    Text("Personalize recommendations")
                         .font(.subheadline.weight(.medium))
                         .foregroundStyle(AppTheme.textPrimary)
-                    Text(memory.personalizationEnabled ? "Turning this off keeps your saved memories." : "Recommendations are not using your memories.")
+                    Text(memory.personalizationEnabled ? "Turning this off keeps what you saved." : "Recommendations ignore your saved preferences.")
                         .font(.caption)
                         .foregroundStyle(AppTheme.textSecondary)
                 }
@@ -510,7 +499,7 @@ struct PreferenceView: View {
             if memory.count > 0 || !memory.activity.isEmpty {
                 Divider().padding(.leading, 14)
                 Button { showClearConfirm = true } label: {
-                    Text("Clear all memories")
+                    Text("Clear all preferences")
                         .font(.subheadline)
                         .foregroundStyle(AppTheme.error)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -521,7 +510,7 @@ struct PreferenceView: View {
                 .buttonStyle(.plain)
             }
         }
-        .surfacePanel(cornerRadius: 18)
+        .surfacePanel(cornerRadius: 12)
     }
 
     // MARK: 通用
@@ -536,7 +525,7 @@ struct PreferenceView: View {
             Image(systemName: "wifi.exclamationmark")
                 .font(.title2)
                 .foregroundStyle(AppTheme.textSecondary)
-            Text("Could not connect to load memory.")
+            Text("Could not load your preferences.")
                 .font(.subheadline)
                 .foregroundStyle(AppTheme.textPrimary)
             Button("Try again") { Task { await preferenceStore.load() } }
@@ -551,9 +540,89 @@ struct PreferenceView: View {
 
     private func sectionTitle(_ text: String) -> some View {
         Text(text)
-            .font(.footnote.weight(.semibold))
-            .foregroundStyle(AppTheme.textSecondary)
-            .padding(.horizontal, 2)
+            .font(.headline)
+            .foregroundStyle(AppTheme.textPrimary)
+    }
+
+    // MARK: 订单
+
+    private func loadOrders() async {
+        guard let result = try? await orderService.fetchOrders() else {
+            ordersLoaded = true
+            return
+        }
+        orders = result.orders
+        orderImages = result.images
+        ordersLoaded = true
+    }
+
+    private var ordersSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionTitle("Orders")
+            if orders.isEmpty {
+                HStack(spacing: 12) {
+                    Image(systemName: "shippingbox")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(AppTheme.textPrimary)
+                        .frame(width: 32, height: 32)
+                        .background(AppTheme.secondary, in: Circle())
+                    Text(ordersLoaded ? "No orders yet. Orders you place from the cart show up here." : "Loading orders…")
+                        .font(.subheadline)
+                        .foregroundStyle(AppTheme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                }
+                .padding(14)
+                .surfacePanel(cornerRadius: 12)
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(Array(orders.prefix(3).enumerated()), id: \.element.id) { index, order in
+                        if index > 0 { Divider().padding(.leading, 14) }
+                        orderRow(order)
+                    }
+                }
+                .surfacePanel(cornerRadius: 12)
+            }
+        }
+    }
+
+    private func orderRow(_ order: OrderPayload) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(order.status == "placed" ? "Order placed" : order.status.capitalized)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(AppTheme.textPrimary)
+                Spacer(minLength: 8)
+                if let when = MemoryActivityTime.relative(from: String(order.createdAt.prefix(19))) {
+                    Text(when)
+                        .font(.caption)
+                        .foregroundStyle(AppTheme.textSecondary)
+                }
+            }
+            HStack(spacing: 8) {
+                ForEach(Array(order.lines.prefix(4).enumerated()), id: \.offset) { _, line in
+                    ProductRemoteImage(url: orderImages[line.productID], cornerRadius: 8, placeholderIcon: "shippingbox", contentMode: .fit)
+                        .padding(4)
+                        .frame(width: 56, height: 56)
+                        .background(Color.white, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .stroke(AppTheme.border, lineWidth: 0.5)
+                        )
+                }
+                if order.lines.count == 1, let line = order.lines.first {
+                    Text(line.title)
+                        .font(.footnote)
+                        .foregroundStyle(AppTheme.textSecondary)
+                        .lineLimit(2)
+                }
+                Spacer(minLength: 0)
+            }
+            Text("\(order.itemCount) \(order.itemCount == 1 ? "item" : "items") · $\(String(format: "%.2f", order.total))")
+                .font(.footnote)
+                .foregroundStyle(AppTheme.textPrimary)
+        }
+        .padding(14)
     }
 
     // MARK: 操作反馈

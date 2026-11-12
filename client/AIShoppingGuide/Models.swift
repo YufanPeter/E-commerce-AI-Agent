@@ -58,6 +58,9 @@ struct Product: Identifiable, Hashable, Codable {
     /// 商品问答，详情页"问问导购"用。旧对话里存的商品没有这个字段。
     var faqs: [ProductFAQ]? = nil
     var referenceOnly: Bool? = nil
+    /// 平均评分（满分 5）和评分人数，商品行和详情页的星级用。没有时不显示。
+    var rating: Double? = nil
+    var ratingCount: Int? = nil
 
     init(
         id: String = UUID().uuidString,
@@ -263,7 +266,7 @@ struct CartItem: Identifiable, Hashable {
 
     var specificationSummary: String {
         sortedOptions
-            .map { "\($0.key)：\($0.value)" }
+            .map { "\($0.key): \($0.value)" }
             .joined(separator: "  ")
     }
 
@@ -487,6 +490,8 @@ extension ChatMessage {
 
 struct ProductDetailContext: Identifiable, Hashable {
     let product: Product
+    /// 聊天里 AI 对这件商品写的推荐理由（1-2 句）；不是从推荐打开时为 nil。
+    var recommendation: String? = nil
 
     var id: String { product.id }
 }
