@@ -69,6 +69,8 @@ struct GuideView: View {
     /// Pending image attachment shown in the input area until it is sent with optional text; nil means no attachment.
     @State private var pendingImageData: Data?
     @State private var pendingMemoryUpdate: MemoryUpdatePayload?
+    /// Changes with each saved-memory banner, so a newer one restarts the auto-dismiss timer.
+    @State private var memoryBannerToken = UUID()
     @State private var isVoiceOverlayPresented = false
     /// 回答刚结束时麦克风暂不响应，见 handleMicTap。
     @State private var micTapsIgnoredUntil = Date.distantPast
@@ -152,6 +154,14 @@ struct GuideView: View {
                         .padding(.bottom, composerBottomPadding + composerHeight + 10)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                         .zIndex(2)
+                        .task(id: memoryBannerToken) {
+                            // Hides itself after 3 s; OK / Undo still close it at once.
+                            try? await Task.sleep(nanoseconds: 3_000_000_000)
+                            guard !Task.isCancelled else { return }
+                            withAnimation(.easeOut(duration: 0.18)) {
+                                self.pendingMemoryUpdate = nil
+                            }
+                        }
                 }
             }
             .background(AppTheme.background)
@@ -1340,6 +1350,7 @@ struct GuideView: View {
                 case .memoryUpdate:
                     if let update = event.memoryUpdate {
                         preferenceStore.applyMemoryUpdate(update)
+                        memoryBannerToken = UUID()
                         withAnimation(.easeOut(duration: 0.18)) {
                             pendingMemoryUpdate = update
                         }
