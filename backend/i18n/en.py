@@ -412,9 +412,12 @@ PERSONALIZATION_LABELS = {
     "brand_avoid": "left out a brand they never buy",
     # Named plainly: "left out products containing something they avoid (fragrance)" came
     # back as "fragrance-free options left out". Only listings that state the ingredient are
-    # removed; the rest are silent, so they must not be called free of it either.
-    "avoid_term": "left out products whose listings say they contain an ingredient the shopper avoids (never call the "
-                  "remaining ones free of it unless their listing says so)",
+    # removed. Each card's attribute_checks says whether its listing states it is free of the
+    # ingredient; without that the opening once said "none states fragrance-free" while the
+    # first card's listing did.
+    "avoid_term": "left out products whose listings say they contain an ingredient the shopper avoids (a product whose "
+                  "attribute_checks marks it \"free\" has a listing stating it is free of it; the others' listings don't "
+                  "say, so never call them free of it, and never sum all products up as one or the other)",
     "brand_like": "favored a brand they like",
     "brand_like_inferred": "considered brands they often browse",
     "budget": "considered their usual budget",

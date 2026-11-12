@@ -166,6 +166,15 @@ def test_rejected_attribute_uses_catalog_evidence(store):
     assert _ids(result)[0] == "B000000002"
 
 
+def test_a_remembered_ingredient_is_marked_where_the_listing_states_it_free(store):
+    # Saved memory removes listings that state it; a listing stated free of it says so.
+    service = CatalogSearchService(store, FakeIndex(), FakeIndex(), reranker=FakeReranker([]))
+    result = service.search("smartwatches", user_profile={"avoid_terms": ["alcohol"]})
+    checks = {hit.product_id.removeprefix("amz_"): hit.attribute_checks for hit in result.hits}
+    assert "B000000001" not in checks
+    assert checks["B000000002"] == {"alcohol": "free"} and not checks["B000000003"]
+
+
 def test_confirmed_products_outrank_unknown_ones_beyond_the_rerank_pool(store, monkeypatch):
     monkeypatch.setenv("USE_RERANK", "1")
     monkeypatch.setattr("search.catalog_search._RERANK_POOL", 1)

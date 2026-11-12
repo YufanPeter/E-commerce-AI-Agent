@@ -20,6 +20,10 @@ from search.query_understanding import ParsedQuery
 _SHOWN = 5
 _POOL = 60
 _PRICE_NOTE = "Prices and stock are simulated for this demo."
+_COMPARE_HINT = (
+    "Say what a product shares with the original only from that product's own title and evidence, "
+    "and never claim a feature is missing or unconfirmed across all of them."
+)
 
 
 def _text_result(tool: str, text: str) -> ToolResult:
@@ -86,7 +90,10 @@ class KnowledgeTool:
         if not hits:
             return _text_result(self.name, f"I couldn't find anything similar and cheaper than {title}.")
         lead = "cheaper options" if wants_cheaper else "similar options"
-        return self._cards(hits, query, session, f"Here are {lead} based on {title}.")
+        result = self._cards(hits, query, session, f"Here are {lead} based on {title}.")
+        # The original's title once led to "none is confirmed to be aluminum" over a list
+        # whose first title said Aluminum.
+        return replace(result, composer_hint=f"{result.composer_hint} {_COMPARE_HINT}")
 
     def _like(self, focus: dict[str, Any], session: AgentSession, slots: dict[str, Any], limit: float | None) -> ToolResult:
         """Products of the focus product's own type whose listings read like it.
@@ -107,7 +114,7 @@ class KnowledgeTool:
         )
         remembered = slots.get("history_product")
         when = f", which the shopper {remembered['action']} on {remembered['at']}" if remembered else ""
-        note = f"These are {label} similar to “{title}”{when}. Open by naming that product in a few words."
+        note = f"These are {label} similar to “{title}”{when}. Open by naming that product in a few words. {_COMPARE_HINT}"
         return replace(result, composer_hint=f"{note} {result.composer_hint or ''}".strip())
 
     def _accessories(self, focus: dict[str, Any], session: AgentSession, service: Any) -> ToolResult:

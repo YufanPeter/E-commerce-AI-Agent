@@ -290,6 +290,12 @@ class CatalogSearchService:
             if canonical in contains:
                 return None
             checks[term] = "free" if canonical in free_of else "unknown"
+        # A listing stated free of a remembered ingredient says so on its card, so the reply
+        # can tell those apart. Silent listings get no mark: memory applies to every search,
+        # and "fragrance not confirmed" on headphones would be noise.
+        for term in avoided:
+            if _ATTRIBUTE_SYNONYMS.get(term, term) in free_of:
+                checks.setdefault(term, "free")
         for constraint in intent.numeric:
             met = satisfies(self._attributes.get((product_id, constraint["attribute"]), ()), constraint["op"], constraint["value"])
             if met is False:
