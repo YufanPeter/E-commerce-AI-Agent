@@ -111,3 +111,24 @@ def test_a_shopper_with_no_history_hears_so():
     recommend = RecommendTool(search_service=_Service(), decomposer=lambda q: [], product_store=SimpleNamespace())
     result = KnowledgeTool("similar", recommend).run("something like what I bought last time", AgentSession(), {})
     assert "don't have any products you bought" in result.narrative_override
+
+
+def test_a_first_turn_is_cached_on_everything_the_router_reads(monkeypatch):
+    from agent import intent_router
+
+    calls = []
+    monkeypatch.setattr(intent_router, "is_english", lambda: True)
+    monkeypatch.setattr(intent_router, "_route_uncached", lambda q, s, t: calls.append(q) or IntentDecision("recommend", q, "high", ""))
+    intent_router.clear_route_cache()
+
+    def first_turn(trail):
+        session = AgentSession()
+        session.product_trail = trail
+        return intent_router.route("bluetooth speaker", session)
+
+    bought = [{**SPEAKER, "action": "bought", "at": "2026-11-10"}]
+    first_turn(bought), first_turn(bought)
+    assert len(calls) == 1  # A shopper with history still hits on the same opening.
+    first_turn([{**SPEAKER, "action": "viewed", "at": "2026-11-11"}])
+    assert len(calls) == 2  # Different history is a different question for the router.
+    intent_router.clear_route_cache()

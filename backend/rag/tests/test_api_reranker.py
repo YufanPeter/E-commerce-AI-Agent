@@ -139,3 +139,16 @@ def test_chroma_retriever_uses_matching_ark_collection_on_primary_failure():
 
     assert [chunk.product_id for chunk in chunks] == ["a"]
     assert retriever.fallback_collection.calls[0]["query_texts"] == ["防晒"]
+
+
+def test_the_same_query_over_the_same_documents_is_scored_once():
+    client = _FakeClient(payload={"scores": [0.2, 0.9]})
+    reranker = ApiReranker(client=client, model="rerank", base_url="https://rerank.test")
+    chunks = [_chunk("a", "light running shoes", 0.4), _chunk("b", "thick sole running shoes", 0.2)]
+    first = reranker.rerank("running shoes", chunks)
+    again = reranker.rerank("running shoes", chunks)
+    assert len(client.calls) == 1
+    assert [(i.product_id, i.rerank_score) for i in again] == [(i.product_id, i.rerank_score) for i in first]
+    reranker.rerank("running shoes", [chunks[0], _chunk("b", "a changed listing", 0.2)])
+    reranker.rerank("trail shoes", chunks)
+    assert len(client.calls) == 3  # A changed document or query is scored again.

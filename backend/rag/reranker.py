@@ -12,8 +12,10 @@ indices. Scores must therefore be aligned back to the original documents before 
 
 from dataclasses import dataclass
 from functools import lru_cache
+import hashlib
 from typing import TYPE_CHECKING, Any, Iterable
 
+from llm.cache import TTLCache
 from rag.retriever import RetrievedChunk
 
 if TYPE_CHECKING:
@@ -56,6 +58,9 @@ class ApiReranker:
         self._client = client
         self._model = model
         self._base_url = base_url
+        # Same query over the same documents scores the same. A repeated search hits every
+        # other cache (route, parse, embedding, narrative), so this call was all that remained.
+        self._scores: TTLCache[list[float]] = TTLCache(maxsize=512)
 
     def rerank(
         self,
@@ -70,15 +75,19 @@ class ApiReranker:
         # 上游召回通常 ≤50，这里做保护性截断，也兼容 fallback 服务限制。
         limited_chunks = chunk_list[:50]
         documents = [chunk.document for chunk in limited_chunks]
-        payload = {
-            "model": self._model,
-            "query": query,
-            "documents": documents,
-            "top_n": len(documents),
-        }
-        response = self._client.post(self._base_url, json=payload)
-        response.raise_for_status()
-        scores = _parse_rerank_scores(response.json(), documents)
+        key = (self._model, query, tuple(hashlib.sha1(d.encode("utf-8")).hexdigest() for d in documents))
+        scores = self._scores.get(key)
+        if scores is None:
+            payload = {
+                "model": self._model,
+                "query": query,
+                "documents": documents,
+                "top_n": len(documents),
+            }
+            response = self._client.post(self._base_url, json=payload)
+            response.raise_for_status()
+            scores = _parse_rerank_scores(response.json(), documents)
+            self._scores.set(key, scores)
 
         scored = [
             RerankedChunk(chunk=chunk, rerank_score=float(score))

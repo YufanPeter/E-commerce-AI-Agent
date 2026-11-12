@@ -222,8 +222,10 @@ def clear_route_cache() -> None:
 
 def route(query: str, session: AgentSession, timeout: float = 6.0) -> IntentDecision:
     """主入口。LLM 失败时抛异常，由 orchestrator 决定降级。"""
-    stateless = not session.history_for_router() and not (is_english() and _english_state(session))
-    cache_key = " ".join((query or "").split()) if stateless else None
+    # A first turn is keyed on everything the router reads, so a shopper with earlier
+    # products (which the router sees) still hits when they open a chat the same way.
+    first_turn = not session.history_for_router()
+    cache_key = _build_user_content(" ".join((query or "").split()), session) if first_turn else None
     if cache_key:
         cached = _FIRST_TURN_CACHE.get(cache_key)
         if cached is not None:
