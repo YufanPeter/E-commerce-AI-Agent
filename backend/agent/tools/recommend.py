@@ -23,7 +23,7 @@ from i18n import en as english
 from i18n import is_english
 from catalog_config import PROFILE
 from search.query_decomposer import SubRequest, decompose_query
-from search.query_understanding import ParsedQuery
+from search.query_understanding import ParsedQuery, expand_sub_categories
 from search.search_service import ProductHit, SearchResult, SearchService
 
 
@@ -569,8 +569,10 @@ class RecommendTool:
             caps: list[tuple[Callable[[ProductHit], str], int]] = [
                 (lambda h: _canonical_brand(h.brand), _MAX_PER_BRAND),
             ]
-            # Add a subcategory cap only when browsing an entire category.
-            if not getattr(result.parsed, "sub_category", None):
+            # Cap each subcategory when browsing a category or a type that spans several leaves
+            # ("Activewear" is shorts, socks and running shoes; five shorts would hide the rest).
+            sub_category = getattr(result.parsed, "sub_category", None)
+            if not sub_category or len(expand_sub_categories([sub_category])) > 1:
                 caps.append((lambda h: h.sub_category or "", _MAX_PER_SUBCATEGORY))
             hits = _diversify(self._apply_budget_fit_bonus(result.hits, result.parsed), top_k, caps)
         else:
@@ -595,6 +597,7 @@ class RecommendTool:
             "category": result.parsed.category,
             "max_price": result.parsed.max_price,
             "unavailable_terms": list(getattr(result.parsed, "unavailable_terms", None) or []),
+            "instead_of": getattr(result.parsed, "instead_of", None),
         }
 
         payload = {
@@ -626,6 +629,11 @@ class RecommendTool:
             hint = f"商品库里没有用户点名的「{unavailable}」。请坦诚说明没有，不要假装有，追问里给相近品类或品牌的方向。"
         elif not hits:
             hint = "本次未命中任何商品，请坦诚告知用户并给出可能放宽的方向建议。"
+        elif getattr(result.parsed, "instead_of", None):
+            hint = (
+                f"商品库不卖「{result.parsed.instead_of}」本身，这 {len(hits)} 款是它的配件。"
+                "开场白先坦诚说明这一点，再介绍配件。"
+            )
         else:
             hint = f"已为用户找到 {len(hits)} 款商品，请为每款写一句约 40 字的总结，说清核心卖点并补上适用人群或场景，不要只写一个短语。"
             memory_hint = _personalization_hint(payload["personalization"], session)
@@ -635,6 +643,7 @@ class RecommendTool:
             hint = english.search_hint(
                 len(hits), showing_more=exclude_seen, vague=result.parsed.needs_clarification,
                 unavailable=", ".join(getattr(result.parsed, "unavailable_terms", None) or []),
+                instead_of=getattr(result.parsed, "instead_of", None) or "",
             )
             if hits:
                 hint = f"{hint} {_personalization_hint(payload['personalization'], session)}".strip()

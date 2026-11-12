@@ -9,7 +9,7 @@ user, and prices must appear in the query.
 from __future__ import annotations
 
 from contextlib import closing
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from functools import lru_cache
 import json
 import logging
@@ -87,6 +87,8 @@ class CatalogVocabulary:
     accessory_labels: frozenset[str] = frozenset()
     aspects: tuple[str, ...] = ()
     use_cases: tuple[str, ...] = ()
+    # Collections that stand in for a device the catalog does not sell ("iPhone" -> its accessories).
+    stand_ins: dict[str, re.Pattern[str]] = field(default_factory=dict)
 
     @property
     def product_types(self) -> list[str]:
@@ -147,7 +149,10 @@ def load_vocabulary(conn: sqlite3.Connection) -> CatalogVocabulary:
     taxonomy = json.loads(TAXONOMY_PATH.read_text(encoding="utf-8"))
     labels, audiences, members, patterns = {}, {}, {}, {}
     accessories: set[str] = set()
-    # Groups go first so an equally long match prefers the broader type.
+    collections = taxonomy.get("collections", {})
+    # Collections and groups go first so an equally long match prefers the broader type.
+    for name, spec in collections.items():
+        patterns[name] = _compile(spec["terms"])
     for group, terms in taxonomy["groups"].items():
         patterns[group] = _compile(terms)
     for row in rows:
@@ -160,6 +165,17 @@ def load_vocabulary(conn: sqlite3.Connection) -> CatalogVocabulary:
         if group:
             members.setdefault(group, []).append(label)
         patterns[label] = _compile(json.loads(terms))
+    # A collection spans types across groups ("sports clothing" is shorts, socks and running
+    # shoes), so a broad request maps to one name the model can pick instead of to nothing.
+    stand_ins: dict[str, re.Pattern[str]] = {}
+    for name, spec in collections.items():
+        present = [label for label in spec["members"] if label in labels]
+        if not present:
+            patterns.pop(name, None)
+            continue
+        members[name] = present
+        if spec.get("stands_in_for"):
+            stand_ins[name] = _compile(spec["stands_in_for"])
     patterns[_OUTSIDE] = _compile(taxonomy["unavailable_terms"])
     brand_rows = conn.execute(
         """SELECT DISTINCT p.brand FROM products p JOIN amazon_product_metadata a USING (product_id)
@@ -175,6 +191,7 @@ def load_vocabulary(conn: sqlite3.Connection) -> CatalogVocabulary:
         accessory_labels=frozenset(accessories),
         aspects=_ontology_values("aspect"),
         use_cases=_ontology_values("use_case"),
+        stand_ins=stand_ins,
     )
 
 
@@ -448,6 +465,29 @@ def _audience_gap(parsed: ParsedQuery, vocabulary: CatalogVocabulary) -> ParsedQ
     return replace(parsed, unavailable_terms=[*parsed.unavailable_terms, term])
 
 
+def _accessories_instead(parsed: ParsedQuery, vocabulary: CatalogVocabulary) -> ParsedQuery:
+    """A device the catalog does not sell becomes a search for its accessories.
+
+    "I need an iPhone" finds no phones, but cases, chargers and screen protectors for it are
+    there; an empty answer would hide them. ``instead_of`` keeps the device so the reply says
+    the device itself is not sold.
+    """
+    if parsed.sub_category:
+        return parsed
+    for term in parsed.unavailable_terms:
+        for name, pattern in vocabulary.stand_ins.items():
+            if pattern.search(term):
+                return replace(
+                    parsed,
+                    sub_category=name,
+                    category=None,
+                    unavailable_terms=[other for other in parsed.unavailable_terms if other != term],
+                    instead_of=term,
+                    compatible_with=list(parsed.compatible_with) or _devices_named(term),
+                )
+    return parsed
+
+
 @lru_cache(maxsize=1024)
 def _call_model(query: str, vocabulary_id: int, timeout: float, previous: str = "") -> str:
     vocabulary = _VOCABULARIES[vocabulary_id]
@@ -487,7 +527,7 @@ def understand(
             parsed = _from_model(query, arguments, vocabulary)
         except Exception as exc:  # noqa: BLE001 - every model failure has the same rule fallback
             logger.warning("Catalog query parsing fell back to rules: %r", exc)
-    return _audience_gap(parsed or parse_rules(query, vocabulary), vocabulary)
+    return _accessories_instead(_audience_gap(parsed or parse_rules(query, vocabulary), vocabulary), vocabulary)
 
 
 def merge_turn(current: ParsedQuery, base: ParsedQuery | None, profile: dict[str, Any]) -> ParsedQuery:

@@ -29,6 +29,80 @@
    "dress(?:es)?"
   ]
  },
+ "collections": {
+  "Activewear": {
+   "terms": [
+    "sports? (?:clothes|clothing|apparel|wear|outfits?)",
+    "sportswear",
+    "active ?wear",
+    "athletic (?:clothes|clothing|apparel|wear|outfits?)",
+    "(?:workout|gym|exercise|training|fitness) (?:clothes|clothing|apparel|wear|outfits?|gear)",
+    "running (?:gear|clothes|clothing|outfits?)"
+   ],
+   "members": [
+    "Women's Active Shorts",
+    "Men's Athletic Socks",
+    "Men's Road Running Shoes"
+   ]
+  },
+  "Phone Accessories": {
+   "terms": [
+    "(?:iphone|smartphone|cell ?phone|mobile phone|phone) accessor(?:y|ies)"
+   ],
+   "members": [
+    "Phone Basic Cases",
+    "Phone Flip Cases",
+    "Phone Screen Protectors",
+    "Lightning Cables",
+    "Wall Chargers",
+    "Phone Car Mounts"
+   ],
+   "stands_in_for": [
+    "smartphones?",
+    "(?:cell|mobile) phones?",
+    "iphones?"
+   ]
+  },
+  "Tablet Accessories": {
+   "terms": [
+    "(?:tablet|ipad) accessor(?:y|ies)"
+   ],
+   "members": [
+    "Tablet Cases",
+    "Tablet Screen Protectors"
+   ],
+   "stands_in_for": [
+    "tablets?",
+    "ipads?"
+   ]
+  },
+  "Laptop Accessories": {
+   "terms": [
+    "(?:laptop|computer|notebook) accessor(?:y|ies)"
+   ],
+   "members": [
+    "Laptop Stands",
+    "Computer Mice",
+    "USB Flash Drives"
+   ],
+   "stands_in_for": [
+    "laptops?"
+   ]
+  },
+  "TV Accessories": {
+   "terms": [
+    "(?:tv|television) accessor(?:y|ies)"
+   ],
+   "members": [
+    "Remote Controls",
+    "HDMI Cables"
+   ],
+   "stands_in_for": [
+    "televisions?",
+    "tvs?"
+   ]
+  }
+ },
  "unavailable_terms": [
   "smartphones?",
   "(?:cell|mobile) phones?",

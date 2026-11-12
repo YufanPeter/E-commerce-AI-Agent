@@ -63,6 +63,8 @@ class ParsedQuery:
     # 用户点名、但商品库里没有的品牌或品类（「三星手机」「扫地机器人」）。
     # 非空时检索直接返回空结果，由话术坦诚说明，而不是拿相近的商品顶替。
     unavailable_terms: list[str] = field(default_factory=list)
+    # A device the catalog does not sell whose accessories are searched instead ("iPhone").
+    instead_of: str | None = None
     # Rejected ingredients or properties, checked against catalog attributes after recall.
     excluded_attributes: list[str] = field(default_factory=list)
     # Knowledge-graph signals; they only propose candidates, never filter.
@@ -244,7 +246,10 @@ def load_taxonomy(db_path: Path = DEFAULT_DB_PATH) -> dict[str, object]:
     and expands canonical brands to stored variants. It is cached once per process.
     """
     if not db_path.exists():
-        return {"sub_to_cat": {}, "brands": [], "brand_expand": {}, "titles": [], "catalog_text": "", "brand_subs": {}, "groups": {}}
+        return {
+            "sub_to_cat": {}, "brands": [], "brand_expand": {}, "titles": [], "catalog_text": "", "brand_subs": {},
+            "groups": _collections(),
+        }
 
     with sqlite3.connect(db_path) as conn:
         rows = conn.execute(
@@ -264,6 +269,7 @@ def load_taxonomy(db_path: Path = DEFAULT_DB_PATH) -> dict[str, object]:
     groups: dict[str, list[str]] = {}
     for group, label in group_rows:
         groups.setdefault(group, []).append(label)
+    groups.update(_collections())
 
     sub_to_cat: dict[str, str] = {}
     raw_brands: set[str] = set()
@@ -310,6 +316,17 @@ def load_taxonomy(db_path: Path = DEFAULT_DB_PATH) -> dict[str, object]:
         "brand_subs": {brand: sorted(subs) for brand, subs in brand_subs.items()},
         "groups": groups,
     }
+
+
+def _collections() -> dict[str, list[str]]:
+    """Named sets of types from the taxonomy file ("Activewear"), which span groups."""
+    from store.import_amazon import TAXONOMY_PATH
+
+    try:
+        taxonomy = json.loads(TAXONOMY_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {name: list(spec["members"]) for name, spec in taxonomy.get("collections", {}).items()}
 
 
 def expand_sub_categories(names: list[str]) -> list[str]:

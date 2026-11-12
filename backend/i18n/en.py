@@ -351,7 +351,9 @@ COMPOSER_FEW_SHOT: list[dict[str, str]] = [
 ]
 
 
-def search_hint(found: int, *, showing_more: bool = False, vague: bool = False, unavailable: str = "") -> str:
+def search_hint(
+    found: int, *, showing_more: bool = False, vague: bool = False, unavailable: str = "", instead_of: str = "",
+) -> str:
     if showing_more:
         if not found:
             return "The shopper has already seen everything that matches. Say so, and suggest loosening a condition."
@@ -364,6 +366,11 @@ def search_hint(found: int, *, showing_more: bool = False, vague: bool = False, 
         return (
             f"The catalog does not carry: {unavailable}. Say so plainly. Follow-ups may only suggest products in "
             "beauty, electronics, clothing and sports gear, or home and kitchen."
+        )
+    if instead_of and found:
+        return (
+            f"The catalog does not sell {instead_of} itself. These {found} products are accessories for it. "
+            "Open by saying so plainly, then present the accessories."
         )
     return f"Found {found} products." if found else "Nothing matched. Say so and suggest a specific way to widen the search."
 
