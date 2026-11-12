@@ -12,6 +12,8 @@ from typing import Any
 from agent.intent_router import IntentDecision
 from agent.session import AgentSession
 from agent.tools.reference import resolve_indices
+from search.catalog_understanding import names_withdrawal, narrow_clears
+from search.query_understanding import ParsedQuery
 
 
 # 「第二个」是序号不是数量；「第」后面的数字不算。
@@ -76,8 +78,16 @@ def tool_slots(tool: str, raw_query: str, session: AgentSession) -> dict[str, An
     return slots
 
 
-def routed_slots(decision: IntentDecision, session: AgentSession) -> dict[str, Any]:
-    """Slots from the router's arguments, with positions checked against what is on screen."""
+def _carried_search(session: AgentSession) -> ParsedQuery | None:
+    last = session.recall_parsed()
+    try:
+        return ParsedQuery.from_dict(last) if isinstance(last, dict) else None
+    except TypeError:
+        return None
+
+
+def routed_slots(decision: IntentDecision, session: AgentSession, raw_query: str = "") -> dict[str, Any]:
+    """Slots from the router's arguments, checked against what is on screen and what was said."""
     args = decision.args or {}
     tool = decision.tool
     task = session.task
@@ -101,8 +111,13 @@ def routed_slots(decision: IntentDecision, session: AgentSession) -> dict[str, A
             whole_order=bool(args.get("whole_order")),
             reorder_item=args.get("reorder_item") or "",
         )
-    if tool in {"recommend", "refine"} and args.get("clear"):
-        slots["constraint_ops"] = {"clear": list(args["clear"])}
+    if tool in {"recommend", "refine"}:
+        base = _carried_search(session)
+        # The router's clear list is a reading, checked against the shopper's own words.
+        clear = narrow_clears(raw_query, base, args.get("clear") or []) if raw_query else list(args.get("clear") or [])
+        # A withdrawn condition also needs the tool to read the raw message, not a rewrite.
+        if clear or (tool == "refine" and names_withdrawal(raw_query, base)):
+            slots["constraint_ops"] = {"clear": clear}
     if args.get("cheaper"):
         slots["cheaper"] = True
     return slots

@@ -33,6 +33,19 @@ def test_screen_size_is_not_an_iphone_model():
     assert devices == ["iphone"]
 
 
+def test_a_device_the_listing_says_it_does_not_fit_is_not_recorded():
+    rows = extract_attributes("Electronics", "Wallet Case for iPhone 14 Pro", "Does NOT fit iPhone 14. Not compatible with Android.")
+    devices = {row["value"] for row in rows if row["attribute"] == "compatible_device"}
+    assert "iphone_14_pro" in devices
+    assert "iphone_14" not in devices and "android" not in devices
+
+
+def test_query_words_map_to_stored_attribute_values():
+    from store.attribute_rules import wanted_values
+    assert wanted_values("waterproof ANC earbuds in black") == ["noise_cancelling", "waterproof", "black"]
+    assert wanted_values("a wallet, no leather") == []
+
+
 def test_every_extracted_attribute_has_a_definition():
     rows = extract_attributes("Electronics", "Bluetooth 20W 32GB IPX7 iPhone 14 black waterproof 3 ft 500mAh 8 hours battery", "")
     assert {row["attribute"] for row in rows} <= set(DEFINITIONS)

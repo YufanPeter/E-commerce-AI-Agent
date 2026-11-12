@@ -879,6 +879,128 @@
      "budget"
     ]
    }
+  },
+  {
+   "id": "refine-clear-measurements",
+   "message": "forget the battery and size limits",
+   "state": {
+    "list": true,
+    "history": [
+     [
+      "user",
+      "Bluetooth speakers with at least 20 hours of battery"
+     ]
+    ]
+   },
+   "expect": {
+    "tool": [
+     "refine"
+    ],
+    "clear": [
+     "measurements"
+    ]
+   }
+  },
+  {
+   "id": "refine-clear-exclusions",
+   "message": "drop all the ingredient restrictions",
+   "state": {
+    "list": true,
+    "history": [
+     [
+      "user",
+      "Bluetooth speakers without BPA or latex"
+     ]
+    ]
+   },
+   "expect": {
+    "tool": [
+     "refine"
+    ],
+    "clear": [
+     "exclusions"
+    ]
+   }
+  },
+  {
+   "id": "refine-clear-device",
+   "message": "it doesn't need to work with a particular phone",
+   "state": {
+    "list": true,
+    "history": [
+     [
+      "user",
+      "Bluetooth speakers for my iPhone 14"
+     ]
+    ]
+   },
+   "expect": {
+    "tool": [
+     "refine"
+    ],
+    "clear": [
+     "device"
+    ]
+   }
+  },
+  {
+   "id": "refine-clear-features",
+   "message": "no special features needed",
+   "state": {
+    "list": true,
+    "history": [
+     [
+      "user",
+      "waterproof Bluetooth speakers with a microphone"
+     ]
+    ]
+   },
+   "expect": {
+    "tool": [
+     "refine"
+    ],
+    "clear": [
+     "features"
+    ]
+   }
+  },
+  {
+   "id": "refine-accept-one-item-is-not-a-clear",
+   "message": "actually latex is fine",
+   "state": {
+    "list": true,
+    "history": [
+     [
+      "user",
+      "Bluetooth speakers without BPA or latex"
+     ]
+    ]
+   },
+   "expect": {
+    "tool": [
+     "refine"
+    ],
+    "clear": []
+   }
+  },
+  {
+   "id": "refine-new-device-is-not-a-clear",
+   "message": "make it work with an iPhone 15 instead",
+   "state": {
+    "list": true,
+    "history": [
+     [
+      "user",
+      "Bluetooth speakers for my iPhone 14"
+     ]
+    ]
+   },
+   "expect": {
+    "tool": [
+     "refine"
+    ],
+    "clear": []
+   }
   }
  ]
 }

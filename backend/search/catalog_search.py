@@ -11,18 +11,21 @@ from dataclasses import replace
 import logging
 import math
 import os
+import re
 from typing import Any
 
 from catalog_config import AMAZON_INDEX_DIR, AMAZON_PRODUCT_COLLECTION, AMAZON_REVIEW_COLLECTION
 from graph.graph_store import GraphHit, GraphQuery, GraphStore, open_graph_store
+from i18n import en as english
 from rag.reranker import get_reranker
 from rag.retriever import RetrievedChunk
 from rag.vector_index import ChromaVectorIndex, Condition, VectorIndex
 from search.catalog_understanding import merge_turn, open_vocabulary, semantic_query, understand
 from search.lexical import BM25, rrf_fuse, tokenize
 from search.query_understanding import ParsedQuery
-from search.search_service import ProductHit, SearchResult, _apply_profile_boost, _env_use_rerank, confirmed_tier
+from search.search_service import ProductHit, SearchResult, _apply_profile_boost, _env_use_rerank
 from search.where_builder import build_filters
+from store.attribute_rules import WANTED_ATTRIBUTES
 from store.numeric_attributes import describe, numeric_attributes, satisfies
 from store.product_store import ProductStore
 
@@ -35,14 +38,54 @@ _RERANK_POOL = 30
 _MAX_REVIEWS_PER_PRODUCT = 2
 _MIN_REVIEW_RATING = 3
 _RATING_WEIGHT = 0.05
-_CONFIRMED_ATTRIBUTE_BOOST = 1.15
+# A listing that confirms every condition gains this share of its relevance score. Relevance
+# still leads: a confirmed but off-target product cannot pass a clearly better match.
+_CONFIRMED_WEIGHT = float(os.getenv("CATALOG_CONFIRMED_WEIGHT", "0.3"))
+_RERANK_REVIEW_CHARS = 300
+_COMPLAINT_MAX_RATING = 2
+_COMPLAINT_MIN_CHARS = 20
 _WEAK_MATCH_DISTANCE = float(os.getenv("CATALOG_WEAK_MATCH_DISTANCE", "0.47"))
 _ATTRIBUTE_SYNONYMS = {"perfume": "fragrance"}
+# "iphone_15", "iphone_15_pro_max": a model of a device family.
+_DEVICE_MODEL = re.compile(r"^(?P<family>[a-z]+)_(?P<number>\d+)(?:_(?P<variant>.+))?$")
+# Product types shaped for one model: a case for the iPhone 14 does not fit an iPhone 15. A cable or
+# charger that lists some models usually works with others, so a mismatch there only ranks lower.
+_MODEL_SHAPED = re.compile(r"\bcases?\b|\bscreen protectors?\b|\blens protectors?\b|\bskins?\b", re.I)
+_NO_VARIANT = r"(?!\s*(?:pro|plus|max|mini)\b)"
+# The rest of a sentence that denies fit: "NOT fit iPhone 13 Mini (5.4"), iPhone 13 5G (6.1")".
+# A decimal point ("5.4") does not end the sentence.
+_DENIAL = re.compile(
+    r"\b(?:not|n't)\s+(?:fit|fits|compatible with|work with|works with|for|suitable for)\s+((?:[^.;\n]|\.\d)+)", re.I,
+)
+# "Fits most smartphones" is universal fit; "works with most phone cases" is about cases, not phones.
+_UNIVERSAL_FIT = re.compile(
+    r"\buniversal (?:fit|size|phone case|case)\b"
+    r"|\b(?:fits?|for|compatible with|works with|designed for)\s+(?:all|most|any)\s+(?:cell\s+)?"
+    r"(?:phones?|smartphones?|iphones?)\b(?!\s*(?:cases?|covers?))",
+    re.I,
+)
 
 
 def _confirmed_count(checks: dict[str, str]) -> int:
     """How many of the shopper's conditions the listing itself confirms."""
     return sum(value in ("free", "meets") for value in checks.values())
+
+
+def _confirmation_factor(checks: dict[str, str] | None) -> float:
+    """Score multiplier for the share of conditions the listing confirms."""
+    if not checks:
+        return 1.0
+    return 1.0 + _CONFIRMED_WEIGHT * _confirmed_count(checks) / len(checks)
+
+
+def _review_body(chunk: RetrievedChunk) -> str:
+    """Review text without the title prefix the review index adds."""
+    document = chunk.document or ""
+    return document.split("Review:", 1)[1].strip() if "Review:" in document else document.strip()
+
+
+def _words(text: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z0-9']+", (text or "").casefold()) if w not in english.NAME_STOPWORDS and len(w) > 2}
 
 
 def _env_review_recall() -> bool:
@@ -83,7 +126,7 @@ class CatalogSearchService:
                    JOIN product_price_ranges r USING (product_id)
                    WHERE p.status = 'active' ORDER BY p.product_id"""
             ).fetchall()
-            checked = ("contains", "free_of", *numeric_attributes())
+            checked = ("contains", "free_of", "compatible_device", *WANTED_ATTRIBUTES, *numeric_attributes())
             attribute_rows = conn.execute(
                 "SELECT product_id, attribute, value FROM product_attributes "
                 f"WHERE attribute IN ({', '.join('?' * len(checked))}) AND status = 'observed'",
@@ -95,7 +138,7 @@ class CatalogSearchService:
             self._attributes.setdefault((row["product_id"], row["attribute"]), set()).add(row["value"])
         self._vocabulary = open_vocabulary(self._store)
         self._bm25 = BM25([
-            tokenize(" ".join((row["title"], row["title"], row["brand"], row["description"])))
+            tokenize(" ".join((row["title"], row["title"], row["brand"], row["description"])), model_numbers=True)
             for row in self._rows
         ])
         self._product_index = product_index if product_index is not None else _open_index(AMAZON_PRODUCT_COLLECTION)
@@ -129,7 +172,9 @@ class CatalogSearchService:
         if profile.get("personalization_enabled") is False:
             profile = {}
         intent = merge_turn(understand(query, self._vocabulary, base=base), base, profile)
-        tokens = list(dict.fromkeys(t for t in tokenize(intent.retrieval_query) if t not in _STOP and not t.isdigit()))
+        tokens = list(dict.fromkeys(
+            t for t in tokenize(intent.retrieval_query, model_numbers=True) if t not in _STOP and not t.isdigit()
+        ))
         if not (tokens or intent.sub_category or intent.category or intent.brand_include):
             intent = replace(intent, needs_clarification=True)
         if intent.unavailable_terms or intent.needs_clarification:
@@ -161,9 +206,7 @@ class CatalogSearchService:
         hits = self._ranked_hits(pool, text, distances, evidence, checks, claims)
         # A product type names no category, but a remembered budget is kept per category.
         hits, signals = _apply_profile_boost(hits, replace(intent, category=intent.category or self._category_of(intent.sub_category)), profile)
-        # A listing that confirms the shopper's conditions answers better than silence.
-        hits.sort(key=lambda hit: -confirmed_tier(hit, intent))
-        hits = self._without_duplicates(hits)[:top_k_products]
+        hits = self._with_complaints(self._without_duplicates(hits)[:top_k_products], text)
         return SearchResult(intent, hits, len(fused), len(pool), personalization=[*signals, *avoid_signals])
 
     def _category_of(self, product_type: str | None) -> str | None:
@@ -215,7 +258,9 @@ class CatalogSearchService:
         free_of = self._attributes.get((product_id, "free_of"), set())
         if any(_ATTRIBUTE_SYNONYMS.get(term, term) in contains for term in avoided):
             return None
-        checks: dict[str, str] = {}
+        checks = self._device_checks(product_id, intent.compatible_with)
+        if checks is None:
+            return None
         for term in intent.excluded_attributes:
             canonical = _ATTRIBUTE_SYNONYMS.get(term, term)
             if canonical in contains:
@@ -226,11 +271,71 @@ class CatalogSearchService:
             if met is False:
                 return None
             checks[describe(constraint)] = "meets" if met else "unknown"
+        stated = set().union(*(self._attributes.get((product_id, name), set()) for name in WANTED_ATTRIBUTES))
+        for value in intent.features:
+            checks[value.replace("_", " ")] = "meets" if value in stated else "unknown"
         return checks
+
+    def _device_checks(self, product_id: str, wanted: list[str]) -> dict[str, str] | None:
+        """Compatibility with the shopper's device; ``None`` when a case or protector is for another phone.
+
+        Product types shaped for one model must name the shopper's model, or claim universal fit.
+        For other types a listing's model list is rarely complete, so a mismatch only ranks lower.
+        """
+        if not wanted:
+            return {}
+        stated = self._attributes.get((product_id, "compatible_device"), set())
+        models = [device for device in wanted if _DEVICE_MODEL.match(device)]
+        row = self._rows[self._position[product_id]]
+        shaped = row["sub_category"] in self._vocabulary.accessory_labels and _MODEL_SHAPED.search(row["sub_category"])
+        checks: dict[str, str] = {}
+        full = f"{row['title']} {row['description']}"
+        for device in models or wanted:
+            label = "works with " + device.replace("_", " ")
+            model = _DEVICE_MODEL.match(device)
+            if model is not None:
+                # A case's title is what it was made for; descriptions often list other sizes loosely.
+                title_names_models = re.search(rf"\b{re.escape(model['family'])}\s*\d", row["title"], re.I)
+                if shaped and title_names_models:
+                    named = self._names_model(row["title"], model)
+                else:
+                    named = device in stated or self._names_model(full, model)
+                denied = self._denies_model(full, model)
+                named = named and not denied
+            else:
+                denied = False
+                named = device in stated or any(value.startswith(device + "_") for value in stated)
+            checks[label] = "meets" if named else "unknown"
+            if not named and model is not None and shaped and (denied or not _UNIVERSAL_FIT.search(full)):
+                return None  # Made for some other phone, or never says which.
+        return checks
+
+    @staticmethod
+    def _model_pattern(model: re.Match[str]) -> str:
+        # "iPhone 14 Pro Max" needs that variant; plain "iPhone 14" must not be a Pro, Plus or Max.
+        variant = model["variant"]
+        suffix = (r"\s*" + r"[\s-]*".join(map(re.escape, variant.split("_"))) + r"\b") if variant else _NO_VARIANT
+        return rf"(?<![\d.])\b{model['number']}\b(?!\.\d){suffix}"
+
+    @classmethod
+    def _denies_model(cls, text: str, model: re.Match[str]) -> bool:
+        """"Does NOT fit iPhone 13 Mini, iPhone 13 or 13 Pro" denies every model in that sentence."""
+        for denial in _DENIAL.finditer(text):
+            if re.search(rf"\b{re.escape(model['family'])}\b[^.;\n]{{0,40}}?{cls._model_pattern(model)}", denial[1], re.I):
+                return True
+        return False
+
+    @classmethod
+    def _names_model(cls, text: str, model: re.Match[str]) -> bool:
+        """Whether the text names this model, including lists such as "iPhone 14/15"."""
+        near = rf"\b{re.escape(model['family'])}\b[^.;\n]{{0,60}}?{cls._model_pattern(model)}"
+        return re.search(near, text, re.I) is not None
 
     def _confirmed_recall(self, eligible: set[str], intent: ParsedQuery) -> list[str]:
         """Products whose listing confirms a condition, so a deep match is not left out of the pool."""
-        if not (intent.excluded_attributes or intent.numeric) or not (intent.sub_category or intent.category):
+        if not (intent.excluded_attributes or intent.numeric or intent.features or intent.compatible_with):
+            return []
+        if not (intent.sub_category or intent.category):
             return []
         ranked = []
         for product_id in eligible:
@@ -309,13 +414,23 @@ class CatalogSearchService:
         confidence = min(1.0, math.log10(row["rating_number"] + 1) / 3)
         return 1.0 + _RATING_WEIGHT * (float(row["average_rating"] or 4.0) - 4.0) * confidence
 
-    def _rerank_scores(self, text: str, pool: list[str]) -> dict[str, float]:
+    def _rerank_scores(
+        self, text: str, pool: list[str], evidence: dict[str, list[RetrievedChunk]] | None = None,
+    ) -> dict[str, float]:
+        """Score the listing together with the reviews that matched the request.
+
+        Reviews carry what listings leave out ("stays put on runs"), so they reach the final order.
+        """
         if not text or not pool or not _env_use_rerank():
             return {}
         documents = []
         for product_id in pool:
             row = self._rows[self._position[product_id]]
-            documents.append(RetrievedChunk(product_id, f"{row['title']}\n{row['description']}", {"product_id": product_id}, None))
+            reviews = [_review_body(chunk)[:_RERANK_REVIEW_CHARS] for chunk in (evidence or {}).get(product_id, [])]
+            body = f"{row['title']}\n{row['description']}"
+            if any(reviews):
+                body += "\nCustomer reviews: " + " | ".join(review for review in reviews if review)
+            documents.append(RetrievedChunk(product_id, body, {"product_id": product_id}, None))
         try:
             if self._reranker is None:
                 self._reranker = get_reranker()
@@ -331,17 +446,61 @@ class CatalogSearchService:
     ) -> list[ProductHit]:
         # Confirmed products deeper in the fused list are reranked too, or they would all score zero.
         confirmed_later = [pid for pid in pool[_RERANK_POOL:] if _confirmed_count(checks[pid] or {})]
-        rerank = self._rerank_scores(text, pool[:_RERANK_POOL] + confirmed_later[:_RERANK_POOL])
+        rerank = self._rerank_scores(text, pool[:_RERANK_POOL] + confirmed_later[:_RERANK_POOL], evidence)
         hits = []
         for rank, product_id in enumerate(pool, start=1):
             row = self._rows[self._position[product_id]]
             # Items beyond the rerank pool keep a fused score below every reranked item.
             base = rerank.get(product_id, 0.0 if rerank else 1.0 / (60 + rank))
-            confirmed = checks[product_id] and all(v == "free" for v in checks[product_id].values())
-            score = base * self._rating_prior(row) * (_CONFIRMED_ATTRIBUTE_BOOST if confirmed else 1.0)
+            score = base * self._rating_prior(row) * _confirmation_factor(checks[product_id])
             hits.append(self._hit(row, score, distances.get(product_id), rerank.get(product_id), evidence.get(product_id, []), checks[product_id] or {}, claims.get(product_id, ())))
         hits.sort(key=lambda hit: hit.score, reverse=True)
         return hits
+
+    def _with_complaints(self, hits: list[ProductHit], text: str) -> list[ProductHit]:
+        """Attach each product's most relevant low-rated review so its card can name a drawback.
+
+        Review recall keeps only ratings of 3 and up, so complaints come from the catalog here.
+        Shipping and seller complaints say nothing about the product and are skipped.
+        """
+        if not hits:
+            return hits
+        ids = [hit.product_id for hit in hits]
+        try:
+            with closing(self._store.connect()) as conn:
+                rows = conn.execute(
+                    f"""SELECT product_id, source_index, rating, content FROM product_reviews
+                        WHERE product_id IN ({', '.join('?' * len(ids))})
+                          AND (rating <= ? OR polarity = 'negative') AND length(content) >= ?""",
+                    (*ids, _COMPLAINT_MAX_RATING, _COMPLAINT_MIN_CHARS),
+                ).fetchall()
+        except Exception as exc:  # noqa: BLE001 - a card without a drawback is still a card
+            logger.warning("Could not load complaints: %r", exc)
+            return hits
+        wanted = _words(text)
+        best: dict[str, tuple[tuple[int, int, int], Any]] = {}
+        for row in rows:
+            content = row["content"]
+            if english.SERVICE_COMPLAINT_RE.search(content):
+                continue
+            key = (len(_words(content) & wanted), -row["rating"], min(len(content), 300))
+            if row["product_id"] not in best or key > best[row["product_id"]][0]:
+                best[row["product_id"]] = (key, row)
+        out = []
+        for hit in hits:
+            found = best.get(hit.product_id)
+            if found is None:
+                out.append(hit)
+                continue
+            row = found[1]
+            complaint = RetrievedChunk(
+                f"{hit.product_id}:review:{row['source_index']}", row["content"],
+                {"product_id": hit.product_id, "chunk_type": "user_review", "polarity": "negative",
+                 "rating": int(row["rating"]), "dataset": "amazon_reviews_2023"},
+                None,
+            )
+            out.append(replace(hit, evidence=[*hit.evidence, complaint]))
+        return out
 
     def _without_duplicates(self, hits: list[ProductHit]) -> list[ProductHit]:
         seen: set[str] = set()

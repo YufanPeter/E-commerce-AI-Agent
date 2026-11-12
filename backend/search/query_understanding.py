@@ -73,6 +73,9 @@ class ParsedQuery:
     numeric: list[dict[str, object]] = field(default_factory=list)
     # Standalone search words written by the model; empty when rules parsed the turn.
     search_text: str = ""
+    # Wanted listing attribute values ("noise_cancelling", "leather", "waterproof").
+    # A listing that states one ranks higher; silence is not a miss.
+    features: list[str] = field(default_factory=list)
 
     @property
     def hard_filters(self) -> dict[str, object]:
@@ -104,12 +107,24 @@ class ParsedQuery:
         return cls(**{k: v for k, v in data.items() if k in allowed})
 
     def without(self, cleared: "Collection[str]") -> "ParsedQuery":
-        """Forget withdrawn constraints ("budget", "brand") so a later turn cannot inherit them."""
+        """Forget withdrawn constraints so a later turn cannot inherit them.
+
+        ``cleared`` names groups: budget, brand, measurements (numeric limits), exclusions
+        (rejected ingredients and properties), device (compatibility) and features.
+        """
         changes: dict[str, object] = {}
         if "budget" in cleared:
             changes.update(min_price=None, max_price=None, price_target=None)
         if "brand" in cleared:
             changes.update(brand_include=[], brand_exclude=[])
+        if "measurements" in cleared:
+            changes.update(numeric=[])
+        if "exclusions" in cleared:
+            changes.update(excluded_attributes=[], negative_ingredients=[])
+        if "device" in cleared:
+            changes.update(compatible_with=[])
+        if "features" in cleared:
+            changes.update(features=[])
         return replace(self, **changes) if changes else self
 
     def switches_from(self, base: "ParsedQuery") -> bool:
@@ -164,7 +179,9 @@ class ParsedQuery:
             excluded_attributes=union(self.excluded_attributes, base.excluded_attributes),
             aspects=union(self.aspects, base.aspects),
             use_cases=union(self.use_cases, base.use_cases),
-            compatible_with=union(self.compatible_with, base.compatible_with),
+            # A newly named device replaces the old one: the shopper switched phones.
+            compatible_with=replace_or_keep(self.compatible_with, base.compatible_with),
+            features=union(self.features, base.features),
         )
 
 

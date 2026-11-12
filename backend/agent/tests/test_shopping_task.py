@@ -255,6 +255,80 @@ def test_withdrawn_conditions_do_not_come_back_in_the_merge():
     assert merge_turn(_parsed("no budget"), base.without(["budget"]), {"budget_max": 50}).max_price is None
 
 
+def test_withdrawing_one_rejected_attribute_keeps_the_others():
+    base = _parsed("toner without alcohol or fragrance", sub_category="Toners", excluded_attributes=["alcohol", "fragrance"])
+    merged = merge_turn(_parsed("actually alcohol is fine"), base, {})
+    assert merged.excluded_attributes == ["fragrance"]
+    # "I don't need fragrance" rejects fragrance; it does not take the rejection back.
+    assert merge_turn(_parsed("I don't need fragrance"), base, {}).excluded_attributes == ["alcohol", "fragrance"]
+
+
+def test_measured_limits_can_be_withdrawn_or_replaced():
+    limit = {"attribute": "battery_hours", "op": ">=", "value": 20.0}
+    base = _parsed("speakers with 20 hours of battery", sub_category="Bluetooth Speakers", numeric=[limit])
+    assert merge_turn(_parsed("battery life doesn't matter"), base, {}).numeric == []
+    shorter = {"attribute": "battery_hours", "op": "<=", "value": 10.0}
+    assert merge_turn(_parsed("at most 10 hours", numeric=[shorter]), base, {}).numeric == [shorter]
+    ceiling = {"attribute": "battery_hours", "op": "<=", "value": 40.0}
+    assert merge_turn(_parsed("at most 40 hours", numeric=[ceiling]), base, {}).numeric == [limit, ceiling]
+
+
+def test_a_new_device_replaces_the_old_one():
+    base = _parsed("case for iPhone 14", sub_category="Phone Cases", compatible_with=["iphone_14", "iphone"])
+    merged = merge_turn(_parsed("for the iPhone 15 instead", compatible_with=["iphone_15", "iphone"]), base, {})
+    assert merged.compatible_with == ["iphone_15", "iphone"]
+    assert merge_turn(_parsed("in black"), base, {}).compatible_with == ["iphone_14", "iphone"]
+    assert base.without(["device"]).compatible_with == []
+
+
+def test_wanted_features_carry_over_until_dropped():
+    base = _parsed("waterproof speakers", sub_category="Bluetooth Speakers", features=["waterproof"])
+    assert merge_turn(_parsed("in black", features=["black"]), base, {}).features == ["waterproof", "black"]
+    assert merge_turn(_parsed("it doesn't need to be waterproof"), base, {}).features == []
+    assert base.without(["features"]).features == []
+
+
+def test_naming_one_rejection_does_not_clear_the_whole_group():
+    from search.catalog_understanding import narrow_clears
+    base = _parsed("speakers without BPA or latex", excluded_attributes=["bpa", "latex"])
+    assert narrow_clears("actually latex is fine", base, ["exclusions"]) == []
+    assert narrow_clears("drop all the ingredient restrictions", base, ["exclusions", "budget"]) == ["exclusions", "budget"]
+    assert narrow_clears("latex and bpa are fine", base, ["exclusions"]) == ["exclusions"]
+
+
+def test_router_cannot_clear_groups_the_message_never_mentions():
+    from search.catalog_understanding import names_withdrawal, narrow_clears
+    every = ["budget", "brand", "measurements", "exclusions", "device", "features"]
+    limit = {"attribute": "battery_hours", "op": ">=", "value": 20.0}
+    base = _parsed("Sony speakers under $80", max_price=80.0, brand_include=["Sony"], numeric=[limit], excluded_attributes=["bpa"])
+    # The router listed every group for a message about the battery alone.
+    assert narrow_clears("battery life doesn't matter", base, every) == ["measurements"]
+    assert narrow_clears("any brand is fine", base, every) == ["brand"]
+    assert narrow_clears("budget doesn't matter", base, every) == ["budget"]
+    assert narrow_clears("forget all the filters", base, every) == every
+    assert narrow_clears("in black", base, every) == []
+    assert names_withdrawal("battery life doesn't matter", base) and not names_withdrawal("in black", base)
+
+
+def test_withdrawing_a_named_condition_reaches_the_tool_even_without_a_router_clear():
+    session = AgentSession()
+    session.remember_search(_parsed("face wash", sub_category="Face Washes", excluded_attributes=["alcohol", "fragrance"]).to_dict(), [])
+    decision = IntentDecision("refine", "face wash without fragrance", "high", "", english_args({}))
+    slots = turn_args.routed_slots(decision, session, "actually alcohol is fine")
+    assert slots["constraint_ops"] == {"clear": []}  # Present, so the tool reads the raw message.
+    assert "constraint_ops" not in turn_args.routed_slots(decision, session, "in a bigger bottle")
+
+
+def test_clear_groups_cover_every_carried_condition():
+    base = _parsed(
+        "q", numeric=[{"attribute": "spf", "op": ">=", "value": 30.0}], excluded_attributes=["alcohol"],
+        compatible_with=["iphone"], features=["vegan"],
+    )
+    cleared = base.without(["measurements", "exclusions", "device", "features"])
+    assert (cleared.numeric, cleared.excluded_attributes, cleared.compatible_with, cleared.features) == ([], [], [], [])
+    assert english_args({"clear": ["measurements", "device", "color"]})["clear"] == ["measurements", "device"]
+
+
 def test_merge_base_clears_only_what_was_asked():
     base = _parsed("跑鞋", sub_category="跑鞋", max_price=500.0, brand_include=["Nike"], brand_exclude=["李宁"])
     cleared = _parsed("品牌不限").merge_base(base.without(["brand"]))

@@ -22,7 +22,7 @@ from i18n import en as english
 from llm.client import get_client, get_model_id
 from search.llm_parser import _extract_tool_arguments, _coerce_float
 from search.query_understanding import ParsedQuery
-from store.attribute_rules import DESCRIPTION, TITLE, _DEVICES, extract_multi
+from store.attribute_rules import DESCRIPTION, TITLE, _DEVICES, extract_multi, wanted_values
 from store.import_amazon import TAXONOMY_PATH, brand_key
 from store.numeric_attributes import numeric_attributes, rule_constraints, stated_constraint, unit_pattern
 from store.product_store import english_brand_named
@@ -267,6 +267,7 @@ def parse_rules(query: str, vocabulary: CatalogVocabulary) -> ParsedQuery:
         use_cases=_named_values(query, vocabulary.use_cases),
         compatible_with=_devices_named(query),
         numeric=rule_constraints(query),
+        features=wanted_values(query),
     )
 
 
@@ -409,6 +410,8 @@ def _from_model(query: str, args: dict[str, Any], vocabulary: CatalogVocabulary)
         compatible_with=[device for value in args.get("compatible_with") or [] for device in _devices_named(str(value))],
         numeric=[c for c in (stated_constraint(raw, query) for raw in args.get("numeric_constraints") or []) if c],
         search_text=_without_rejections(str(args.get("search_text") or ""), [*excluded_attributes, *brand_exclude]),
+        # The listing rules normalize the shopper's words and the model's wanted properties alike.
+        features=wanted_values(" ; ".join([query, *(str(term) for term in args.get("soft_terms") or [])])),
     )
 
 
@@ -498,7 +501,23 @@ def merge_turn(current: ParsedQuery, base: ParsedQuery | None, profile: dict[str
     if current.min_price is not None and current.max_price is None and maximum is not None and maximum < minimum:
         maximum = None
     stated = {(c["attribute"], c["op"]) for c in current.numeric}
-    numeric = [c for c in (carried.numeric if carried else []) if (c["attribute"], c["op"]) not in stated] + current.numeric
+    numeric = [
+        c for c in (carried.numeric if carried else [])
+        if (c["attribute"], c["op"]) not in stated
+        and not _contradicted(c, current.numeric)
+        and not released(query, _measure_terms(str(c["attribute"])))
+    ] + current.numeric
+    # "Alcohol is fine" withdraws one rejection; the others stay.
+    kept_exclusions = [
+        term for term in (carried.excluded_attributes if carried else [])
+        if term not in current.excluded_attributes and not released(query, [term], rejection=True)
+    ]
+    kept_features = [
+        value for value in (carried.features if carried else [])
+        if not released(query, [value])
+    ]
+    # Naming another device means the shopper switched devices, not that it must fit both.
+    devices = list(current.compatible_with) or list(carried.compatible_with if carried else [])
     included, excluded = list(current.brand_include), list(current.brand_exclude)
     denied = {brand.casefold() for brand in excluded}
     if not included:
@@ -520,15 +539,147 @@ def merge_turn(current: ParsedQuery, base: ParsedQuery | None, profile: dict[str
         needs_clarification=current.needs_clarification and not (
             product_type or category or included or minimum is not None or maximum is not None
         ),
-        excluded_attributes=list(dict.fromkeys((carried.excluded_attributes if carried else []) + current.excluded_attributes)),
+        excluded_attributes=list(dict.fromkeys(kept_exclusions + current.excluded_attributes)),
         aspects=list(dict.fromkeys((carried.aspects if carried else []) + current.aspects)),
         use_cases=list(dict.fromkeys((carried.use_cases if carried else []) + current.use_cases)),
-        compatible_with=list(dict.fromkeys((carried.compatible_with if carried else []) + current.compatible_with)),
+        compatible_with=devices,
+        # "It doesn't need to be waterproof" names waterproof but withdraws it.
+        features=list(dict.fromkeys(kept_features + [v for v in current.features if not released(query, [v])])),
     )
 
 
+def _contradicted(earlier: dict[str, Any], stated: list[dict[str, Any]]) -> bool:
+    """A new opposite limit that leaves no overlap replaces the earlier one (">= 20h", then "<= 10h")."""
+    for new in stated:
+        if new["attribute"] != earlier["attribute"] or new["op"] == earlier["op"]:
+            continue
+        low, high = (earlier["value"], new["value"]) if earlier["op"] == ">=" else (new["value"], earlier["value"])
+        if float(low) > float(high):
+            return True
+    return False
+
+
+def _measure_terms(attribute: str) -> list[str]:
+    """Words a shopper uses for a measured attribute: "battery", "battery life", "playtime"."""
+    spec = numeric_attributes().get(attribute)
+    words = [attribute.split("_")[0]]
+    if spec is not None:
+        words += [part.strip() for part in spec.label.split(" or ") if part.strip()]
+    return list(dict.fromkeys(words))
+
+
+# Accepting something once rejected ("alcohol is fine") versus dropping something once
+# required ("doesn't need to be waterproof"). "I don't need fragrance" rejects, so the
+# need-phrases never release a rejection.
+_ACCEPTS = (
+    r"\b{t}\b[^.,;!?]{{0,24}}?\b(?:is|are|'s|would be)?\s*(?:fine|ok|okay|alright|acceptable)\b",
+    r"\b(?:don'?t|do not|doesn'?t|does not)\s+(?:mind|care about)\s+(?:the\s+|any\s+)?{t}\b",
+    r"\b{t}\b[^.,;!?]{{0,24}}?\b(?:doesn'?t|does not|won'?t|don'?t|do not)\s+matter\b",
+)
+_DROPS = (
+    r"\b{t}\b[^.,;!?]{{0,24}}?\b(?:doesn'?t|does not|won'?t|don'?t|do not)\s+matter\b",
+    r"\b(?:don'?t|do not|doesn'?t|does not)\s+(?:need|have)\s+to\s+(?:be|have)\s+(?:a\s+|an\s+)?{t}\b",
+    r"\b(?:don'?t|do not|doesn'?t|does not)\s+(?:need|care about)\s+(?:a\s+|an\s+|the\s+|any\s+)?{t}\b",
+    r"\b(?:forget|drop|ignore|never mind|skip)\s+(?:about\s+)?(?:the\s+)?{t}\b",
+    r"\b{t}\b[^.,;!?]{{0,24}}?(?:\bnot|n't)\s+(?:needed|required|necessary|a must)\b",
+    r"\bany\s+{t}\b[^.,;!?]{{0,12}}?\b(?:works|will do|is fine|is ok(?:ay)?)\b",
+)
+
+
+# Words that show a message is about a whole group of conditions. The router sometimes lists
+# every group for a message about one ("battery life doesn't matter" must not clear the budget).
+_GLOBAL_CLEAR = re.compile(
+    r"\b(?:all|every|any)\b[^.,;]{0,30}\b(?:conditions?|filters?|requirements?|restrictions?|limits?|criteria)\b"
+    r"|\bstart (?:over|again|fresh)\b|\breset\b",
+    re.I,
+)
+_GROUP_CUES = {
+    "budget": r"\$|\b(?:budget|prices?|priced|costs?|spend|money|expensive|cheap\w*|afford\w*)\b",
+    "brand": r"\b(?:brands?|makes?|makers?|manufacturers?|labels?)\b",
+    "measurements": r"\b(?:limits?|specs?|specifications?|measurements?|sizes?|numbers?)\b",
+    "exclusions": r"\b(?:restrictions?|ingredients?|exclusions?|allerg\w+)\b",
+    "device": r"\b(?:phones?|devices?|models?|compatib\w+|fits?)\b",
+    "features": r"\b(?:features?|extras?)\b",
+}
+
+
+def _group_items(base: ParsedQuery) -> dict[str, list[list[str]]]:
+    """For each clearable group, the words that name each condition carried in it."""
+    return {
+        "budget": [],
+        "brand": [[brand] for brand in [*base.brand_include, *base.brand_exclude]],
+        "measurements": [_measure_terms(str(c["attribute"])) for c in base.numeric],
+        "exclusions": [[term] for term in base.excluded_attributes],
+        "device": [[device.split("_")[0]] for device in base.compatible_with],
+        "features": [[value] for value in base.features],
+    }
+
+
+def _mentions(query: str, terms: list[str]) -> bool:
+    return any(
+        re.search(r"\b" + r"[- ]?".join(map(re.escape, re.split(r"[_\s]+", term))) + r"\w*", query, re.I)
+        for term in terms if term
+    )
+
+
+def narrow_clears(query: str, base: ParsedQuery | None, clear: list[str] | tuple[str, ...]) -> list[str]:
+    """Keep a group clear only when the message is about that whole group.
+
+    The router may list groups the message never touches, and may read "latex is fine" as
+    clearing every exclusion. A group stays when the message names it ("any brand", "forget
+    the limits") or everything ("drop all the filters"); when it withdraws only some named
+    conditions of a group, the merge releases those alone and the group stays untouched.
+    """
+    text = query or ""
+    everything = _GLOBAL_CLEAR.search(text) is not None
+    items = _group_items(base) if base is not None else {}
+    kept = []
+    for group in clear:
+        carried = items.get(group, [])
+        named = [terms for terms in carried if _mentions(text, terms)]
+        about_group = everything or re.search(_GROUP_CUES.get(group, r"(?!)"), text, re.I) is not None
+        if not about_group and not named:
+            continue  # The message does not touch this group at all.
+        if named and len(named) < len(carried) and not about_group:
+            continue  # Only some named conditions: released one by one in the merge.
+        kept.append(group)
+    return kept
+
+
+def names_withdrawal(query: str, base: ParsedQuery | None) -> bool:
+    """Whether the message withdraws a condition this search carries ("alcohol is fine")."""
+    if base is None:
+        return False
+    return (
+        any(released(query, [term], rejection=True) for term in base.excluded_attributes)
+        or any(released(query, [value]) for value in base.features)
+        or any(released(query, _measure_terms(str(c["attribute"]))) for c in base.numeric)
+    )
+
+
+def released(query: str, terms: list[str], rejection: bool = False) -> bool:
+    """Whether the shopper withdraws a condition named by any of ``terms``.
+
+    ``rejection`` is true for something the shopper ruled out ("alcohol is fine" takes it back);
+    otherwise the condition was a requirement ("battery doesn't matter" drops it).
+    """
+    text = query or ""
+    forms = _ACCEPTS if rejection else _DROPS
+    for term in terms:
+        words = [re.escape(word) for word in re.split(r"[_\s]+", str(term).strip()) if word]
+        if not words:
+            continue
+        # "noise_cancelling" also reads "noise-cancelling", "noise canceling"; "alcohol-free" is a rejection.
+        pattern = r"[- ]?".join(words[:-1] + [words[-1][:6] + r"\w*"]) + r"(?![- ]free)"
+        if any(re.search(form.format(t=pattern), text, re.I) for form in forms):
+            return True
+    return False
+
+
 _PRICE_PHRASES = (_RANGE, _DASH_RANGE, _MAX, _MIN, _AROUND, _BARE_PRICE)
-_NEGATED_PHRASE = re.compile(r"\b(?:no|not|without|exclude|excluding|avoid|except|instead of|don'?t want)\b[^,.;]*", re.I)
+_NEGATED_PHRASE = re.compile(
+    r"\b(?:no|not|without|exclude|excluding|avoid|except|instead of|don'?t want|(?:do|does)(?:n'?t| not) need)\b[^,.;]*", re.I,
+)
 
 
 def _wanted_words(text: str) -> list[str]:

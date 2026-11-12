@@ -1,5 +1,5 @@
 {
- "description": "English query understanding cases for the Amazon catalog. Each case runs its turns in order and checks the merged intent after the last turn. Only the listed keys are checked. 'type' lists acceptable product types (null means none); 'numeric' lists [attribute, op, value]; 'text_has' and 'text_lacks' check the search text, case-insensitively. Withdrawn conditions ('any brand is fine') are routing decisions and are scored by amazon_routing_cases.json.",
+ "description": "English query understanding cases for the Amazon catalog. Each case runs its turns in order and checks the merged intent after the last turn. Only the listed keys are checked. 'type' lists acceptable product types (null means none); 'numeric' lists [attribute, op, value]; 'text_has' and 'text_lacks' check the search text, case-insensitively. Withdrawn conditions ('any brand is fine') are routing decisions and are scored by amazon_routing_cases.json. 'features' lists wanted listing attribute values and 'devices' the normalized compatible devices, both compared as sorted lists.",
  "cases": [
   {
    "id": "budget-under",
@@ -1015,6 +1015,153 @@
      "Coffee Mugs"
     ],
     "max": null
+   }
+  },
+  {
+   "id": "feat-waterproof",
+   "turns": [
+    "waterproof bluetooth speaker"
+   ],
+   "expect": {
+    "type": [
+     "Bluetooth Speakers"
+    ],
+    "features": [
+     "bluetooth",
+     "waterproof"
+    ]
+   }
+  },
+  {
+   "id": "feat-anc",
+   "turns": [
+    "noise cancelling over-ear headphones"
+   ],
+   "expect": {
+    "type": [
+     "Over-Ear Headphones",
+     "Headphones"
+    ],
+    "features": [
+     "noise_cancelling"
+    ]
+   }
+  },
+  {
+   "id": "feat-material",
+   "turns": [
+    "leather wallet for men"
+   ],
+   "expect": {
+    "features": [
+     "leather"
+    ]
+   }
+  },
+  {
+   "id": "feat-negated-is-not-wanted",
+   "turns": [
+    "men's wallet, no leather"
+   ],
+   "expect": {
+    "features": []
+   }
+  },
+  {
+   "id": "device-model",
+   "turns": [
+    "iPhone 14 phone case"
+   ],
+   "expect": {
+    "type": [
+     "Phone Cases",
+     "Phone Basic Cases"
+    ],
+    "devices": [
+     "iphone",
+     "iphone_14"
+    ],
+    "min": null,
+    "max": null
+   }
+  },
+  {
+   "id": "turn-switch-device",
+   "turns": [
+    "iPhone 13 phone case",
+    "for the iPhone 14 instead"
+   ],
+   "expect": {
+    "type": [
+     "Phone Cases",
+     "Phone Basic Cases"
+    ],
+    "devices": [
+     "iphone",
+     "iphone_14"
+    ]
+   }
+  },
+  {
+   "id": "turn-release-exclusion",
+   "turns": [
+    "face wash with no alcohol and no fragrance",
+    "actually alcohol is fine"
+   ],
+   "expect": {
+    "type": [
+     "Face Washes"
+    ],
+    "excl_attr": [
+     "fragrance"
+    ]
+   }
+  },
+  {
+   "id": "turn-release-numeric",
+   "turns": [
+    "Bluetooth speaker with at least 20 hours of battery",
+    "battery life doesn't matter"
+   ],
+   "expect": {
+    "type": [
+     "Bluetooth Speakers"
+    ],
+    "numeric": []
+   }
+  },
+  {
+   "id": "turn-contradicting-numeric",
+   "turns": [
+    "Bluetooth speaker with at least 20 hours of battery",
+    "at most 10 hours of battery"
+   ],
+   "expect": {
+    "type": [
+     "Bluetooth Speakers"
+    ],
+    "numeric": [
+     [
+      "battery_hours",
+      "<=",
+      10
+     ]
+    ]
+   }
+  },
+  {
+   "id": "turn-release-feature",
+   "turns": [
+    "waterproof bluetooth speaker",
+    "it doesn't need to be waterproof"
+   ],
+   "expect": {
+    "type": [
+     "Bluetooth Speakers"
+    ],
+    "features": [
+     "bluetooth"
+    ]
    }
   }
  ]

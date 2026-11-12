@@ -18,7 +18,10 @@ from unittest.mock import patch
 
 from eval._common import load_dataset, load_env
 
-FIELDS = ("type", "min", "max", "brand_in", "brand_out", "excl_attr", "excl_type", "numeric", "unavailable", "text_has", "text_lacks")
+FIELDS = (
+    "type", "min", "max", "brand_in", "brand_out", "excl_attr", "excl_type", "numeric", "features", "devices",
+    "unavailable", "text_has", "text_lacks",
+)
 
 
 def _observed(parsed: Any, text: str) -> dict[str, Any]:
@@ -31,6 +34,8 @@ def _observed(parsed: Any, text: str) -> dict[str, Any]:
         "excl_attr": sorted(parsed.excluded_attributes),
         "excl_type": sorted(parsed.sub_category_exclude),
         "numeric": sorted([c["attribute"], c["op"], float(c["value"])] for c in getattr(parsed, "numeric", [])),
+        "features": sorted(getattr(parsed, "features", [])),
+        "devices": sorted(parsed.compatible_with),
         "unavailable": bool(parsed.unavailable_terms),
         "text": text,
     }
@@ -43,7 +48,7 @@ def _passes(field: str, expected: Any, seen: dict[str, Any]) -> bool:
         return seen[field] == (None if expected is None else float(expected))
     if field in ("brand_in", "brand_out"):
         return seen[field] == sorted(b.casefold() for b in expected)
-    if field in ("excl_attr", "excl_type"):
+    if field in ("excl_attr", "excl_type", "features", "devices"):
         return seen[field] == sorted(expected)
     if field == "numeric":
         return seen["numeric"] == sorted([a, op, float(v)] for a, op, v in expected)

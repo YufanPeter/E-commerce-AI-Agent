@@ -15,12 +15,26 @@ from typing import Iterable
 _CJK = r"\u4e00-\u9fff"
 
 
-def tokenize(text: str) -> list[str]:
-    """Tokenize Latin text by word and Chinese text by adjacent-character bigrams."""
+# "iPhone 15", "iphone-15" and "iPhone15" share the token "iphone15"; a bare "15" says little.
+_SPACED_MODEL = re.compile(r"(?<![a-z0-9])([a-z]+)[ -]?(\d{1,4})(?![a-z0-9.])")
+_GLUED_MODEL = re.compile(r"^([a-z]+)\d{1,4}$")
+
+
+def tokenize(text: str, model_numbers: bool = False) -> list[str]:
+    """Tokenize Latin text by word and Chinese text by adjacent-character bigrams.
+
+    ``model_numbers`` adds one token per name followed by a number ("iphone15", "spf50"),
+    so a query for one model does not match listings for another as strongly.
+    """
     text = (text or "").lower()
     tokens: list[str] = []
     for m in re.finditer(r"[a-z0-9]+", text):
         tokens.append(m.group())
+        glued = _GLUED_MODEL.match(m.group()) if model_numbers else None
+        if glued:
+            tokens.append(glued[1])  # "iPhone15" still matches a search for "iphone".
+    if model_numbers:
+        tokens.extend(m[1] + m[2] for m in _SPACED_MODEL.finditer(text) if not m[0].isalnum())
     for seg in re.findall(rf"[{_CJK}]+", text):
         if len(seg) == 1:
             tokens.append(seg)

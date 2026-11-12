@@ -18,6 +18,7 @@ from store.product_store import ProductStore
 CELLS = {
     "Smartwatches": "Electronics > Wearable Technology > Smartwatches",
     "Smartwatch Bands": "Cell Phones & Accessories > Accessories > Smartwatch Accessories > Smartwatch Bands",
+    "Phone Basic Cases": "Cell Phones & Accessories > Cases, Holsters & Sleeves > Basic Cases",
 }
 SAMPLES = [
     ("B000000001", "Atlas Smartwatch", "Atlas", 25, "Smartwatches", "A rugged watch for hiking."),
@@ -25,6 +26,16 @@ SAMPLES = [
     ("B000000003", "Apex Smartwatch", "Apex", 65, "Smartwatches", "A bright watch for runners."),
     ("B000000004", "Atlas Replacement Band", "Atlas", 8, "Smartwatch Bands", "A soft strap."),
     ("B000000005", "Vector Smart Watch Bands 20mm", "Vector", 30, "Smartwatches", "Straps in a mislabeled leaf."),
+    ("B000000006", "Shield Slim Case for iPhone 15", "Shield", 12, "Phone Basic Cases", "A slim fit case."),
+    ("B000000007", "Guard Phone Case for iPhone 13 and iPhone 14", "Guard", 10, "Phone Basic Cases", "Fits two models."),
+    ("B000000008", "Flex Phone Case", "Flex", 9, "Phone Basic Cases", "A stretchy case for most smartphones."),
+    ("B000000009", "Duo Phone Case for iPhone 14/15", "Duo", 11, "Phone Basic Cases", "One mold, two phones."),
+    ("B000000010", "Tilt Phone Case for iPhone 15 Pro Max", "Tilt", 14, "Phone Basic Cases", "Made for the largest model."),
+    ("B000000011", "Clear Phone Case for Pixel 7", "Clear", 8, "Phone Basic Cases", "A clear case."),
+    ("B000000012", "Snug Phone Case for iPhone 15 Pro", "Snug", 13, "Phone Basic Cases", "Does NOT fit iPhone 15. Only for the Pro."),
+    ("B000000013", "Grip Phone Case for iPhone 15 Pro Max", "Grip", 12, "Phone Basic Cases", "This iPhone 15 phone case is soft."),
+    ("B000000014", "Fold Phone Case", "Fold", 12, "Phone Basic Cases",
+     'Fits iPhone 15 Pro. NOT fit iPhone 15 Mini (5.4"), iPhone 15 (6.1") or the Plus.'),
 ]
 
 
@@ -84,6 +95,23 @@ def store(tmp_path_factory):
             conn.execute(
                 "INSERT INTO product_attributes VALUES (?, 'battery_hours', ?, 'observed', 'description', 0, 1, 'rule')",
                 (f"amz_{product}", hours),
+            )
+        conn.execute(
+            "INSERT INTO product_attributes VALUES ('amz_B000000003', 'feature', 'waterproof', 'observed', 'description', 0, 1, 'rule')"
+        )
+        # Catalogs built before attributes-v3 stored the device a listing says it does not fit.
+        conn.execute(
+            "INSERT OR IGNORE INTO product_attributes VALUES ('amz_B000000012', 'compatible_device', 'iphone_15', 'observed', 'description', 0, 1, 'rule')"
+        )
+        reviews = (
+            ("B000000006", 1, 1, "Shipping took three weeks and the package was crushed on arrival."),
+            ("B000000006", 2, 2, "The slim case cracked at the corner after one week of normal use."),
+            ("B000000006", 3, 5, "Great case, fits perfectly and feels solid."),
+        )
+        for product, index, rating, content in reviews:
+            conn.execute(
+                "INSERT INTO product_reviews (product_id, source_index, rating, content, polarity) VALUES (?, ?, ?, ?, ?)",
+                (f"amz_{product}", index, rating, content, "negative" if rating <= 2 else "positive"),
             )
     return ProductStore(db)
 
@@ -191,3 +219,98 @@ def test_graph_channel_proposes_but_sql_still_decides(store):
 def test_vector_failure_degrades_to_keyword_search(store):
     service = CatalogSearchService(store, FakeIndex(error=RuntimeError("down")), FakeIndex(), reranker=FakeReranker([]))
     assert "B000000001" in _ids(service.search("smartwatches"))
+
+
+class RecordingReranker(FakeReranker):
+    def rerank(self, query, chunks, top_k=None):
+        self.documents = {c.chunk_id: c.document for c in chunks}
+        return super().rerank(query, chunks, top_k)
+
+
+def test_wanted_feature_from_the_listing_is_confirmed_without_hiding_silent_listings(store):
+    service = CatalogSearchService(store, FakeIndex(), FakeIndex(), reranker=FakeReranker([]))
+    result = service.search("waterproof smartwatches")
+    assert result.parsed.features == ["waterproof"]
+    checks = {hit.product_id.removeprefix("amz_"): hit.attribute_checks for hit in result.hits}
+    assert checks["B000000003"] == {"waterproof": "meets"}
+    assert checks["B000000001"] == {"waterproof": "unknown"}  # Silence is not a miss.
+    assert _ids(result)[0] == "B000000003"
+
+
+def test_accessories_for_another_model_of_the_device_are_left_out(store):
+    service = CatalogSearchService(store, FakeIndex(), FakeIndex(), reranker=FakeReranker([]))
+    result = service.search("iphone 15 phone case")
+    found = _ids(result)
+    assert "B000000007" not in found  # Names only the iPhone 13 and 14.
+    assert "B000000010" not in found  # The Pro Max is another size.
+    assert "B000000011" not in found  # For another phone entirely.
+    assert "B000000012" not in found  # Says it does not fit the iPhone 15.
+    assert "B000000013" not in found  # The title is for the Pro Max; a loose description does not change that.
+    assert "B000000014" not in found  # Denied later in a list of models.
+    assert {"B000000006", "B000000008", "B000000009"} <= set(found)  # Exact, universal, and "14/15".
+    checks = {hit.product_id.removeprefix("amz_"): hit.attribute_checks for hit in result.hits}
+    assert checks["B000000006"] == {"works with iphone 15": "meets"}
+    assert checks["B000000008"] == {"works with iphone 15": "unknown"}
+    assert found[0] == "B000000006"
+
+
+def test_model_numbers_count_in_keyword_search(store):
+    service = CatalogSearchService(store, FakeIndex(), FakeIndex(), reranker=FakeReranker([]))
+    tokens = __import__("search.lexical", fromlist=["tokenize"]).tokenize("iPhone 15 case", model_numbers=True)
+    assert "iphone15" in tokens
+    ranked = service._lexical_ranking(["iphone", "iphone15", "case"], {"amz_B000000006", "amz_B000000007"}, result_type())
+    assert ranked[0] == "amz_B000000006"
+
+
+def result_type():
+    from search.query_understanding import ParsedQuery
+    return ParsedQuery(original_query="q", sub_category="Phone Basic Cases")
+
+
+def test_relevance_leads_and_confirmation_only_nudges(store, monkeypatch):
+    monkeypatch.setenv("USE_RERANK", "1")
+
+    class Scores:
+        def rerank(self, query, chunks, top_k=None):
+            scores = {"amz_B000000001": 0.9, "amz_B000000003": 0.3, "amz_B000000002": 0.85}
+            return [SimpleNamespace(chunk=c, rerank_score=scores[c.chunk_id]) for c in chunks if c.chunk_id in scores]
+
+    service = CatalogSearchService(store, FakeIndex(), FakeIndex(), reranker=Scores())
+    # B3 confirms waterproof but the reranker finds it far less relevant: it must not jump to first.
+    assert _ids(service.search("waterproof smartwatches"))[:3] == ["B000000001", "B000000002", "B000000003"]
+
+
+def test_reviews_that_matched_the_request_reach_the_reranker(store, monkeypatch):
+    monkeypatch.setenv("USE_RERANK", "1")
+    review = RetrievedChunk("amz_B000000003:review:1", "Apex Smartwatch\nReview: Stays put on long runs.",
+                            {"product_id": "amz_B000000003", "chunk_type": "user_review", "rating": 5}, 0.2)
+    reranker = RecordingReranker(["amz_B000000003"])
+    service = CatalogSearchService(store, FakeIndex(), FakeIndex([review]), reranker=reranker)
+    service.search("smartwatches for running")
+    assert "Customer reviews: Stays put on long runs." in reranker.documents["amz_B000000003"]
+    assert "Customer reviews" not in reranker.documents["amz_B000000001"]
+
+
+def test_cards_get_a_product_complaint_not_a_shipping_one(store, monkeypatch):
+    service = CatalogSearchService(store, FakeIndex(), FakeIndex(), reranker=FakeReranker([]))
+    hit = next(h for h in service.search("slim iphone 15 phone case").hits if h.product_id == "amz_B000000006")
+    complaints = [c for c in hit.evidence if c.metadata.get("polarity") == "negative"]
+    assert [c.document for c in complaints] == ["The slim case cracked at the corner after one week of normal use."]
+    from agent.tools import evidence
+    monkeypatch.setattr(evidence, "is_english", lambda: True)
+    assert "cracked" in evidence.card_evidence(hit, "slim iphone 15 phone case")["risk"]
+
+
+def test_a_case_for_one_variant_is_not_offered_for_another(store):
+    service = CatalogSearchService(store, FakeIndex(), FakeIndex(), reranker=FakeReranker([]))
+    found = _ids(service.search("iphone 15 pro max phone case"))
+    assert set(found[:2]) == {"B000000010", "B000000013"}  # The two Pro Max cases.
+    assert "B000000012" not in found  # A 15 Pro case.
+
+
+def test_cables_that_list_other_models_only_rank_lower(store):
+    # Only shaped accessories are filtered; a listing's model list elsewhere is rarely complete.
+    from search.query_understanding import ParsedQuery
+    service = CatalogSearchService(store, FakeIndex(), FakeIndex(), reranker=FakeReranker([]))
+    intent = ParsedQuery(original_query="q", compatible_with=["iphone_15", "iphone"])
+    assert service._device_checks("amz_B000000002", intent.compatible_with) == {"works with iphone 15": "unknown"}

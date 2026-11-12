@@ -620,7 +620,7 @@ class Agent:
     @staticmethod
     def _slots_for(decision: IntentDecision, raw_query: str, session: AgentSession) -> dict[str, Any]:
         if decision.args is not None:
-            return routed_slots(decision, session)
+            return routed_slots(decision, session, raw_query)
         return tool_slots(decision.tool, raw_query, session)
 
     def _with_spec_change_route(self, query: str, session: AgentSession, decision: IntentDecision) -> IntentDecision:

@@ -170,7 +170,10 @@ ROUTER_ARG_FIELDS = {
     "cart_item": "The cart line number for remove, set_quantity or change_spec when the shopper names one; otherwise null.",
     "size_step": "1 for one size up or bigger, -1 for one size down or smaller, when no size is named; "
                  "'change it to large' names a size and gives 0.",
-    "clear": "Conditions the shopper withdraws: 'any brand is fine' gives brand; 'budget doesn't matter' gives budget.",
+    "clear": "Whole groups of conditions the shopper withdraws: 'any brand is fine' gives brand; 'budget doesn't matter' "
+             "gives budget; 'forget the battery and size limits' gives measurements; 'drop all the ingredient restrictions' "
+             "gives exclusions; 'it doesn't need to fit a particular phone' gives device; 'no special features needed' gives "
+             "features. Withdrawing one item ('alcohol is fine now') or naming a new device or limit is not a clear.",
     "cheaper": "True when the shopper wants cheaper options than those shown without stating a price.",
     "whole_order": "For reorder: true when the shopper wants the whole last order again.",
     "reorder_item": "For reorder: the product words the shopper names, such as 'Anker speaker'; empty when none.",
@@ -257,7 +260,7 @@ COMPOSER_SYSTEM = f"""You are CartPilot, a knowledgeable shopping assistant who 
 - Avoid praise that fits any product, such as "great quality" or "good value".
 - evidence.risk is a relevant complaint. When present, mention it briefly at the end. Otherwise do not invent drawbacks.
 - graph_evidence entries were extracted from this listing or its reviews, each with the original quote. Use one when it is relevant, and treat PRAISED_FOR and CRITICIZED_FOR as reviewer opinions.
-- attribute_checks: "free" means the listing states it. A key such as "battery_hours >= 20" is a limit the shopper set; "meets" means the listing states a value that satisfies it. "unknown" means the listing does not say, so write that it is not confirmed and never claim the product meets the requirement.
+- attribute_checks: "free" means the listing states it. A key such as "battery_hours >= 20" is a limit the shopper set; "meets" means the listing states a value that satisfies it. A key such as "waterproof" or "works with iphone 15" is a property or device the shopper asked for; "meets" means the listing states it. "unknown" means the listing does not say, so write that it is not confirmed and never claim the product meets the requirement.
 - note is a verified statement about this product. Include it when present.
 - Exclusions in the request were already applied by search, so do not comment on them. parsed.sub_category_exclude lists product types removed from the results: "smartwatches, no watch bands" means bands sold as separate products are left out, not that a watch comes without a strap. Only attribute_checks can be unconfirmed.
 - Mention a product's rating only when it helps the choice, such as an unusually high or low score or very few ratings. Do not end every product line with it.

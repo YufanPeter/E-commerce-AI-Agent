@@ -20,10 +20,15 @@ NUMBER = r"(?P<value>\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d*\.\d+|\d+)"
 AMOUNT = r"(?<![\w.,])" + NUMBER
 SEP = r"\s*[:=–-]?\s*"
 VOLUME = AMOUNT + r"\s*(?:[-–]\s*)?(?P<unit>fl\.?\s*oz\.?|fluid ounces?|oz\.?|ounces?|mL|millilit(?:er|re)s?|L|lit(?:er|re)s?)\b"
-NEGATION = re.compile(r"\b(?:no|not|without|lacks?|not rated(?: for)?)(?:\s+(?:a|an|the|have|with|any|does|do|contain|contains))*\s*$", re.I)
+# "Does NOT fit iPhone 14" and "not compatible with Android" deny the device that follows.
+NEGATION = re.compile(
+    r"\b(?:no|not|without|lacks?|not rated(?: for)?)"
+    r"(?:\s+(?:a|an|the|have|with|any|does|do|contain|contains|fit|fits|compatible|work|works|for|designed))*\s*$",
+    re.I,
+)
 _RANGE_PREFIX = re.compile(r"\b\d+(?:\.\d+)?\s*(?:[-–]|to)\s*$", re.I)
 
-ATTRIBUTE_RULES_VERSION = "attributes-v2"
+ATTRIBUTE_RULES_VERSION = "attributes-v3"
 
 
 @dataclass(frozen=True)
@@ -221,6 +226,30 @@ MULTI_VALUE: dict[str, dict[str, tuple[Rule, ...]]] = {
     "Clothing & Sports": {"material": _MATERIAL, "color": _COLOR, "claim": _CLAIMS},
     "Home & Kitchen": {"material": _MATERIAL, "color": _COLOR, "free_of": _FREE_OF},
 }
+
+
+# Multi-valued attributes a shopper can ask for by name. The rules that read listings also
+# read the query, so "noise cancelling" and "ANC" both become the stored value.
+WANTED_ATTRIBUTES: dict[str, tuple[Rule, ...]] = {
+    "feature": _FEATURES,
+    "connectivity": _CONNECTIVITY,
+    "material": _MATERIAL,
+    "claim": _CLAIMS,
+    "skin_type": _SKIN_TYPE,
+    "color": _COLOR,
+}
+
+
+def wanted_values(text: str) -> list[str]:
+    """Attribute values the text asks for; negated mentions ("no leather") are skipped."""
+    fields = {TITLE: text or "", DESCRIPTION: ""}
+    values: list[str] = []
+    for rules in WANTED_ATTRIBUTES.values():
+        for observation in extract_multi(fields, rules):
+            value = str(observation["value"])
+            if value not in values:
+                values.append(value)
+    return values
 
 
 def extract_attributes(category: str, title: str, description: str) -> list[dict[str, Any]]:

@@ -51,7 +51,7 @@ ENGLISH_TOOLS: tuple[str, ...] = (*KNOWN_TOOLS, "similar", "accessories", "buyin
 CART_ACTIONS: tuple[str, ...] = (
     "add", "remove", "set_quantity", "change_spec", "view", "checkout", "reorder", "order_history", "answer", "cancel",
 )
-CLEARABLE: tuple[str, ...] = ("budget", "brand")
+CLEARABLE: tuple[str, ...] = ("budget", "brand", "measurements", "exclusions", "device", "features")
 
 
 @dataclass(frozen=True)

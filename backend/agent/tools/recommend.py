@@ -24,7 +24,7 @@ from i18n import is_english
 from catalog_config import PROFILE
 from search.query_decomposer import SubRequest, decompose_query
 from search.query_understanding import ParsedQuery
-from search.search_service import ProductHit, SearchResult, SearchService, confirmed_tier
+from search.search_service import ProductHit, SearchResult, SearchService
 
 
 logger = logging.getLogger(__name__)
@@ -249,9 +249,9 @@ class RecommendTool:
             lower = max(lo_p, lo_budget) if lo_budget is not None else lo_p
             return max(0.0, min(1.0, (upper - lower) / (hi_p - lo_p)))
 
-        def _key(h: ProductHit) -> tuple[int, float]:
-            fit = (float(getattr(h, "score", 0.0) or 0.0) - lo) / span + _BUDGET_FIT_WEIGHT * _fraction(h)
-            return confirmed_tier(h, parsed), fit
+        def _key(h: ProductHit) -> float:
+            # Listing confirmations are already part of the search score.
+            return (float(getattr(h, "score", 0.0) or 0.0) - lo) / span + _BUDGET_FIT_WEIGHT * _fraction(h)
 
         return sorted(hits, key=_key, reverse=True)
 

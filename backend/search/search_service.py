@@ -487,17 +487,6 @@ def _budget_fit(hit: ProductHit, low: float | None, high: float | None) -> float
     return 1.0 if fully_inside else 0.6
 
 
-def confirmed_tier(hit: ProductHit, parsed: ParsedQuery | None) -> int:
-    """How many of the shopper's conditions the listing confirms, the first sort key after search.
-
-    It applies only when the search names a product type or category, so every hit is the
-    right kind of product. Later reorderings must keep it as their first key.
-    """
-    if parsed is None or not (parsed.sub_category or parsed.category):
-        return 0
-    return sum(value in ("free", "meets") for value in (getattr(hit, "attribute_checks", None) or {}).values())
-
-
 def _apply_profile_boost(
     hits: list[ProductHit],
     parsed: ParsedQuery,
