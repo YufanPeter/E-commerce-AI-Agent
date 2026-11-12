@@ -93,7 +93,8 @@ class ProductDetailTool:
         slots: dict[str, Any],
     ) -> ToolResult:
         last_hits = session.recall_hits()
-        if not last_hits:
+        # A product from an earlier visit needs no list on screen.
+        if not last_hits and not slots.get("product_id"):
             session.task.end_pending("detail_pick")
             return self._plain(query, t("detail.need_list"))
 

@@ -167,9 +167,9 @@ def _summary(items: list[dict[str, Any]]) -> str:
     return (", " if is_english() else "、").join(labels)
 
 
-_ACTIVITY_LABELS = {"search": "搜索", "view_detail": "看了", "compare": "对比了", "add_cart": "加购了", "remove_cart": "移出了", "checkout": "下单了"}
+_ACTIVITY_LABELS = {"search": "搜索", "view_detail": "看了", "compare": "对比了", "choose": "选了", "add_cart": "加购了", "remove_cart": "移出了", "checkout": "下单了"}
 if is_english():
-    _ACTIVITY_LABELS = {"search": "Searched", "view_detail": "Viewed", "compare": "Compared", "add_cart": "Added", "remove_cart": "Removed", "checkout": "Ordered"}
+    _ACTIVITY_LABELS = {"search": "Searched", "view_detail": "Viewed", "compare": "Compared", "choose": "Picked", "add_cart": "Added", "remove_cart": "Removed", "checkout": "Ordered"}
 
 
 def _activity(store: UserMemoryStore, user_id: str, limit: int = 8) -> list[dict[str, Any]]:
@@ -475,6 +475,10 @@ def events_from_tool_result(tool_result: dict[str, Any], query: str) -> list[dic
         action = payload.get("action")
         if action == "add" and payload.get("added"):
             return [_product_event("add_cart", payload["added"])]
+        if action == "ask_spec" and payload.get("product_id"):
+            # Picked to add, size or color still open: not a purchase signal, but the shopper
+            # will still call it "the headphones I added".
+            return [_product_event("choose", payload)]
         if action == "reorder":
             return [_product_event("add_cart", line) for line in payload.get("added_lines") or []]
         if action == "remove" and payload.get("removed"):
@@ -513,6 +517,43 @@ def _fill_product_facts(events: list[dict[str, Any]]) -> None:
                 event["title"] = event.get("title") or detail.title
     except Exception:  # noqa: BLE001 - 补不齐也不影响记录
         logger.warning("补全事件商品信息失败", exc_info=True)
+
+
+# Strongest action first: "the speaker I bought" should not resolve to one only viewed.
+_TRAIL_ACTIONS = {"checkout": "bought", "add_cart": "added to cart", "choose": "picked to add", "compare": "compared", "view_detail": "viewed"}
+
+
+def product_trail(store: UserMemoryStore, user_id: str | None, limit: int = 8) -> list[dict[str, Any]]:
+    """Products the shopper bought, added, compared or opened lately, newest first, one row each.
+
+    Lets a later turn, even in another conversation, say "the speaker I bought last time"
+    or "the stand I looked at yesterday" and reach that product instead of the screen.
+    """
+    if not user_id:
+        return []
+    try:
+        events = store.recent_events(user_id, days=90, limit=400)
+    except Exception:  # noqa: BLE001 - without the trail a reference just stays unresolved
+        logger.warning("Reading the product trail failed", exc_info=True)
+        return []
+    rank = list(_TRAIL_ACTIONS)
+    trail: dict[str, dict[str, Any]] = {}
+    for event in events:  # newest first
+        product_id, kind = event.get("product_id"), event.get("type")
+        if not product_id or kind not in _TRAIL_ACTIONS or not event.get("title"):
+            continue
+        row = trail.get(product_id)
+        if row is None:
+            trail[product_id] = {
+                "product_id": product_id, "title": event["title"], "sub_category": event.get("sub_category"),
+                "action": kind, "at": str(event.get("created_at") or "")[:10],
+            }
+        elif rank.index(kind) < rank.index(row["action"]):
+            row["action"] = kind  # keep the newest date, show the strongest action
+    rows = list(trail.values())[:limit]
+    for row in rows:
+        row["action"] = _TRAIL_ACTIONS[row["action"]]
+    return rows
 
 
 def record_turn(store: UserMemoryStore, user_id: str | None, session_id: str | None, tool_result: dict[str, Any], query: str) -> None:

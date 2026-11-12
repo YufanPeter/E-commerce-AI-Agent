@@ -146,8 +146,8 @@ ROUTER_TOOL_FIELD = (
     "- refine: change the current search: budget, brand, a feature, or cheaper\n"
     "- compare: compare two or more shown products\n"
     "- product_detail: a question about one shown product, its reviews, or its suitability\n"
-    "- similar: products like a shown one\n"
-    "- accessories: what goes with or fits a shown product\n"
+    "- similar: products like a shown one, or like one the shopper bought, added or opened before\n"
+    "- accessories: what goes with or fits a shown product, or one the shopper bought before\n"
     "- buying_guide: general advice on choosing a kind of product\n"
     "- cart: the cart, checkout, past orders, or answering a waiting question about adding\n"
     "- clarify: no product clue at all\n"
@@ -177,6 +177,9 @@ ROUTER_ARG_FIELDS = {
     "cheaper": "True when the shopper wants cheaper options than those shown without stating a price.",
     "whole_order": "For reorder: true when the shopper wants the whole last order again.",
     "reorder_item": "For reorder: the product words the shopper names, such as 'Anker speaker'; empty when none.",
+    "history_item": "1-based number in the list of products the shopper bought, added or opened before, when the message "
+                    "points at one of those rather than at a product on screen: 'the speaker I bought last time', 'the stand "
+                    "I looked at yesterday', 'the headphones I added'. Match the kind of product and the action. Null otherwise.",
 }
 ROUTER_SYSTEM = """You route messages for a shopping assistant and read what the chosen tool acts on. Call route_to_tool and never answer directly.
 
@@ -185,6 +188,7 @@ Rules:
 2. When results are on screen and the message only changes the search (a brand, color, feature, price, or "cheaper"), use refine and restore the earlier product type in rewritten_query.
 3. Compare words such as compare, versus, or which is better go to compare, even when products are named.
 4. A question about one shown product ("tell me about the second one", "will this fit a small wrist") goes to product_detail. Products like a shown one go to similar, and what fits or goes with a shown product goes to accessories.
+   A product the shopper bought, added or opened earlier counts the same way: "something like the speaker I bought last time" is similar with history_item, and "is the stand I looked at yesterday adjustable?" is product_detail with history_item. Never answer such a message with recommend, which cannot know what they bought.
 5. Buying, adding, removing, quantities, sizes or colors of cart items, the cart, checkout, buying again, and past orders go to cart with a cart_action. "Buy a coffee machine" with nothing shown is recommend.
 6. When a question is waiting, a message that answers or adjusts the choice ("medium", "black", "one size up", "the second one") is cart with cart_action answer, and "never mind" is cart with cancel. Any other message is routed as usual, which drops the question.
 7. Use clarify only when there is no product clue at all, such as "just browsing". Use fallback for topics unrelated to shopping.

@@ -103,6 +103,19 @@
     "tvs?"
    ]
   },
+  "Makeup": {
+   "terms": [
+    "make ?-?ups?",
+    "cosmetics?",
+    "beauty makeup"
+   ],
+   "members": [
+    "Mascara",
+    "Lipstick",
+    "False Lashes",
+    "Nail Polish"
+   ]
+  },
   "Holiday Decorations": {
    "terms": [
     "(?:christmas|xmas|holiday|festive) (?:decorations?|decor|ornaments?)",

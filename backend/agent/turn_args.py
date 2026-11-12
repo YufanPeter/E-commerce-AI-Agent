@@ -93,6 +93,17 @@ def routed_slots(decision: IntentDecision, session: AgentSession, raw_query: str
     task = session.task
     items = task.add_targets() if tool == "cart" else task.active_view.items
     indices = [p - 1 for p in args.get("positions") or [] if 0 < p <= len(items)]
+    trail = session.product_trail
+    picked = args.get("history_item")
+    remembered = trail[picked - 1] if picked and picked <= len(trail) and not indices else None
+    if remembered is not None and tool in {"product_detail", "similar", "accessories"}:
+        # A product from an earlier visit is not on screen, so it travels as itself.
+        trail_slots: dict[str, Any] = {"history_product": remembered}
+        if tool == "product_detail":
+            trail_slots["product_id"] = remembered["product_id"]
+        if args.get("cheaper"):
+            trail_slots["cheaper"] = True
+        return trail_slots
     if tool in {"cart", "product_detail", "similar", "accessories"} and not indices:
         # A reference the router could not place falls back to the focused product.
         focus = _focus_index(items, session)

@@ -664,6 +664,7 @@ class RecommendTool:
         base: Any,
         parsed: ParsedQuery | None = None,
         exclude_seen: bool = False,
+        exclude_ids: set[str] | None = None,
     ) -> ToolResult:
         # 宽泛浏览（首轮、未承接 refine）时多召回一个候选池，便于做多样性筛选；
         # refine（base 非空）是聚焦的承接式追问，保持原样不打散。
@@ -673,6 +674,9 @@ class RecommendTool:
         if parsed is not None:
             search_kwargs["parsed"] = parsed
         seen = set(session.recall_seen()) if exclude_seen else set()
+        if exclude_ids:
+            # "Something like X" must not offer X itself.
+            search_kwargs["top_k_products"] = pool_k + len(exclude_ids)
         if seen:
             # 已展示的商品会占掉召回名额，按数量放大，保证去重后还有新商品可选
             search_kwargs["top_k_products"] = pool_k + len(seen)
@@ -683,8 +687,9 @@ class RecommendTool:
             session,
             **search_kwargs,
         )
-        if seen:
-            result = replace(result, hits=[h for h in result.hits if h.product_id not in seen])
+        if seen or exclude_ids:
+            hidden = seen | set(exclude_ids or ())
+            result = replace(result, hits=[h for h in result.hits if h.product_id not in hidden])
         relaxed: list[str] = []
         if not result.hits and isinstance(base, ParsedQuery) and not seen and parsed is None:
             result, relaxed = self._without_carried_conditions(query, session, base, result, search_kwargs)

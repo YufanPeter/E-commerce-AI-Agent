@@ -171,6 +171,7 @@ def _tool_schema() -> dict[str, Any]:
         "cheaper": {"type": "boolean", "description": fields["cheaper"]},
         "whole_order": {"type": "boolean", "description": fields["whole_order"]},
         "reorder_item": {"type": "string", "description": fields["reorder_item"]},
+        "history_item": {**nullable_int, "description": fields["history_item"]},
     }
     return {
         "type": "function",
@@ -205,6 +206,7 @@ def english_args(raw: dict[str, Any]) -> dict[str, Any]:
         "cheaper": raw.get("cheaper") is True,
         "whole_order": raw.get("whole_order") is True,
         "reorder_item": " ".join(str(raw.get("reorder_item") or "").split()),
+        "history_item": positive(raw.get("history_item")),
     }
 
 
@@ -315,6 +317,12 @@ def _english_state(session: AgentSession) -> list[str]:
     elif pending is not None and pending.kind == "cart_pick":
         choices = _numbered(pending.data.get("candidates") or [])
         sections.append(f"Waiting for the shopper to say which product to add:\n{choices}")
+    if session.product_trail:
+        lines = "\n".join(
+            f"{i}. {item['action']} on {item['at']}: {str(item['title'])[:90]}"
+            for i, item in enumerate(session.product_trail, start=1)
+        )
+        sections.append(f"Products the shopper bought, added or opened before, newest first (history_item counts these; positions never do):\n{lines}")
     return sections
 
 

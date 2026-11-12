@@ -304,6 +304,7 @@ def _attach_user_memory(session: Any, user_id: str | None) -> None:
     inferred = memory_service.inferred_signals(_user_memory, clean_user_id)
     if inferred:
         session.user_profile["_inferred"] = inferred
+    session.product_trail = memory_service.product_trail(_user_memory, clean_user_id)
 
 
 def _apply_realtime_preference_updates(query: str, session: Any) -> list[dict[str, Any]]:

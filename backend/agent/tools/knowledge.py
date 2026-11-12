@@ -6,6 +6,7 @@ from SQLite, so a stale graph can never show a wrong price.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 from agent.session import AgentSession
@@ -13,6 +14,7 @@ from agent.tools.base import ToolResult
 from agent.tools.recommend import RecommendTool, _card_with_evidence
 from agent.tools.resolve import focus_index_in, positions_in, resolve_one
 from search.catalog_understanding import understand
+from search.query_understanding import ParsedQuery
 
 
 _SHOWN = 5
@@ -35,12 +37,16 @@ class KnowledgeTool:
             return self._guide(query, session, service)
         focus = self._focus(query, session, slots)
         if focus is None:
+            if not getattr(session, "product_trail", None):
+                return _text_result(self.name, "I don't have any products you bought or opened before yet. Tell me what you're looking for and I'll find options.")
             return _text_result(self.name, "Which product do you mean? Try “the first one”.")
         return self._accessories(focus, session, service) if self.name == "accessories" else self._similar(query, focus, session, service, slots)
 
     @staticmethod
     def _focus(query: str, session: AgentSession, slots: dict[str, Any]) -> dict[str, Any] | None:
-        """The named product, then the one under discussion, then the top result."""
+        """A product from an earlier visit, the named product, the one under discussion, then the top result."""
+        if slots.get("history_product"):
+            return slots["history_product"]
         hits = session.recall_hits()
         if not hits:
             return None
@@ -72,15 +78,35 @@ class KnowledgeTool:
         price = service.min_price(focus["product_id"])
         limit = price - 0.01 if wants_cheaper and price is not None else None
         related = service.graph.similar(focus["product_id"], _POOL) if service.graph is not None else []
-        if not related:  # Without the graph, an ordinary search still gives a useful answer.
-            label = (session.recall_parsed() or {}).get("sub_category") or title
-            fallback = f"{label} under ${limit:.2f}" if limit is not None else str(label)
-            return self._recommend.run(fallback, session, slots)
+        if not related:  # Without the graph, a search near the product itself still answers.
+            return self._like(focus, session, slots, limit)
         hits = service.hits_for(related, max_price=limit)[:_SHOWN]
         if not hits:
             return _text_result(self.name, f"I couldn't find anything similar and cheaper than {title}.")
         lead = "cheaper options" if wants_cheaper else "similar options"
         return self._cards(hits, query, session, f"Here are {lead} based on {title}.")
+
+    def _like(self, focus: dict[str, Any], session: AgentSession, slots: dict[str, Any], limit: float | None) -> ToolResult:
+        """Products of the focus product's own type whose listings read like it.
+
+        The type comes from the product, not from the last search: after "coffee mugs",
+        "something like the headphones I added" still means headphones.
+        """
+        title = str(focus["title"])
+        detail = self._recommend._get_products().get_product_detail(focus["product_id"])
+        label = getattr(detail, "sub_category", None) or focus.get("sub_category")
+        if not label:
+            return self._recommend.run(title, session, slots)
+        parsed = ParsedQuery(
+            original_query=title, sub_category=label, retrieval_query=title, search_text=title, max_price=limit,
+        )
+        result = self._recommend._run_single(
+            title, session, top_k=_SHOWN, base=None, parsed=parsed, exclude_ids={focus["product_id"]},
+        )
+        remembered = slots.get("history_product")
+        when = f", which the shopper {remembered['action']} on {remembered['at']}" if remembered else ""
+        note = f"These are {label} similar to “{title}”{when}. Open by naming that product in a few words."
+        return replace(result, composer_hint=f"{note} {result.composer_hint or ''}".strip())
 
     def _accessories(self, focus: dict[str, Any], session: AgentSession, service: Any) -> ToolResult:
         title = focus["title"]

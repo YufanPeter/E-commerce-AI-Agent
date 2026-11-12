@@ -148,6 +148,9 @@ class AgentSession:
     # Session summary and other plain values; the shopping state lives in ``task``.
     working_memory: dict[str, Any] = field(default_factory=dict)
     history_window: int = DEFAULT_HISTORY_WINDOW
+    # Products the shopper bought, added or opened lately, across conversations. Loaded per
+    # request from the event log like ``user_profile`` and never saved with the session.
+    product_trail: list[dict[str, Any]] = field(default_factory=list)
     task: ShoppingTask = field(init=False)
 
     def __post_init__(self) -> None:

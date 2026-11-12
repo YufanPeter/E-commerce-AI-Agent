@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from agent.tools.base import ToolResult
 from agent.tools.knowledge import KnowledgeTool, _guide_text
 from graph.build_graph import attribute_rows, own_device, similar_pairs
 from graph.extract import Product
@@ -106,6 +107,13 @@ class _Recommend:
         self.searched.append(query)
         return SimpleNamespace(tool_name="recommend", payload={})
 
+    def _get_products(self):
+        return SimpleNamespace(get_product_detail=lambda pid: SimpleNamespace(sub_category="Smartwatches"))
+
+    def _run_single(self, query, session, top_k, base, parsed=None, exclude_ids=None):
+        self.searched.append((parsed.sub_category, parsed.max_price, exclude_ids))
+        return ToolResult(tool_name="recommend", payload={}, composer_hint="Found 5 products.")
+
 
 def _hit(product_id, price):
     return SimpleNamespace(product_id=product_id, title=product_id, brand="B", category="C", sub_category="L", min_price=price, max_price=price, sku_count=1, evidence=[], attribute_checks={}, graph_evidence=())
@@ -126,12 +134,12 @@ def test_similar_but_cheaper_prices_come_from_the_catalog(monkeypatch):
     assert [card["product_id"] for card in result.payload["products"]] == ["cheap"]
 
 
-def test_similar_searches_normally_when_the_graph_is_down():
+def test_similar_searches_the_products_own_type_when_the_graph_is_down():
     recommend = _Recommend(_service(None, {"focus": 50.0}))
     session = _session([{"product_id": "focus", "title": "Watch"}])
-    session.recall_parsed = lambda: {"sub_category": "Smartwatches"}
+    session.recall_parsed = lambda: {"sub_category": "Coffee Mugs"}  # the last search is about something else
     KnowledgeTool("similar", recommend).run("Something similar but cheaper", session, {"cheaper": True})
-    assert recommend.searched == ["Smartwatches under $49.99"]
+    assert recommend.searched == [("Smartwatches", 49.99, {"focus"})]
 
 
 def test_unconfirmed_accessories_say_so(monkeypatch):
