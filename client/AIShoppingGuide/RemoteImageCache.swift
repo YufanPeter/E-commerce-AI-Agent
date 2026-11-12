@@ -106,10 +106,13 @@ struct ProductRemoteImage: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Color.white)
         } else {
-            image
-                .resizable()
-                .scaledToFill()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // 填满时图片本身比框大；挂在 Color.clear 上才按给定的框裁切，否则宽图会撑出去盖住旁边的文字
+            Color.clear
+                .overlay {
+                    image
+                        .resizable()
+                        .scaledToFill()
+                }
                 .clipped()
         }
     }

@@ -466,7 +466,8 @@ extension ChatMessage {
         lines += content.points ?? []
         lines += content.picks ?? []
         if let summary = content.summary { lines.append(summary) }
-        return lines.filter { !$0.isEmpty }.joined(separator: "\n")
+        // 总结和建议里的 **商品名** 是给界面高亮用的，分享出去的是纯文本
+        return lines.filter { !$0.isEmpty }.joined(separator: "\n").replacingOccurrences(of: "**", with: "")
     }
 
     /// 从本条 AI 消息的结构化 JSON 里取某商品的专属解说（与列表页逻辑一致）。

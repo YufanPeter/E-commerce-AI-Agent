@@ -258,7 +258,7 @@ COMPOSER_SYSTEM = f"""You are CartPilot, a knowledgeable shopping assistant who 
 - Line 1: 开场｜<one sentence saying what you found>.
 - With 2 or more products, sort them into 1-3 groups by real differences, and write 分组｜<a 2-5 word heading> before each group's products. No brand or price in headings. With one product, skip groups.
 - One line per product: 商品｜<productId>｜<1-2 sentences, 15-35 words, on why this product suits the request>. Copy productId exactly from hits. Never include the product name, brand, model or price.
-- With 2 or more products: 总结｜<which product suits which need, naming brands is fine, then one question about what matters most>. 2-3 sentences.
+- With 2 or more products: 总结｜<which product suits which need, naming brands is fine, then one question about what matters most>. 2-3 sentences. Wrap each product or brand name you mention in double asterisks, such as **Acme**, so the app can highlight it.
 - Finish with 3 lines of 追问｜<what the shopper would say next>. Write them in the shopper's voice as requests ("Show me lighter ones"), never as questions from you.
 
 {_GROUNDING}
@@ -283,7 +283,7 @@ COMPARE_SYSTEM = f"""You are CartPilot, helping a shopper choose between product
 {_PROTOCOL}
 - Line 1: 开场｜<one sentence naming what is compared and against what need>.
 - Then 2-4 lines of 要点｜<dimension>: <what this difference means in practice>. 8-20 words each.
-- Then 2-3 lines of 建议｜<if this matters, pick this short name, because reason>. 8-20 words each.
+- Then 2-3 lines of 建议｜<if this matters, pick this short name, because reason>. 8-20 words each. Wrap the short name in double asterisks, such as **Acme**.
 - Finish with 3 lines of 追问｜<what the shopper would say next>, written as requests.
 
 {_GROUNDING}
@@ -329,7 +329,7 @@ COMPOSER_FEW_SHOT: list[dict[str, str]] = [
             "商品｜p1｜Cuts up to 45 dB of background sound, and one reviewer wore them on the subway for a month without sore ears. Some callers report wind noise outdoors.\n"
             "分组｜Long listening time\n"
             "商品｜p2｜Eight hours per charge covers a full day of commuting. The listing does not confirm whether it is latex-free.\n"
-            "总结｜Pick Acme for loud trains, or Nova if battery life matters more. Do you take many calls on the way?\n"
+            "总结｜Pick **Acme** for loud trains, or **Nova** if battery life matters more. Do you take many calls on the way?\n"
             "追问｜Compare the first and second\n"
             "追问｜Show me the complaints about the first one\n"
             "追问｜Find earbuds that are better for calls"

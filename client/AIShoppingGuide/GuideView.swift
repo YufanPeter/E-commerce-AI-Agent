@@ -359,7 +359,9 @@ struct GuideView: View {
 
     private var chatScrollView: some View {
         ScrollView(showsIndicators: false) {
-            LazyVStack(alignment: .leading, spacing: 16) {
+            // 不用 LazyVStack：发第二个问题时会把问题钉到顶部，懒加载列表跳过去后
+            // 不会给新位置建行，整屏空白，要等别的状态变化才画出来。一次对话只有几十行，全部建出来没有负担。
+            VStack(alignment: .leading, spacing: 16) {
                 if messages.isEmpty {
                     emptyState
                         .id(Self.emptyStateAnchorID)
@@ -2496,7 +2498,7 @@ struct MessageRow: View {
                     }
 
                     if let closingSummary {
-                        Text(closingSummary)
+                        Text(highlightingProductNames(closingSummary))
                             .font(.subheadline)
                             .foregroundStyle(AppTheme.textPrimary)
                             .lineSpacing(6)
@@ -2875,10 +2877,27 @@ private struct ComparisonInsightList: View {
 
     private func styledText(_ item: String) -> Text {
         guard let colon = item.firstIndex(of: "："), item.distance(from: item.startIndex, to: colon) <= 8 else {
-            return Text(item)
+            return Text(highlightingProductNames(item))
         }
-        return Text(item[...colon]).fontWeight(.semibold) + Text(item[item.index(after: colon)...])
+        return Text(item[...colon]).fontWeight(.semibold) + Text(highlightingProductNames(String(item[item.index(after: colon)...])))
     }
+}
+
+/// 模型在总结和"怎么选"里用 **名字** 标出推荐的商品，这里把它们画成品牌色加粗，一眼看出推荐了谁。
+/// 星号不成对时，落单的那段当普通文字。
+func highlightingProductNames(_ text: String) -> AttributedString {
+    let parts = text.components(separatedBy: "**")
+    var result = AttributedString()
+    for (index, part) in parts.enumerated() {
+        var piece = AttributedString(part)
+        let isMarked = !index.isMultiple(of: 2) && index < parts.count - 1
+        if isMarked {
+            piece.font = .subheadline.weight(.semibold)
+            piece.foregroundColor = AppTheme.primary
+        }
+        result += piece
+    }
+    return result
 }
 
 /// 回答下方的点赞、点踩和分享。

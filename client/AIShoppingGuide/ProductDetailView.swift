@@ -636,7 +636,8 @@ struct AddToCartSheet: View {
 
     private var header: some View {
         HStack(alignment: .top, spacing: 12) {
-            ProductRemoteImage(url: product.imageURL, cornerRadius: 16, placeholderIcon: "bag")
+            // 和聊天里的商品卡一样完整显示商品，不裁掉两端
+            ProductRemoteImage(url: product.imageURL, cornerRadius: 16, placeholderIcon: "bag", contentMode: .fit)
                 .frame(width: 76, height: 76)
 
             VStack(alignment: .leading, spacing: 6) {
