@@ -1463,15 +1463,22 @@ struct GuideView: View {
         guard !Task.isCancelled else { return }
         guard let index = messages.lastIndex(where: { $0.sender == .ai }),
               messages[index].structuredContent == nil else { return }
-        let step = text
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .trimmingCharacters(in: CharacterSet(charactersIn: "…."))
-        guard !step.isEmpty, messages[index].thinkingSteps?.last != step else { return }
+        let step = Self.thinkingStepText(text)
+        // 本地先放的第一步带省略号（"Thinking…"），要去掉省略号再比，否则后端的同一步会再显示一遍
+        let last = messages[index].thinkingSteps?.last.map(Self.thinkingStepText)
+        guard !step.isEmpty, last != step else { return }
         // 改需求时第一步已经是"Updating your request…"，后端的"Thinking…"不用再显示一遍
-        if step == "Thinking…", messages[index].thinkingSteps?.last == Self.amendThinkingStep { return }
+        if step == Self.thinkingStepText("Thinking…"), last == Self.thinkingStepText(Self.amendThinkingStep) { return }
         withAnimation(.easeOut(duration: 0.2)) {
             messages[index].thinkingSteps = (messages[index].thinkingSteps ?? []) + [step]
         }
+    }
+
+    /// 步骤文字去掉首尾空白和结尾的省略号；正在进行的那一步由时间线自己加省略号。
+    fileprivate static func thinkingStepText(_ text: String) -> String {
+        text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "…."))
     }
 
     private func clearThinkingSteps() {
@@ -2927,9 +2934,11 @@ private struct ThinkingStepsView: View {
         VStack(alignment: .leading, spacing: 10) {
             ForEach(Array(steps.enumerated()), id: \.offset) { index, step in
                 let isActive = index == steps.count - 1
+                // 存下来的步骤可能自带省略号，统一去掉，只给正在进行的那一步加
+                let label = GuideView.thinkingStepText(step)
                 HStack(alignment: .firstTextBaseline, spacing: 9) {
                     ThinkingStepDot(isActive: isActive)
-                    Text(isActive ? "\(step)…" : step)
+                    Text(isActive ? "\(label)…" : label)
                         .font(.footnote.weight(isActive ? .medium : .regular))
                         .foregroundStyle(isActive ? AppTheme.textPrimary : AppTheme.textSecondary.opacity(0.7))
                         .fixedSize(horizontal: false, vertical: true)
