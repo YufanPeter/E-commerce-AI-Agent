@@ -69,3 +69,19 @@ def test_sports_socks_keep_their_own_type():
     with closing(sqlite3.connect(AMAZON_DB_PATH)) as conn:
         vocabulary = cu.load_vocabulary(conn)
     assert cu.parse_rules("sports socks", vocabulary).sub_category == "Men's Athletic Socks"
+
+
+@catalog
+@pytest.mark.parametrize("query", ["christmas decorations", "xmas ornaments", "holiday lights"])
+def test_holiday_requests_map_to_ornaments_and_lights(query):
+    with closing(sqlite3.connect(AMAZON_DB_PATH)) as conn:
+        vocabulary = cu.load_vocabulary(conn)
+    assert cu.parse_rules(query, vocabulary).sub_category == "Holiday Decorations"
+
+
+@catalog
+def test_a_plain_phone_searches_phone_accessories():
+    with closing(sqlite3.connect(AMAZON_DB_PATH)) as conn:
+        vocabulary = cu.load_vocabulary(conn)
+    parsed = cu._accessories_instead(ParsedQuery(original_query="I need a phone", unavailable_terms=["phone"]), vocabulary)
+    assert parsed.sub_category == "Phone Accessories" and parsed.instead_of == "phone"

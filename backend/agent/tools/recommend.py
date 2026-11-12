@@ -156,6 +156,7 @@ class RecommendTool:
         self._decompose = decomposer or decompose_query
         # Product facts provide price ranges for deterministic display copy.
         self._products = product_store
+        self._types: list[str] | None = None
 
     def _get_service(self) -> SearchService:
         if self._service is None:
@@ -588,13 +589,46 @@ class RecommendTool:
         dropped = [label for label in _condition_names(result.parsed) if label not in _condition_names(alone.parsed)]
         return (alone, dropped) if dropped else (result, [])
 
+    def _above_budget(
+        self, query: str, session: AgentSession, result: SearchResult, search_kwargs: dict[str, Any],
+    ) -> tuple[SearchResult, float | None]:
+        """Nothing fits the budget: show the cheapest matches above it, cheapest first.
+
+        Otherwise the reply can only guess a higher budget ("Sony under $60") and the guess
+        can still come back empty when the cheapest Sony pair costs $62.90.
+        """
+        cap = result.parsed.max_price
+        wider_parsed = replace(result.parsed, max_price=None, price_target=None)
+        wider = self._search(self._get_service(), query, session, **{**search_kwargs, "base": None, "parsed": wider_parsed})
+        if not wider.hits:
+            return result, None
+        hits = sorted(wider.hits, key=lambda h: h.min_price if h.min_price is not None else h.base_price)
+        return replace(wider, hits=hits), cap
+
+    def _catalog_types(self) -> list[str]:
+        """Every product type the catalog sells, so follow-ups never point at an empty shelf."""
+        if self._types is None:
+            try:
+                import sqlite3
+                from contextlib import closing
+
+                with closing(sqlite3.connect(self._get_products().db_path)) as conn:
+                    self._types = [row[0] for row in conn.execute(
+                        "SELECT DISTINCT sub_category FROM products WHERE sub_category IS NOT NULL ORDER BY 1"
+                    )]
+            except Exception as exc:  # noqa: BLE001 - the reply just has less to go on
+                logger.warning("Listing product types failed: %r", exc)
+                return []
+        return self._types
+
     def _device_models(self, parsed: ParsedQuery) -> tuple[str, list[str]]:
         """The model the shopper named, if any, and the newest models listings of this type name.
 
         Follow-ups are written by the model, which would otherwise suggest "cases for the
         iPhone 15" when no listing fits one and send the shopper to an empty page.
         """
-        if not getattr(parsed, "sub_category", None):
+        # A speaker search that names no phone has no models to talk about.
+        if not getattr(parsed, "sub_category", None) or not getattr(parsed, "compatible_with", None):
             return "", []
         types = expand_sub_categories([parsed.sub_category])
         # Cases and protectors are made per model; a charger listing that names every iPhone
@@ -654,6 +688,9 @@ class RecommendTool:
         relaxed: list[str] = []
         if not result.hits and isinstance(base, ParsedQuery) and not seen and parsed is None:
             result, relaxed = self._without_carried_conditions(query, session, base, result, search_kwargs)
+        over_budget: float | None = None
+        if not result.hits and not seen and isinstance(result.parsed, ParsedQuery) and result.parsed.max_price:
+            result, over_budget = self._above_budget(query, session, result, search_kwargs)
 
         # Apply diversity only when the user did not specify a brand.
         if want_diversity and not getattr(result.parsed, "brand_include", None):
@@ -690,6 +727,7 @@ class RecommendTool:
             "unavailable_terms": list(getattr(result.parsed, "unavailable_terms", None) or []),
             "instead_of": getattr(result.parsed, "instead_of", None),
             "relaxed": relaxed,
+            "over_budget": over_budget,
         }
         device_gap, listed_models = self._device_models(result.parsed)
         if hits:
@@ -732,6 +770,11 @@ class RecommendTool:
             hint = "本次未命中任何商品，请坦诚告知用户并给出可能放宽的方向建议。"
         elif relaxed and hits:
             hint = f"加上之前的条件（{'、'.join(relaxed)}）没有匹配的商品，这 {len(hits)} 款去掉了这些条件。开场白先说明这一点。"
+        elif over_budget and hits:
+            hint = (
+                f"${over_budget:g} 以内没有符合条件的商品。这 {len(hits)} 款是超出预算里最便宜的，"
+                "按价格从低到高排。开场白先说明预算内没有，再说最便宜的要多少钱。"
+            )
         elif getattr(result.parsed, "instead_of", None):
             hint = (
                 f"商品库不卖「{result.parsed.instead_of}」本身，这 {len(hits)} 款是它的配件。"
@@ -752,11 +795,18 @@ class RecommendTool:
                 relaxed=", ".join(relaxed),
                 device_gap=device_gap,
                 listed_models=", ".join(listed_models),
+                over_budget=over_budget,
             )
             if hits:
                 hint = f"{hint} {_personalization_hint(payload['personalization'], session)}".strip()
                 if listed_models:
                     hint = f"{hint} {english.MODEL_FOLLOWUP_HINT.format(models=', '.join(listed_models))}"
+        # With nothing found, or only accessories for something not sold, the follow-ups are
+        # the shopper's way forward; one naming a type the catalog lacks is another dead end.
+        types = self._catalog_types() if not hits or summary["instead_of"] else []
+        if types and not device_gap:
+            template = english.TYPES_FOLLOWUP_HINT if is_english() else "追问里点名的商品类型只能从商品库有的这些里选：{types}。"
+            hint = f"{hint} {template.format(types=', '.join(types))}".strip()
 
         return ToolResult(
             tool_name=self.name,

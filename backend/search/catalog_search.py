@@ -67,6 +67,22 @@ _UNIVERSAL_FIT = re.compile(
 )
 
 
+def _brand_prefixes(brand: str) -> list[str]:
+    words = re.findall(r"[a-z0-9]+", brand.casefold())
+    return ["".join(words[:end]) for end in range(1, len(words) + 1)]
+
+
+def same_brand(stored: str, named: str) -> bool:
+    """Whether a listing's brand is the brand the shopper named.
+
+    Sellers spell one brand several ways ("MAYBELLINE", "Maybelline New York", "L'Oreal
+    Paris"), so a brand matches when one name is the other's leading words; a different
+    word ("Applebee's" for "Apple") does not.
+    """
+    ours, theirs = _brand_prefixes(stored), _brand_prefixes(named)
+    return bool(ours and theirs) and (ours[-1] in theirs or theirs[-1] in ours)
+
+
 def _confirmed_count(checks: dict[str, str]) -> int:
     """How many of the shopper's conditions the listing itself confirms."""
     return sum(value in ("free", "meets") for value in checks.values())
@@ -172,7 +188,11 @@ class CatalogSearchService:
         profile = user_profile or {}
         if profile.get("personalization_enabled") is False:
             profile = {}
-        intent = merge_turn(understand(query, self._vocabulary, base=base), base, profile)
+        # A caller that already holds the structured request ("show more", a search retried
+        # without its budget) passes it whole; reading the text again would bring back the
+        # very condition the caller dropped.
+        current = parsed if parsed is not None else understand(query, self._vocabulary, base=base)
+        intent = merge_turn(current, None if parsed is not None else base, profile)
         tokens = list(dict.fromkeys(
             t for t in tokenize(intent.retrieval_query, model_numbers=True) if t not in _STOP and not t.isdigit()
         ))
@@ -220,16 +240,19 @@ class CatalogSearchService:
     def _eligible(self, intent: ParsedQuery) -> set[str]:
         types = set(self._vocabulary.expand([intent.sub_category])) if intent.sub_category else None
         denied_types = set(self._vocabulary.expand(intent.sub_category_exclude))
-        allowed = {brand.casefold() for brand in intent.brand_include}
-        denied = {brand.casefold() for brand in intent.brand_exclude}
+        allowed, denied = intent.brand_include, intent.brand_exclude
         out: set[str] = set()
         for row in self._rows:
-            label, brand = row["sub_category"], row["brand"].casefold()
+            label, brand = row["sub_category"], row["brand"]
             if (types is None and row["product_role"] != "primary") or (types is not None and label not in types):
                 continue
             if (intent.category and row["category"] != intent.category) or row["category"] in intent.category_exclude:
                 continue
-            if label in denied_types or brand in denied or (allowed and brand not in allowed):
+            if label in denied_types:
+                continue
+            if denied and any(same_brand(brand, name) for name in denied):
+                continue
+            if allowed and not any(same_brand(brand, name) for name in allowed):
                 continue
             if intent.max_price is not None and row["min_price"] > intent.max_price:
                 continue  # No option is within the budget.

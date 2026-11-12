@@ -60,6 +60,7 @@
    "stands_in_for": [
     "smartphones?",
     "(?:cell|mobile) phones?",
+    "phones?",
     "iphones?"
    ]
   },
@@ -100,6 +101,17 @@
    "stands_in_for": [
     "televisions?",
     "tvs?"
+   ]
+  },
+  "Holiday Decorations": {
+   "terms": [
+    "(?:christmas|xmas|holiday|festive) (?:decorations?|decor|ornaments?)",
+    "christmas tree (?:decorations?|ornaments?|lights)",
+    "(?:christmas|xmas|holiday) lights"
+   ],
+   "members": [
+    "Hanging Ornaments",
+    "Indoor String Lights"
    ]
   }
  },

@@ -97,3 +97,49 @@ def test_models_come_from_cases_when_a_search_mixes_types(tmp_path, monkeypatch)
     monkeypatch.setattr(rec, "expand_sub_categories", lambda names: ["Phone Basic Cases", "Wall Chargers"])
     parsed = ParsedQuery(original_query="iPhone", sub_category="Phone Accessories", compatible_with=["iphone"])
     assert _tool(_Service(), db)._device_models(parsed) == ("", ["iPhone 14"])
+
+
+def test_no_models_when_the_shopper_names_no_device(tmp_path):
+    db = tmp_path / "catalog.sqlite3"
+    with closing(sqlite3.connect(db)) as conn, conn:
+        conn.execute("CREATE TABLE products (product_id TEXT, sub_category TEXT)")
+        conn.execute("CREATE TABLE product_attributes (product_id TEXT, attribute TEXT, value TEXT)")
+        conn.execute("INSERT INTO products VALUES ('s1', 'Bluetooth Speakers')")
+        conn.execute("INSERT INTO product_attributes VALUES ('s1', 'compatible_device', 'iphone_11')")
+    parsed = ParsedQuery(original_query="bluetooth speaker", sub_category="Bluetooth Speakers")
+    assert _tool(_Service(), db)._device_models(parsed) == ("", [])
+
+
+class _BudgetService:
+    """Sony over-ear pairs exist, but none under the shopper's cap."""
+
+    def __init__(self):
+        self.calls: list[ParsedQuery | None] = []
+
+    def search(self, query, top_k_chunks=50, top_k_products=10, base=None, parsed=None, **_):
+        self.calls.append(parsed)
+        if parsed is None:
+            capped = ParsedQuery(original_query=query, sub_category="Over-Ear Headphones",
+                                 brand_include=["Sony"], max_price=26.98)
+            return SearchResult(capped, [], 0, 0)
+        dear, cheap = _hit("dear"), _hit("cheap")
+        dear.min_price, cheap.min_price = 398.0, 62.9
+        return SearchResult(parsed, [dear, cheap], 2, 2)
+
+
+def test_nothing_under_budget_shows_the_cheapest_above_it():
+    service = _BudgetService()
+    result = _tool(service).run("Sony over-ear headphones under $26.98", AgentSession(), {})
+    assert [p["product_id"] for p in result.payload["products"]] == ["cheap", "dear"]
+    assert result.payload["summary"]["over_budget"] == 26.98
+    assert service.calls[-1].max_price is None and service.calls[-1].brand_include == ["Sony"]
+
+
+def test_empty_replies_name_only_types_the_catalog_sells(tmp_path):
+    db = tmp_path / "catalog.sqlite3"
+    with closing(sqlite3.connect(db)) as conn, conn:
+        conn.execute("CREATE TABLE products (product_id TEXT, sub_category TEXT)")
+        conn.executemany("INSERT INTO products VALUES (?, ?)", [("a", "Body Sunscreens"), ("b", "Women's Sunglasses")])
+    result = _tool(_Service(own_type=None), db).run("something for a beach vacation", AgentSession(), {})
+    assert result.payload["products"] == []
+    assert "Body Sunscreens, Women's Sunglasses" in result.composer_hint
