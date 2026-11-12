@@ -217,6 +217,7 @@ class Agent:
         logger.info("composer done in %dms", trace["timings"]["composer_ms"])
 
         session.add_assistant(narrative)
+        _align_view_with_narrative(session, narrative)
 
         return AgentResponse(
             decision=decision,
@@ -933,17 +934,7 @@ class _TurnProgress:
         self._align_last_hits(session)
 
     def align_order_with_display(self, session: AgentSession) -> None:
-        """模型分组时会调整商品顺序，"第一个"要按屏幕上的顺序算。
-
-        没有解说的商品客户端会排在最后，这里保持一致。"""
-        hits = session.recall_hits()
-        by_id = {hit.get("product_id"): hit for hit in hits}
-        shown = [by_id[item["productId"]] for item in self._items if item["productId"] in by_id]
-        if not shown:
-            return
-        shown_ids = {hit.get("product_id") for hit in shown}
-        rest = [hit for hit in hits if hit.get("product_id") not in shown_ids]
-        session.task.active_view.items = shown + rest
+        _align_view_with_items(session, self._items)
 
     def _narrative(self) -> str:
         if self._structured:
@@ -967,6 +958,31 @@ class _TurnProgress:
             session.task.active_view.items = self._prior_hits
         elif shown:
             session.task.active_view.items = shown
+
+
+def _align_view_with_items(session: AgentSession, items: list[dict[str, Any]]) -> None:
+    """模型分组时会调整商品顺序，"第一个"要按屏幕上的顺序算。
+
+    没有解说的商品客户端会排在最后，这里保持一致。"""
+    hits = session.recall_hits()
+    by_id = {hit.get("product_id"): hit for hit in hits}
+    shown = [by_id[item["productId"]] for item in items if item.get("productId") in by_id]
+    if not shown:
+        return
+    shown_ids = {hit.get("product_id") for hit in shown}
+    rest = [hit for hit in hits if hit.get("product_id") not in shown_ids]
+    session.task.active_view.items = shown + rest
+
+
+def _align_view_with_narrative(session: AgentSession, narrative: str) -> None:
+    """The non-streaming reply is the same structured JSON; align by its items too."""
+    try:
+        data = json.loads(narrative)
+    except (TypeError, ValueError):
+        return
+    items = data.get("items") if isinstance(data, dict) else None
+    if isinstance(items, list):
+        _align_view_with_items(session, [item for item in items if isinstance(item, dict)])
 
 
 def _capture_interrupt(

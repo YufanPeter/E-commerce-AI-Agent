@@ -1109,3 +1109,16 @@ class TestOrchestratorStreaming:
             list(agent.handle_turn_stream("hi", sess))
         assert len(sess.history) == 2
         assert sess.history[-1].content == "回答"
+
+
+def test_the_reply_without_streaming_also_counts_positions_in_screen_order():
+    # The composer regroups products; "the first one" means the first card on screen.
+    from agent.orchestrator import _align_view_with_narrative
+
+    session = AgentSession()
+    session.remember_search({}, [{"product_id": pid, "title": pid} for pid in ("a", "b", "c")])
+    shown = json.dumps({"opening": "", "items": [{"productId": "b"}, {"productId": "c"}]})
+    _align_view_with_narrative(session, shown)
+    assert [hit["product_id"] for hit in session.recall_hits()] == ["b", "c", "a"]
+    _align_view_with_narrative(session, "Plain text reply")  # Not structured: order is kept.
+    assert [hit["product_id"] for hit in session.recall_hits()] == ["b", "c", "a"]
