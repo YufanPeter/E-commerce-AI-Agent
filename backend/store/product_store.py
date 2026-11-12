@@ -18,6 +18,7 @@ from typing import Any, Sequence
 
 from catalog_config import DEFAULT_DB_PATH, PROFILE
 from i18n import format_money, is_english
+from store.review_text import clean_review_text
 
 
 @dataclass(frozen=True)
@@ -411,7 +412,7 @@ class ProductStore:
                 source_index=int(row["source_index"]),
                 nickname=row["nickname"],
                 rating=int(row["rating"]),
-                content=row["content"],
+                content=clean_review_text(row["content"]),
                 polarity=row["polarity"],
             )
             for row in rows

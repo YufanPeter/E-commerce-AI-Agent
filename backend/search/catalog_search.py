@@ -28,6 +28,7 @@ from search.where_builder import build_filters
 from store.attribute_rules import WANTED_ATTRIBUTES
 from store.numeric_attributes import describe, numeric_attributes, satisfies
 from store.product_store import ProductStore
+from store.review_text import clean_review_text
 
 
 logger = logging.getLogger(__name__)
@@ -81,7 +82,7 @@ def _confirmation_factor(checks: dict[str, str] | None) -> float:
 def _review_body(chunk: RetrievedChunk) -> str:
     """Review text without the title prefix the review index adds."""
     document = chunk.document or ""
-    return document.split("Review:", 1)[1].strip() if "Review:" in document else document.strip()
+    return clean_review_text(document.split("Review:", 1)[1] if "Review:" in document else document)
 
 
 def _words(text: str) -> set[str]:
@@ -480,7 +481,7 @@ class CatalogSearchService:
         wanted = _words(text)
         best: dict[str, tuple[tuple[int, int, int], Any]] = {}
         for row in rows:
-            content = row["content"]
+            content = clean_review_text(row["content"])
             if english.SERVICE_COMPLAINT_RE.search(content):
                 continue
             key = (len(_words(content) & wanted), -row["rating"], min(len(content), 300))

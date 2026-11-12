@@ -9,6 +9,8 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from store.review_text import clean_review_text
+
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 DEFAULT_DATA_DIR = ROOT_DIR / "data"
@@ -182,7 +184,7 @@ def import_product(
                 index,
                 review.get("nickname", ""),
                 rating,
-                review.get("content", ""),
+                clean_review_text(review.get("content", "")),
                 review_polarity(rating),
             ),
         )
