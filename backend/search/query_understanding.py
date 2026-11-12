@@ -76,6 +76,9 @@ class ParsedQuery:
     # Wanted listing attribute values ("noise_cancelling", "leather", "waterproof").
     # A listing that states one ranks higher; silence is not a miss.
     features: list[str] = field(default_factory=list)
+    # Conditions in force that this turn takes back, as the model labelled them; ``None`` when
+    # rules parsed the turn, so withdrawal falls back to phrase matching.
+    withdrawn: list[str] | None = None
 
     @property
     def hard_filters(self) -> dict[str, object]:

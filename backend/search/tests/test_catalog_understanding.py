@@ -75,6 +75,45 @@ def test_rules_tell_targets_from_limits(query, expected):
     assert (parsed.min_price, parsed.max_price, parsed.price_target) == expected
 
 
+@pytest.mark.parametrize("query, soft_terms, excluded, features", [
+    # The model read no wanted property; the word in the message must not bring one back.
+    ("speaker, I don't need it to be waterproof", [], [], []),
+    ("silicone-free shampoo", [], ["silicone"], []),
+    ("silicone-free shampoo", ["silicone-free"], ["silicone"], []),
+    ("waterproof speaker", ["waterproof"], [], ["waterproof"]),
+    ("ANC earbuds", ["active noise cancellation"], [], ["noise_cancelling"]),
+])
+def test_model_features_come_from_what_it_read_as_wanted(query, soft_terms, excluded, features):
+    parsed = cu._from_model(query, {"soft_terms": soft_terms, "excluded_attributes": excluded}, VOCABULARY)
+    assert parsed.features == features
+
+
+def test_model_aspects_count_as_wanted_features():
+    vocabulary = cu.CatalogVocabulary(**{**VOCABULARY.__dict__, "aspects": ("noise_cancellation", "comfort")})
+    parsed = cu._from_model("noise cancelling earbuds", {"aspects": ["noise_cancellation", "comfort"]}, vocabulary)
+    assert parsed.features == ["noise_cancelling"]
+
+
+@pytest.mark.parametrize("query, features", [
+    ("silicone-free shampoo", []),
+    ("leather free wallet", []),
+    ("speaker, I don't need it to be waterproof", []),
+    ("speaker, waterproof isn't important", []),
+    ("waterproof leather boots", ["leather", "waterproof"]),
+])
+def test_rule_fallback_skips_mentions_that_do_not_ask_for_a_value(query, features):
+    assert sorted(cu.parse_rules(query, VOCABULARY).features) == features
+
+
+def test_model_sees_the_conditions_it_may_take_back():
+    limit = {"attribute": "battery_hours", "op": ">=", "value": 20.0}
+    base = ParsedQuery("speakers", retrieval_query="speakers", features=["waterproof"], excluded_attributes=["bpa"], numeric=[limit])
+    with patch.object(cu, "_call_model", return_value='{"withdrawn": ["no bpa"]}') as call:
+        parsed = cu.understand("BPA is ok", VOCABULARY, base=base)
+    assert call.call_args.args[3].endswith("Conditions in force: waterproof; no bpa; battery_hours >= 20")
+    assert parsed.withdrawn == ["no bpa"]
+
+
 def test_model_target_becomes_a_window_even_when_copied_into_a_limit():
     for extra in ({}, {"max_price": 50}):
         parsed = cu._from_model("moisturizer around $50", {"price_target": 50, **extra}, VOCABULARY)

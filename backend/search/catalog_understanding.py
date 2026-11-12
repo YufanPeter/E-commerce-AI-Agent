@@ -24,7 +24,7 @@ from search.llm_parser import _extract_tool_arguments, _coerce_float
 from search.query_understanding import ParsedQuery
 from store.attribute_rules import DESCRIPTION, TITLE, _DEVICES, extract_multi, wanted_values
 from store.import_amazon import TAXONOMY_PATH, brand_key
-from store.numeric_attributes import numeric_attributes, rule_constraints, stated_constraint, unit_pattern
+from store.numeric_attributes import describe, numeric_attributes, rule_constraints, stated_constraint, unit_pattern
 from store.product_store import english_brand_named
 
 
@@ -301,6 +301,7 @@ def _tool_schema(vocabulary: CatalogVocabulary) -> dict[str, Any]:
                     "compatible_with": {**strings, "description": "Devices the product must work with, as the shopper wrote them."},
                     "needs_clarification": {"type": "boolean"},
                     "search_text": {"type": "string", "description": english.PARSER_SEARCH_TEXT_FIELD},
+                    "withdrawn": {**strings, "description": english.PARSER_WITHDRAWN_FIELD},
                     "numeric_constraints": {
                         "type": "array",
                         "description": "Limits on measured attributes, converted to the attribute's unit. "
@@ -321,7 +322,7 @@ def _tool_schema(vocabulary: CatalogVocabulary) -> dict[str, Any]:
                     "category", "product_type", "brand_include", "brand_exclude", "category_exclude",
                     "product_type_exclude", "max_price", "min_price", "price_target", "excluded_attributes", "soft_terms",
                     "unavailable_terms", "needs_clarification", "aspects", "use_cases", "compatible_with",
-                    "search_text", "numeric_constraints",
+                    "search_text", "numeric_constraints", "withdrawn",
                 ],
                 "additionalProperties": False,
             },
@@ -410,8 +411,20 @@ def _from_model(query: str, args: dict[str, Any], vocabulary: CatalogVocabulary)
         compatible_with=[device for value in args.get("compatible_with") or [] for device in _devices_named(str(value))],
         numeric=[c for c in (stated_constraint(raw, query) for raw in args.get("numeric_constraints") or []) if c],
         search_text=_without_rejections(str(args.get("search_text") or ""), [*excluded_attributes, *brand_exclude]),
-        # The listing rules normalize the shopper's words and the model's wanted properties alike.
-        features=wanted_values(" ; ".join([query, *(str(term) for term in args.get("soft_terms") or [])])),
+        # Wanted properties are what the model read as wanted, normalized by the listing rules.
+        # The raw message is not scanned: "I don't need it to be waterproof" names waterproof
+        # but does not want it, and only the model can tell. Aspects are wanted qualities too:
+        # the model files "noise cancelling" there as noise_cancellation rather than in soft_terms,
+        # and its search words keep the ones folded into the product ("bluetooth speaker").
+        features=[
+            value for value in wanted_values(" ; ".join(
+                [str(term) for term in args.get("soft_terms") or []]
+                + [str(aspect).replace("_", " ") for aspect in args.get("aspects") or [] if aspect in vocabulary.aspects]
+                + [str(args.get("search_text") or "")]
+            ))
+            if value not in excluded_attributes
+        ],
+        withdrawn=[str(label).strip() for label in args.get("withdrawn") or [] if str(label).strip()],
     )
 
 
@@ -465,6 +478,10 @@ def understand(
     if PROFILE.capabilities.llm_query_parsing:
         _VOCABULARIES[id(vocabulary)] = vocabulary
         previous = semantic_query(base) if base is not None else ""
+        labels = list(condition_labels(base)) if base is not None else []
+        if labels:
+            # The model can only take back what it is shown, so the carried conditions go along.
+            previous += "\nConditions in force: " + "; ".join(labels)
         try:
             arguments = json.loads(_call_model(" ".join(query.split()), id(vocabulary), timeout, previous))
             parsed = _from_model(query, arguments, vocabulary)
@@ -500,22 +517,36 @@ def merge_turn(current: ParsedQuery, base: ParsedQuery | None, profile: dict[str
         minimum = None
     if current.min_price is not None and current.max_price is None and maximum is not None and maximum < minimum:
         maximum = None
+    # The model names the conditions it read as taken back; phrase matching only stands in when
+    # rules parsed the turn, since no list of phrasings covers "I'm ok with alcohol" and the rest.
+    model_read = current.withdrawn is not None
+    taken_back = _withdrawn_keys(current.withdrawn or [], carried)
+
+    def dropped(key: tuple[str, str], terms: list[str], rejection: bool = False) -> bool:
+        return key in taken_back if model_read else released(query, terms, rejection=rejection)
+
     stated = {(c["attribute"], c["op"]) for c in current.numeric}
     numeric = [
         c for c in (carried.numeric if carried else [])
         if (c["attribute"], c["op"]) not in stated
         and not _contradicted(c, current.numeric)
-        and not released(query, _measure_terms(str(c["attribute"])))
+        and not dropped(("numeric", describe(c)), _measure_terms(str(c["attribute"])))
     ] + current.numeric
     # "Alcohol is fine" withdraws one rejection; the others stay.
     kept_exclusions = [
         term for term in (carried.excluded_attributes if carried else [])
-        if term not in current.excluded_attributes and not released(query, [term], rejection=True)
+        if term not in current.excluded_attributes and not dropped(("exclusion", term), [term], rejection=True)
     ]
     kept_features = [
         value for value in (carried.features if carried else [])
-        if not released(query, [value])
+        if not dropped(("feature", value), [value])
     ]
+    # Model features are what it read as wanted, though its search words may still carry one it
+    # marked as taken back; rule features may name a withdrawal.
+    if model_read:
+        new_features = [v for v in current.features if ("feature", v) not in taken_back]
+    else:
+        new_features = [v for v in current.features if not released(query, [v])]
     # Naming another device means the shopper switched devices, not that it must fit both.
     devices = list(current.compatible_with) or list(carried.compatible_with if carried else [])
     included, excluded = list(current.brand_include), list(current.brand_exclude)
@@ -543,9 +574,31 @@ def merge_turn(current: ParsedQuery, base: ParsedQuery | None, profile: dict[str
         aspects=list(dict.fromkeys((carried.aspects if carried else []) + current.aspects)),
         use_cases=list(dict.fromkeys((carried.use_cases if carried else []) + current.use_cases)),
         compatible_with=devices,
-        # "It doesn't need to be waterproof" names waterproof but withdraws it.
-        features=list(dict.fromkeys(kept_features + [v for v in current.features if not released(query, [v])])),
+        features=list(dict.fromkeys(kept_features + new_features)),
+        withdrawn=None,  # Applied here; the merged search carries no pending withdrawal.
     )
+
+
+def condition_labels(base: ParsedQuery) -> dict[str, tuple[str, str]]:
+    """Labels the model sees for carried conditions it may take back, each with its merge key."""
+    labels: dict[str, tuple[str, str]] = {}
+    for value in base.features:
+        labels[value.replace("_", " ")] = ("feature", value)
+    for term in base.excluded_attributes:
+        labels[f"no {term}"] = ("exclusion", term)
+    for constraint in base.numeric:
+        labels[describe(constraint)] = ("numeric", describe(constraint))
+    return labels
+
+
+def _withdrawn_keys(withdrawn: list[str], carried: ParsedQuery | None) -> set[tuple[str, str]]:
+    """Merge keys for the labels the model returned; a label naming nothing carried is ignored."""
+    if not withdrawn or carried is None:
+        return set()
+    by_label = {label.casefold(): key for label, key in condition_labels(carried).items()}
+    # "alcohol" for "no alcohol" and "noise_cancelling" for "noise cancelling" mean the same condition.
+    by_label.update({key[1].casefold(): key for key in by_label.values()})
+    return {by_label[label.casefold()] for label in withdrawn if label.casefold() in by_label}
 
 
 def _contradicted(earlier: dict[str, Any], stated: list[dict[str, Any]]) -> bool:
@@ -646,14 +699,18 @@ def narrow_clears(query: str, base: ParsedQuery | None, clear: list[str] | tuple
     return kept
 
 
-def names_withdrawal(query: str, base: ParsedQuery | None) -> bool:
-    """Whether the message withdraws a condition this search carries ("alcohol is fine")."""
+def names_carried_condition(query: str, base: ParsedQuery | None) -> bool:
+    """Whether the message names a condition this search carries ("I'm ok with alcohol now").
+
+    Such a message may take the condition back, and only the shopper's own words show that:
+    a rewrite could restate the condition. Whether it is taken back is the parser's call.
+    """
     if base is None:
         return False
     return (
-        any(released(query, [term], rejection=True) for term in base.excluded_attributes)
-        or any(released(query, [value]) for value in base.features)
-        or any(released(query, _measure_terms(str(c["attribute"]))) for c in base.numeric)
+        any(_mentions(query, [term]) for term in base.excluded_attributes)
+        or any(_mentions(query, [value]) for value in base.features)
+        or any(_mentions(query, _measure_terms(str(c["attribute"]))) for c in base.numeric)
     )
 
 

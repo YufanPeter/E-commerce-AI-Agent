@@ -12,7 +12,7 @@ from typing import Any
 from agent.intent_router import IntentDecision
 from agent.session import AgentSession
 from agent.tools.reference import resolve_indices
-from search.catalog_understanding import names_withdrawal, narrow_clears
+from search.catalog_understanding import names_carried_condition, narrow_clears
 from search.query_understanding import ParsedQuery
 
 
@@ -115,8 +115,8 @@ def routed_slots(decision: IntentDecision, session: AgentSession, raw_query: str
         base = _carried_search(session)
         # The router's clear list is a reading, checked against the shopper's own words.
         clear = narrow_clears(raw_query, base, args.get("clear") or []) if raw_query else list(args.get("clear") or [])
-        # A withdrawn condition also needs the tool to read the raw message, not a rewrite.
-        if clear or (tool == "refine" and names_withdrawal(raw_query, base)):
+        # A message about a carried condition needs the tool to read the raw words, not a rewrite.
+        if clear or (tool == "refine" and names_carried_condition(raw_query, base)):
             slots["constraint_ops"] = {"clear": clear}
     if args.get("cheaper"):
         slots["cheaper"] = True

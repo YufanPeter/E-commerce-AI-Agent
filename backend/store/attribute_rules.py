@@ -240,12 +240,28 @@ WANTED_ATTRIBUTES: dict[str, tuple[Rule, ...]] = {
 }
 
 
+# A shopper's mention that does not ask for the value: "silicone-free" rejects it, and
+# "I don't need it to be waterproof" or "waterproof isn't important" sets it aside.
+_FREE_AFTER = re.compile(r"^[- ]?free\b", re.I)
+_NOT_NEEDED_BEFORE = re.compile(
+    r"\b(?:don'?t|do not|doesn'?t|does not|no longer)\s+(?:need|want|require|care about)\b[^.,;!?]*$", re.I,
+)
+_NOT_NEEDED_AFTER = re.compile(
+    r"^[^.,;!?]{0,20}?\b(?:isn'?t|is not|aren'?t|are not|not)\s+(?:important|needed|required|necessary|a must)\b", re.I,
+)
+
+
 def wanted_values(text: str) -> list[str]:
-    """Attribute values the text asks for; negated mentions ("no leather") are skipped."""
-    fields = {TITLE: text or "", DESCRIPTION: ""}
+    """Attribute values the text asks for; negated, "-free" and not-needed mentions are skipped."""
+    text = text or ""
+    fields = {TITLE: text, DESCRIPTION: ""}
     values: list[str] = []
     for rules in WANTED_ATTRIBUTES.values():
         for observation in extract_multi(fields, rules):
+            start, end = observation["evidence"]["start"], observation["evidence"]["end"]
+            if (_FREE_AFTER.match(text[end:]) or _NOT_NEEDED_BEFORE.search(text[:start])
+                    or _NOT_NEEDED_AFTER.match(text[end:])):
+                continue
             value = str(observation["value"])
             if value not in values:
                 values.append(value)

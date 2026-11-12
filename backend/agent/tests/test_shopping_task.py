@@ -297,7 +297,7 @@ def test_naming_one_rejection_does_not_clear_the_whole_group():
 
 
 def test_router_cannot_clear_groups_the_message_never_mentions():
-    from search.catalog_understanding import names_withdrawal, narrow_clears
+    from search.catalog_understanding import names_carried_condition, narrow_clears
     every = ["budget", "brand", "measurements", "exclusions", "device", "features"]
     limit = {"attribute": "battery_hours", "op": ">=", "value": 20.0}
     base = _parsed("Sony speakers under $80", max_price=80.0, brand_include=["Sony"], numeric=[limit], excluded_attributes=["bpa"])
@@ -307,7 +307,7 @@ def test_router_cannot_clear_groups_the_message_never_mentions():
     assert narrow_clears("budget doesn't matter", base, every) == ["budget"]
     assert narrow_clears("forget all the filters", base, every) == every
     assert narrow_clears("in black", base, every) == []
-    assert names_withdrawal("battery life doesn't matter", base) and not names_withdrawal("in black", base)
+    assert names_carried_condition("battery life doesn't matter", base) and not names_carried_condition("in black", base)
 
 
 def test_withdrawing_a_named_condition_reaches_the_tool_even_without_a_router_clear():
@@ -317,6 +317,22 @@ def test_withdrawing_a_named_condition_reaches_the_tool_even_without_a_router_cl
     slots = turn_args.routed_slots(decision, session, "actually alcohol is fine")
     assert slots["constraint_ops"] == {"clear": []}  # Present, so the tool reads the raw message.
     assert "constraint_ops" not in turn_args.routed_slots(decision, session, "in a bigger bottle")
+    # A phrasing no rule lists still reaches the parser in the shopper's own words.
+    assert "constraint_ops" in turn_args.routed_slots(decision, session, "alcohol doesn't bother me")
+
+
+def test_model_withdrawals_are_checked_against_carried_conditions():
+    limit = {"attribute": "battery_hours", "op": ">=", "value": 20.0}
+    base = _parsed("speakers", sub_category="Bluetooth Speakers", features=["waterproof", "bluetooth"],
+                   excluded_attributes=["bpa"], numeric=[limit])
+    merged = merge_turn(_parsed("waterproof isn't important, BPA is ok", withdrawn=["waterproof", "no bpa"]), base, {})
+    assert (merged.features, merged.excluded_attributes, merged.numeric) == (["bluetooth"], [], [limit])
+    assert merged.withdrawn is None
+    # The model's labels are trusted only when they name something carried.
+    assert merge_turn(_parsed("x", withdrawn=["leather", "battery_hours >= 99"]), base, {}).features == ["waterproof", "bluetooth"]
+    assert merge_turn(_parsed("x", withdrawn=["battery_hours >= 20"]), base, {}).numeric == []
+    # The model read the message and took nothing back: no phrase rule overrides that.
+    assert merge_turn(_parsed("waterproof doesn't matter", withdrawn=[]), base, {}).features == ["waterproof", "bluetooth"]
 
 
 def test_clear_groups_cover_every_carried_condition():
