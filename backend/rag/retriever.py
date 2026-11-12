@@ -17,6 +17,7 @@ from rag.chroma_store import (
     DEFAULT_PERSIST_DIR,
     FALLBACK_COLLECTION,
     FALLBACK_EMBEDDING_MODEL,
+    DashScopeEmbeddingFunction,
     create_collection,
 )
 
@@ -57,6 +58,9 @@ class ChromaRetriever:
             embedding_model=embedding_model,
             reset=False,
         )
+        # Chroma embeds query_texts through __call__, which skips the query cache, so the
+        # product and review indexes each paid a ~1-2 s embedding call for the same text.
+        self._query_embedder = DashScopeEmbeddingFunction(model=embedding_model)
         self.fallback_collection = None
         if (
             collection_name == DEFAULT_COLLECTION
@@ -92,7 +96,10 @@ class ChromaRetriever:
             "include": ["documents", "metadatas", "distances"],
         }
         try:
-            result = self.collection.query(**query_kwargs)
+            # The cached query vector is shared by every index on the same model.
+            vector = self._query_embedder.embed_query([query])[0]
+            primary_kwargs = {k: v for k, v in query_kwargs.items() if k != "query_texts"}
+            result = self.collection.query(query_embeddings=[vector], **primary_kwargs)
         except Exception as primary_exc:
             if self.fallback_collection is None:
                 raise
