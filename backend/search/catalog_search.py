@@ -262,14 +262,23 @@ class CatalogSearchService:
         return out
 
     def _passes_title_check(self, product_id: str, intent: ParsedQuery) -> bool:
-        """A leaf can hold a mislabeled listing, so the title gets a say too."""
-        title_type = self._vocabulary.match_types(self._rows[self._position[product_id]]["title"])[0]
+        """A leaf can hold a mislabeled listing, so the title gets a say too.
+
+        The first type a title names is what it sells, with one exception: accessory titles
+        often lead with another accessory's word ("iPhone Charger Cable ... Lightning Cable"),
+        so a later mention of a wanted accessory keeps the listing. A wanted primary named
+        later does not count, since that is what an accessory is for ("Band for Smartwatch").
+        """
+        named = self._vocabulary.named_types(self._rows[self._position[product_id]]["title"])
+        title_type = named[0] if named else None
         if title_type is None or title_type == intent.sub_category:
             return True
         if title_type in self._vocabulary.expand(intent.sub_category_exclude):
             return False
         wanted = set(self._vocabulary.expand([intent.sub_category])) if intent.sub_category else set()
-        return title_type in wanted or title_type not in self._vocabulary.accessory_labels
+        if title_type in wanted or title_type not in self._vocabulary.accessory_labels:
+            return True
+        return bool(wanted & self._vocabulary.accessory_labels & set(self._vocabulary.expand(named[1:])))
 
     def _attribute_checks(self, product_id: str, intent: ParsedQuery, avoided: list[str] = ()) -> dict[str, str] | None:
         """``None`` means the listing contradicts a condition; absent evidence stays unknown.

@@ -19,6 +19,7 @@ CELLS = {
     "Smartwatches": "Electronics > Wearable Technology > Smartwatches",
     "Smartwatch Bands": "Cell Phones & Accessories > Accessories > Smartwatch Accessories > Smartwatch Bands",
     "Phone Basic Cases": "Cell Phones & Accessories > Cases, Holsters & Sleeves > Basic Cases",
+    "Lightning Cables": "Electronics > Computers & Accessories > Computer Accessories & Peripherals > Cables & Accessories > Cables & Interconnects > Lightning Cables",
 }
 SAMPLES = [
     ("B000000001", "Atlas Smartwatch", "Atlas", 25, "Smartwatches", "A rugged watch for hiking."),
@@ -36,6 +37,10 @@ SAMPLES = [
     ("B000000013", "Grip Phone Case for iPhone 15 Pro Max", "Grip", 12, "Phone Basic Cases", "This iPhone 15 phone case is soft."),
     ("B000000014", "Fold Phone Case", "Fold", 12, "Phone Basic Cases",
      'Fits iPhone 15 Pro. NOT fit iPhone 15 Mini (5.4"), iPhone 15 (6.1") or the Plus.'),
+    ("B000000015", "Volt iPhone Charger Cable, Nylon Braided Lightning Cable 6ft", "Volt", 9, "Lightning Cables", "MFi certified."),
+    ("B000000016", "Spark iPhone Charger 3 Pack, Lightning to USB Charging Cable", "Spark", 11, "Lightning Cables", "Three cords."),
+    ("B000000017", "Volt USB Wall Charger Block", "Volt", 12, "Lightning Cables", "A charger in the cable leaf."),
+    ("B000000018", "Loop Watch Band for Smartwatch 22mm", "Loop", 20, "Smartwatches", "A strap in the watch leaf."),
 ]
 
 
@@ -323,3 +328,17 @@ def test_cables_that_list_other_models_only_rank_lower(store):
     service = CatalogSearchService(store, FakeIndex(), FakeIndex(), reranker=FakeReranker([]))
     intent = ParsedQuery(original_query="q", compatible_with=["iphone_15", "iphone"])
     assert service._device_checks("amz_B000000002", intent.compatible_with) == {"works with iphone 15": "unknown"}
+
+
+def test_cable_titles_that_lead_with_charger_are_still_cables(store):
+    # "iPhone Charger Cable ... Lightning Cable" first reads as a charger, but names the cable too.
+    service = CatalogSearchService(store, FakeIndex(), FakeIndex(), reranker=FakeReranker([]))
+    found = _ids(service.search("lightning cables"))
+    assert {"B000000015", "B000000016"} <= set(found)
+    assert "B000000017" not in found  # A charger filed as a cable names no cable.
+    assert _ids(service.search("Volt Lightning Cables")) == ["B000000015"]
+
+
+def test_naming_the_device_does_not_make_an_accessory_one(store):
+    service = CatalogSearchService(store, FakeIndex(), FakeIndex(), reranker=FakeReranker([]))
+    assert "B000000018" not in _ids(service.search("smartwatches"))  # "Watch Band for Smartwatch".

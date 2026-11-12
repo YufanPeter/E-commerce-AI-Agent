@@ -100,6 +100,15 @@ class CatalogVocabulary:
 
     def match_types(self, text: str) -> tuple[str | None, list[str], str | None]:
         """Return the wanted type, excluded types, and any out-of-catalog phrase."""
+        wanted, excluded, outside = self._read_types(text)
+        # A device name beside a catalog type ("iPhone 15 screen protector") is compatibility.
+        return (wanted[0] if wanted else None), excluded, (None if wanted else outside)
+
+    def named_types(self, text: str) -> list[str]:
+        """Every type the text names and does not negate, in reading order."""
+        return self._read_types(text)[0]
+
+    def _read_types(self, text: str) -> tuple[list[str], list[str], str | None]:
         hits = sorted(
             ((m.start(), m.end(), key) for key, pattern in self.patterns.items() for m in pattern.finditer(text)),
             key=lambda hit: (-(hit[1] - hit[0]), hit[0]),
@@ -117,8 +126,7 @@ class CatalogVocabulary:
                 excluded.append(key)
             else:
                 wanted.append(key)
-        # A device name beside a catalog type ("iPhone 15 screen protector") is compatibility.
-        return (wanted[0] if wanted else None), list(dict.fromkeys(excluded)), (None if wanted else outside)
+        return list(dict.fromkeys(wanted)), list(dict.fromkeys(excluded)), outside
 
     def canonical_brand(self, name: str) -> str | None:
         return self.brands.get(brand_key(name or ""))
@@ -164,7 +172,10 @@ def load_vocabulary(conn: sqlite3.Connection) -> CatalogVocabulary:
             audiences[label] = audience
         if group:
             members.setdefault(group, []).append(label)
-        patterns[label] = _compile(json.loads(terms))
+        # The label itself is a term: suggestions and the app name types by label
+        # ("Novelty Men's T-Shirts", "Indoor String Lights"), and a shorter term inside it
+        # would otherwise win or leave a word between the brand and the type.
+        patterns[label] = _compile([*json.loads(terms), re.escape(label)])
     # A collection spans types across groups ("sports clothing" is shorts, socks and running
     # shoes), so a broad request maps to one name the model can pick instead of to nothing.
     stand_ins: dict[str, re.Pattern[str]] = {}
@@ -244,12 +255,19 @@ def _explicit_brands(query: str, vocabulary: CatalogVocabulary) -> tuple[list[st
 def _brand_before_type(query: str, product_type: str, vocabulary: CatalogVocabulary) -> list[str]:
     """Catch "Sony headphones"; a brand elsewhere in the text stays a ranking signal."""
     match = vocabulary.patterns[product_type].search(query)
-    prefix = query[:match.start()].rstrip().lower() if match else ""
+    prefix = query[:match.start()].rstrip() if match else ""
     for name in sorted(vocabulary.brands.values(), key=len, reverse=True):
-        lowered = name.lower()
-        if prefix.endswith(lowered) and english_brand_named(lowered, prefix):
+        if prefix.lower().endswith(name.lower()) and _says_brand(name, prefix):
             return [name]
     return []
+
+
+def _says_brand(name: str, text: str) -> bool:
+    """Whether the text names the brand. A two-letter brand ("HP", "LG") would also match
+    ordinary words ("on"), so it counts only in capitals, as the catalog writes it."""
+    if len(name) < 3:
+        return name.isupper() and re.search(rf"(?<!\w){re.escape(name)}(?!\w)", text) is not None
+    return english_brand_named(name.lower(), text.lower())
 
 
 def _excluded_attributes(query: str) -> list[str]:
@@ -352,9 +370,7 @@ def _named_brands(values: Any, query: str, vocabulary: CatalogVocabulary) -> lis
     out: list[str] = []
     for value in values or []:
         canonical = vocabulary.canonical_brand(str(value))
-        named = english_brand_named(str(value).lower(), query.lower()) or (
-            canonical is not None and english_brand_named(canonical.lower(), query.lower())
-        )
+        named = _says_brand(str(value), query) or (canonical is not None and _says_brand(canonical, query))
         if canonical and named and canonical not in out:
             out.append(canonical)
     return out

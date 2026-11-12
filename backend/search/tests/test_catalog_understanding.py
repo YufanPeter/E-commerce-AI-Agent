@@ -1,5 +1,6 @@
 """English parsing without a model: rules, validation of model output, and the fallback."""
 
+from dataclasses import replace
 import re
 from unittest.mock import patch
 
@@ -176,3 +177,11 @@ def test_budget_follow_up_keeps_previous_type():
     merged = cu.merge_turn(current, base, {})
     assert merged.sub_category == "Smartwatches" and merged.max_price == 13 and not merged.needs_clarification
     assert re.search("smartwatches", merged.retrieval_query)
+
+
+def test_two_letter_brands_count_only_in_capitals():
+    vocabulary = replace(VOCABULARY, brands={**VOCABULARY.brands, "hp": "HP", "on": "ON"})
+    assert cu.parse_rules("HP headphones", vocabulary).brand_include == ["HP"]
+    assert cu.parse_rules("turn on headphones", vocabulary).brand_include == []
+    assert cu._from_model("HP earbuds", {"brand_include": ["HP"]}, vocabulary).brand_include == ["HP"]
+    assert cu._from_model("put on earbuds", {"brand_include": ["ON"]}, vocabulary).brand_include == []
