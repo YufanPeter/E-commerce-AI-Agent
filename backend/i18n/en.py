@@ -353,6 +353,7 @@ COMPOSER_FEW_SHOT: list[dict[str, str]] = [
 
 def search_hint(
     found: int, *, showing_more: bool = False, vague: bool = False, unavailable: str = "", instead_of: str = "",
+    relaxed: str = "", device_gap: str = "", listed_models: str = "",
 ) -> str:
     if showing_more:
         if not found:
@@ -367,6 +368,17 @@ def search_hint(
             f"The catalog does not carry: {unavailable}. Say so plainly. Follow-ups may only suggest products in "
             "beauty, electronics, clothing and sports gear, or home and kitchen."
         )
+    if relaxed and found:
+        return (
+            f"Nothing matched together with the earlier condition(s): {relaxed}. These {found} products drop them. "
+            "Open by saying so plainly."
+        )
+    if device_gap and listed_models and not found:
+        return (
+            f"No listing says it fits the {device_gap}. Newer models the listings do name include: {listed_models}. Say so plainly. "
+            "Every follow-up must be one of these models or the same product without a model; never suggest a "
+            "model that is not in this list."
+        )
     if instead_of and found:
         return (
             f"The catalog does not sell {instead_of} itself. These {found} products are accessories for it. "
@@ -375,6 +387,7 @@ def search_hint(
     return f"Found {found} products." if found else "Nothing matched. Say so and suggest a specific way to widen the search."
 
 
+MODEL_FOLLOWUP_HINT = "A follow-up that names a device model must use one of these, which listings name: {models}."
 VISUAL_HINT = "The shopper uploaded a photo, identified as “{query}”. Say these are similar products found from the photo."
 VISUAL_EMPTY_HINT = "The shopper uploaded a photo but nothing similar was found. Say so and suggest a clearer photo or a description."
 MULTI_EMPTY_HINT = "None of the shopper's requests matched. Say so and suggest how to widen them."

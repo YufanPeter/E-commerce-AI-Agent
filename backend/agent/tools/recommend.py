@@ -12,6 +12,7 @@ It deliberately does not hide empty results or generate response copy directly.
 
 import logging
 import os
+import re
 from dataclasses import replace
 from typing import Any, Callable
 
@@ -24,7 +25,9 @@ from i18n import is_english
 from catalog_config import PROFILE
 from search.query_decomposer import SubRequest, decompose_query
 from search.query_understanding import ParsedQuery, expand_sub_categories
+from search.catalog_search import _MODEL_SHAPED
 from search.search_service import ProductHit, SearchResult, SearchService
+from store.numeric_attributes import describe
 
 
 logger = logging.getLogger(__name__)
@@ -102,6 +105,40 @@ def _diversify(
     if len(primary) < top_k:
         primary.extend(overflow[: top_k - len(primary)])
     return primary[:top_k]
+
+
+_DEVICE_WORDS = {"iphone": "iPhone", "ipad": "iPad", "samsung": "Samsung", "galaxy": "Galaxy", "pixel": "Pixel"}
+
+
+def _device_name(device: str) -> str:
+    """"iphone_14_pro_max" -> "iPhone 14 Pro Max"."""
+    words = device.split("_")
+    return " ".join(_DEVICE_WORDS.get(w, w if any(ch.isdigit() for ch in w) else w.title()) for w in words)
+
+
+def _normalized_device(device: str) -> str:
+    """Stored values are not all spelled alike: "iphone_12pro_max" is "iphone_12_pro_max"."""
+    return re.sub(r"(\d)(?=[a-z])", r"\1_", device.lower())
+
+
+def _model_order(device: str) -> tuple[int, int]:
+    """Newest first: "iphone_14_pro_max" sorts above "iphone_14" and "iphone_8"."""
+    number = re.search(r"\d+", device)
+    return (int(number.group()) if number else 0, len(device))
+
+
+def _condition_names(parsed: ParsedQuery) -> list[str]:
+    """Plain names of the conditions a search applied, to say which ones a retry dropped."""
+    names = [f"works with {_device_name(d)}" for d in parsed.compatible_with or []]
+    names += [f"brand {brand}" for brand in parsed.brand_include or []]
+    if parsed.max_price is not None:
+        names.append(f"under ${parsed.max_price:g}")
+    if parsed.min_price is not None:
+        names.append(f"over ${parsed.min_price:g}")
+    names += [value.replace("_", " ") for value in parsed.features or []]
+    names += [f"no {term}" for term in parsed.excluded_attributes or []]
+    names += [describe(c) for c in parsed.numeric or []]
+    return names
 
 
 class RecommendTool:
@@ -534,6 +571,57 @@ class RecommendTool:
             )
         return self._run_single(label or query, session, top_k=top_k, base=None, exclude_seen=True)
 
+    def _without_carried_conditions(
+        self, query: str, session: AgentSession, base: ParsedQuery, result: SearchResult, search_kwargs: dict[str, Any],
+    ) -> tuple[SearchResult, list[str]]:
+        """Nothing matched with the conditions carried from earlier turns: search this turn alone.
+
+        The router decides what a follow-up takes back, and it can miss one ("show all phone
+        cases" after "cases for the iPhone 15"). An empty page would then repeat itself. The
+        retry is used only when this turn names what it wants, so "under $10" never turns into
+        a search across the whole catalog, and the reply says which conditions were dropped.
+        """
+        alone = self._search(self._get_service(), query, session, **{**search_kwargs, "base": None})
+        named = alone.parsed.sub_category or alone.parsed.category
+        if not alone.hits or not named:
+            return result, []
+        dropped = [label for label in _condition_names(result.parsed) if label not in _condition_names(alone.parsed)]
+        return (alone, dropped) if dropped else (result, [])
+
+    def _device_models(self, parsed: ParsedQuery) -> tuple[str, list[str]]:
+        """The model the shopper named, if any, and the newest models listings of this type name.
+
+        Follow-ups are written by the model, which would otherwise suggest "cases for the
+        iPhone 15" when no listing fits one and send the shopper to an empty page.
+        """
+        if not getattr(parsed, "sub_category", None):
+            return "", []
+        types = expand_sub_categories([parsed.sub_category])
+        # Cases and protectors are made per model; a charger listing that names every iPhone
+        # would make "cases for the iPhone 15" look available.
+        types = [label for label in types if _MODEL_SHAPED.search(label)] or types
+        try:
+            import sqlite3
+            from contextlib import closing
+
+            with closing(sqlite3.connect(self._get_products().db_path)) as conn:
+                rows = conn.execute(
+                    f"""SELECT DISTINCT a.value FROM product_attributes a JOIN products p USING (product_id)
+                        WHERE a.attribute = 'compatible_device' AND p.sub_category IN ({",".join("?" * len(types))})""",
+                    types,
+                ).fetchall()
+        except Exception as exc:  # noqa: BLE001 - the reply just has less to go on
+            logger.warning("Listing models failed: %r", exc)
+            return "", []
+        named = next((d for d in getattr(parsed, "compatible_with", None) or [] if any(ch.isdigit() for ch in d)), "")
+        family = (named or next(iter(getattr(parsed, "compatible_with", None) or []), "")).split("_")[0]
+        models = sorted({
+            value for value in (_normalized_device(raw) for (raw,) in rows)
+            if "_" in value and any(ch.isdigit() for ch in value) and value != named
+            and (not family or value.startswith(f"{family}_"))
+        }, key=_model_order, reverse=True)
+        return (_device_name(named) if named else ""), [_device_name(value) for value in models[:6]]
+
     def _run_single(
         self,
         query: str,
@@ -563,6 +651,9 @@ class RecommendTool:
         )
         if seen:
             result = replace(result, hits=[h for h in result.hits if h.product_id not in seen])
+        relaxed: list[str] = []
+        if not result.hits and isinstance(base, ParsedQuery) and not seen and parsed is None:
+            result, relaxed = self._without_carried_conditions(query, session, base, result, search_kwargs)
 
         # Apply diversity only when the user did not specify a brand.
         if want_diversity and not getattr(result.parsed, "brand_include", None):
@@ -598,7 +689,12 @@ class RecommendTool:
             "max_price": result.parsed.max_price,
             "unavailable_terms": list(getattr(result.parsed, "unavailable_terms", None) or []),
             "instead_of": getattr(result.parsed, "instead_of", None),
+            "relaxed": relaxed,
         }
+        device_gap, listed_models = self._device_models(result.parsed)
+        if hits:
+            device_gap = ""
+        summary["listed_models"] = listed_models
 
         payload = {
             "query": query,
@@ -627,8 +723,15 @@ class RecommendTool:
             hint = "检索系统认为 query 过于模糊，请引导用户补充关键信息（品类、预算、用途）。"
         elif unavailable:
             hint = f"商品库里没有用户点名的「{unavailable}」。请坦诚说明没有，不要假装有，追问里给相近品类或品牌的方向。"
+        elif device_gap and listed_models:
+            hint = (
+                f"没有商品写明适配 {device_gap}。商品里写到的型号有：{'、'.join(listed_models)}。"
+                "坦诚说明，追问只能推荐这些型号或不限型号，不要推荐库里没有的型号。"
+            )
         elif not hits:
             hint = "本次未命中任何商品，请坦诚告知用户并给出可能放宽的方向建议。"
+        elif relaxed and hits:
+            hint = f"加上之前的条件（{'、'.join(relaxed)}）没有匹配的商品，这 {len(hits)} 款去掉了这些条件。开场白先说明这一点。"
         elif getattr(result.parsed, "instead_of", None):
             hint = (
                 f"商品库不卖「{result.parsed.instead_of}」本身，这 {len(hits)} 款是它的配件。"
@@ -639,14 +742,21 @@ class RecommendTool:
             memory_hint = _personalization_hint(payload["personalization"], session)
             if memory_hint:
                 hint = f"{hint}{memory_hint}"
+            if listed_models:
+                hint = f"{hint}追问如果要点名具体型号，只能用这些：{'、'.join(listed_models)}。"
         if is_english():
             hint = english.search_hint(
                 len(hits), showing_more=exclude_seen, vague=result.parsed.needs_clarification,
                 unavailable=", ".join(getattr(result.parsed, "unavailable_terms", None) or []),
                 instead_of=getattr(result.parsed, "instead_of", None) or "",
+                relaxed=", ".join(relaxed),
+                device_gap=device_gap,
+                listed_models=", ".join(listed_models),
             )
             if hits:
                 hint = f"{hint} {_personalization_hint(payload['personalization'], session)}".strip()
+                if listed_models:
+                    hint = f"{hint} {english.MODEL_FOLLOWUP_HINT.format(models=', '.join(listed_models))}"
 
         return ToolResult(
             tool_name=self.name,
