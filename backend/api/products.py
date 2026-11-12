@@ -18,8 +18,10 @@ from __future__ import annotations
 数据源：SQLite ProductStore（backend/store/product_store.py）。
 """
 
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +30,7 @@ from fastapi.responses import FileResponse
 
 from catalog_config import PROFILE
 from i18n import format_money, t
+from store.product_highlights import HighlightStore
 from store.product_store import (
     DEFAULT_DB_PATH,
     ProductDetail,
@@ -45,6 +48,36 @@ _IMAGE_MEDIA_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "imag
 
 router = APIRouter()
 store = ProductStore(DEFAULT_DB_PATH)
+highlight_store = HighlightStore(DEFAULT_DB_PATH)
+_highlight_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="highlights")
+_highlights_pending: set[str] = set()
+_highlights_lock = threading.Lock()
+
+
+def warm_highlights(payload: Any, limit: int = 6) -> None:
+    """Write "About this item" points for products just shown, so opening one is instant."""
+    products = (payload or {}).get("products") if isinstance(payload, dict) else None
+    for card in (products or [])[:limit]:
+        product_id = card.get("product_id") or card.get("productID") if isinstance(card, dict) else None
+        if not product_id:
+            continue
+        with _highlights_lock:
+            if product_id in _highlights_pending:
+                continue
+            _highlights_pending.add(product_id)
+        _highlight_pool.submit(_warm_one, product_id)
+
+
+def _warm_one(product_id: str) -> None:
+    try:
+        detail = store.get_product_detail(product_id)
+        if detail is not None:
+            highlight_store.points_for(product_id, detail.title, detail.marketing_description)
+    except Exception:  # noqa: BLE001 - warming is best effort; the page asks again
+        pass
+    finally:
+        with _highlights_lock:
+            _highlights_pending.discard(product_id)
 
 
 def load_image_manifest() -> dict[str, str]:
@@ -167,6 +200,18 @@ def get_products(
         "requestID": "products_by_id",
         "products": products,
     }
+
+
+@router.get("/products/{product_id}/highlights")
+def product_highlights(product_id: str) -> dict[str, Any]:
+    """Short emoji points for "About this item"; empty when they cannot be written."""
+    detail = store.get_product_detail(product_id)
+    if detail is None:
+        raise HTTPException(
+            status_code=404,
+            detail=error_payload(code="PRODUCT_NOT_FOUND", message="Product not found", retryable=False),
+        )
+    return {"highlights": highlight_store.points_for(product_id, detail.title, detail.marketing_description)}
 
 
 @router.post("/products/{product_id}/pitch")

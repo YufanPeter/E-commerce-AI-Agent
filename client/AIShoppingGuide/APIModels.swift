@@ -642,6 +642,19 @@ struct OrderLinePayload: Codable, Hashable {
     }
 }
 
+/// 详情页「About this item」的一条要点（GET /products/{id}/highlights）
+struct ProductHighlight: Codable, Identifiable, Hashable {
+    let emoji: String
+    let title: String
+    let detail: String
+
+    var id: String { title }
+}
+
+struct ProductHighlightEnvelope: Codable {
+    let highlights: [ProductHighlight]
+}
+
 struct OrderListEnvelope: Codable {
     let orders: [OrderPayload]
 }

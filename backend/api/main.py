@@ -616,6 +616,7 @@ def chat_stream(req: ChatRequest, request: Request) -> StreamingResponse:
                     products_router.absolutize_image_urls(
                         (ev["data"] or {}).get("payload"), image_base
                     )
+                    products_router.warm_highlights((ev["data"] or {}).get("payload"))
                 yield _format_sse(ev["type"], ev["data"])
         except Exception as exc:  # noqa: BLE001 - every stream failure reaches the client
             logger.exception("Stream pipeline crashed")

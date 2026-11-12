@@ -1365,6 +1365,22 @@ private extension ProductReview {
 }
 
 extension RESTProductService {
+    /// 商品要点；后端写不出来或请求失败时返回空数组，页面退回显示商家原文。
+    func fetchHighlights(productID: String) async -> [ProductHighlight] {
+        var request = URLRequest(url: baseURL.appendingPathComponent("products/\(productID)/highlights"))
+        request.timeoutInterval = 30
+        guard
+            let (data, response) = try? await session.data(for: request),
+            let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+            let envelope = try? JSONDecoder().decode(ProductHighlightEnvelope.self, from: data)
+        else {
+            return []
+        }
+        return envelope.highlights
+    }
+}
+
+extension RESTProductService {
     /// 最近的订单，连同每个商品的图片地址（订单表里不存图）。
     func fetchOrders(userID: String = UserIdentity.defaultUserID) async throws -> (orders: [OrderPayload], images: [String: URL]) {
         let url = baseURL.appendingPathComponent("orders").appendingPathComponent(userID)

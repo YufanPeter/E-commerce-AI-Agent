@@ -15,6 +15,8 @@ struct ProductDetailView: View {
     @State private var successSummary = ""
     @State private var isListingExpanded = false
     @State private var isTitleExpanded = false
+    /// nil while loading; empty when no points could be written, and the listing shows instead.
+    @State private var highlights: [ProductHighlight]?
 
     private var toastBottomPadding: CGFloat {
         stickyButtonBottomPadding + 74
@@ -270,25 +272,97 @@ struct ProductDetailView: View {
     }
 
     private var listingDescriptionBlock: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 12) {
             Text("About this item")
                 .font(.headline)
                 .foregroundStyle(AppTheme.textPrimary)
+
+            switch highlights {
+            case .none:
+                highlightPlaceholder
+            case .some(let points) where !points.isEmpty:
+                VStack(alignment: .leading, spacing: 14) {
+                    ForEach(points) { point in
+                        highlightRow(point)
+                    }
+                }
+                fullListing(collapsedLines: 0)
+            default:
+                fullListing(collapsedLines: 4)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .task(id: product.id) {
+            guard highlights == nil else { return }
+            let points = await RESTProductService().fetchHighlights(productID: product.id)
+            withAnimation(.easeOut(duration: 0.2)) { highlights = points }
+        }
+    }
+
+    private func highlightRow(_ point: ProductHighlight) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Text(point.emoji)
+                .font(.system(size: 18))
+                .frame(width: 36, height: 36)
+                .background(AppTheme.secondary, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(point.title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(AppTheme.textPrimary)
+                Text(point.detail)
+                    .font(.footnote)
+                    .foregroundStyle(AppTheme.textSecondary)
+                    .lineSpacing(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    private var highlightPlaceholder: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            ForEach(0..<3, id: \.self) { _ in
+                HStack(alignment: .top, spacing: 12) {
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(AppTheme.secondary)
+                        .frame(width: 36, height: 36)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Capsule().fill(AppTheme.secondary).frame(width: 140, height: 12)
+                        Capsule().fill(AppTheme.secondary).frame(height: 10)
+                    }
+                    .padding(.top, 4)
+                }
+            }
+        }
+        .accessibilityLabel("Loading highlights")
+    }
+
+    /// 商家原文：有要点时默认收起，只留一个入口；没有要点时显示前几行。
+    @ViewBuilder
+    private func fullListing(collapsedLines: Int) -> some View {
+        if isListingExpanded || collapsedLines > 0 {
             Text(listingDescription)
                 .font(.subheadline)
                 .foregroundStyle(AppTheme.textSecondary)
                 .lineSpacing(4)
-                .lineLimit(isListingExpanded ? nil : 4)
+                .lineLimit(isListingExpanded ? nil : collapsedLines)
                 .fixedSize(horizontal: false, vertical: true)
-            Button(isListingExpanded ? "Show less" : "Show more") {
-                withAnimation(.easeOut(duration: 0.2)) {
-                    isListingExpanded.toggle()
-                }
+                .transition(.opacity)
+        }
+        Button {
+            withAnimation(.easeOut(duration: 0.2)) {
+                isListingExpanded.toggle()
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text(isListingExpanded ? "Show less" : (collapsedLines == 0 ? "Full description from the seller" : "Show more"))
+                Image(systemName: isListingExpanded ? "chevron.up" : "chevron.down")
+                    .font(.caption2.weight(.semibold))
             }
             .font(.subheadline.weight(.medium))
             .foregroundStyle(AppTheme.textPrimary)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .buttonStyle(.plain)
     }
 
     private var selectedSpecificationSummary: String {
