@@ -40,7 +40,7 @@ import os
 import re
 import time
 from collections.abc import Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from agent.composer import AnswerComposer
@@ -204,7 +204,7 @@ class Agent:
         if _should_prefetch(query, session):
             self._prefetch_search_understanding(query)
         decision = self._safe_route(query, session, trace)
-        tool_result = self._safe_run_tool(decision, session, trace, raw_query=query)
+        tool_result = _acknowledge_memory(self._safe_run_tool(decision, session, trace, raw_query=query), decision, session)
 
         t2 = time.perf_counter()
         try:
@@ -288,7 +288,7 @@ class Agent:
             "tool": decision.tool,
             "message": _tool_step_text(decision, query),
         }}
-        tool_result = self._safe_run_tool(decision, session, trace, raw_query=query)
+        tool_result = _acknowledge_memory(self._safe_run_tool(decision, session, trace, raw_query=query), decision, session)
         yield {"type": "tool_result", "data": tool_result.to_dict()}
 
         # ③ Composer：流式（结构化事件）
@@ -852,6 +852,23 @@ _CANCEL_ONLY_RE = re.compile(
     r"^(?:算了|不要了?|不用了?|不看了?|不买了?|不找了?|先不[看要用买找]了?|别[找搜看]了|取消|没事了?|吧|啊|呀|哈)+$"
 )
 _CANCEL_ACK = "好的，先不看了。想找别的随时告诉我。"
+
+
+def _acknowledge_memory(result: ToolResult, decision: IntentDecision, session: AgentSession) -> ToolResult:
+    """Say what this message taught the memory, so "I never buy Maybelline" is not met with silence.
+
+    A message that only tells about the shopper (routed to clarify) is answered with the
+    acknowledgement; a search that also carried such a fact mentions it in passing.
+    """
+    notes = getattr(session, "turn_memory", None) or []
+    if not notes:
+        return result
+    said = t("memory.join").join(notes)
+    if decision.tool in {"clarify", "fallback"}:
+        return replace(result, narrative_override=t("memory.ack_only", notes=said), needs_composer=False)
+    if result.needs_composer and result.narrative_override is None:
+        return replace(result, composer_hint=f"{result.composer_hint or ''} {t('memory.ack_hint', notes=said)}".strip())
+    return result
 
 
 def record_abandoned_turn(session: AgentSession, query: str) -> None:

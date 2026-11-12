@@ -11,7 +11,7 @@ from typing import Any
 
 from agent.session import AgentSession
 from agent.tools.base import ToolResult
-from agent.tools.recommend import RecommendTool, _card_with_evidence
+from agent.tools.recommend import _MAX_PER_BRAND, RecommendTool, _canonical_brand, _card_with_evidence, _diversify
 from agent.tools.resolve import focus_index_in, positions_in, resolve_one
 from search.catalog_understanding import understand
 from search.query_understanding import ParsedQuery
@@ -80,7 +80,9 @@ class KnowledgeTool:
         related = service.graph.similar(focus["product_id"], _POOL) if service.graph is not None else []
         if not related:  # Without the graph, a search near the product itself still answers.
             return self._like(focus, session, slots, limit)
-        hits = service.hits_for(related, max_price=limit)[:_SHOWN]
+        # Neighbours in the graph are often the same seller's other models; two per brand
+        # leaves room for real alternatives.
+        hits = _diversify(service.hits_for(related, max_price=limit), _SHOWN, [(lambda h: _canonical_brand(h.brand), _MAX_PER_BRAND)])
         if not hits:
             return _text_result(self.name, f"I couldn't find anything similar and cheaper than {title}.")
         lead = "cheaper options" if wants_cheaper else "similar options"
@@ -101,7 +103,7 @@ class KnowledgeTool:
             original_query=title, sub_category=label, retrieval_query=title, search_text=title, max_price=limit,
         )
         result = self._recommend._run_single(
-            title, session, top_k=_SHOWN, base=None, parsed=parsed, exclude_ids={focus["product_id"]},
+            title, session, top_k=_SHOWN, base=None, parsed=parsed, exclude_ids={focus["product_id"]}, diversify=True,
         )
         remembered = slots.get("history_product")
         when = f", which the shopper {remembered['action']} on {remembered['at']}" if remembered else ""

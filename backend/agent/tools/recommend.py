@@ -665,10 +665,12 @@ class RecommendTool:
         parsed: ParsedQuery | None = None,
         exclude_seen: bool = False,
         exclude_ids: set[str] | None = None,
+        diversify: bool | None = None,
     ) -> ToolResult:
         # 宽泛浏览（首轮、未承接 refine）时多召回一个候选池，便于做多样性筛选；
         # refine（base 非空）是聚焦的承接式追问，保持原样不打散。
-        want_diversity = base is None and parsed is None
+        # "Something like X" also browses: five of X's own brand would hide the alternatives.
+        want_diversity = diversify if diversify is not None else (base is None and parsed is None)
         pool_k = top_k * _DIVERSITY_POOL_MULTIPLIER if want_diversity else top_k
         search_kwargs: dict[str, Any] = {"top_k_products": pool_k, "base": base}
         if parsed is not None:

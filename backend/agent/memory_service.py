@@ -13,6 +13,7 @@ import logging
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
 from typing import Any
 
 from agent.memory_extractor import _STYLE_ALIASES, extract_preference_updates, extract_sensitive_terms
@@ -20,6 +21,7 @@ from agent.memory_inference import infer_suggestions
 from agent.memory_llm import ExtractedMemory, extract_with_llm, might_disclose
 from agent.tools.refine import parse_more_request
 from catalog_config import AMAZON_CATEGORIES, PROFILE
+from i18n import en as english
 from i18n import is_english
 from search.query_understanding import expand_brands
 from store.user_memory_store import (
@@ -299,12 +301,70 @@ def _apply_extracted(store: UserMemoryStore, user_id: str, memories: list[Extrac
     return events
 
 
+@dataclass
+class TurnMemory:
+    """What this message taught the memory: saved updates, and short notes for the reply."""
+
+    events: list[dict[str, Any]] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+
+
+def remember_from_turn(store: UserMemoryStore, user_id: str, text: str, session_id: str | None) -> TurnMemory:
+    """Rules only, before the turn runs, so this turn's search already uses what was said."""
+    if is_english():
+        return _remember_english(store, user_id, text, session_id)
+    events = process_utterance(store, user_id, text, session_id)
+    return TurnMemory(events, [str(event.get("message") or "").removeprefix("已记住：") for event in events])
+
+
+def _remember_english(store: UserMemoryStore, user_id: str, text: str, session_id: str | None) -> TurnMemory:
+    from agent.memory_rules_en import CUES, catalog_brand, read_statements
+
+    if not CUES.search(text) or english.MEMORY_THIRD_PARTY_RE.search(text):
+        return TurnMemory()
+    memory = TurnMemory()
+    for statement in read_statements(text, catalog_brand):
+        if statement.kind == "allergy":
+            # Health facts wait for the shopper's confirmation, like every allergy.
+            store.suggest_item(user_id, MemoryKey("avoid_term", value=statement.value), source="stated", evidence=text, confidence=0.9, session_id=session_id)
+            memory.notes.append(f"you're allergic to {statement.value} (confirm it on your Memory page and I'll leave those products out)")
+            continue
+        update, note = _english_update(statement, text, session_id)
+        event = store.apply_update(user_id, update)
+        if event:
+            memory.events.append(event)
+            memory.notes.append(note)
+    if not memory.events:
+        # "Remember my budget is usually $40" and similar keep their older reading.
+        for event in _english_memory_update(store, user_id, text, session_id, source="stated"):
+            memory.events.append(event)
+            memory.notes.append(str(event.get("message") or "").removeprefix("Saved: "))
+    return memory
+
+
+def _english_update(statement: Any, text: str, session_id: str | None) -> tuple[PreferenceUpdate, str]:
+    common = {"source": "stated", "session_id": session_id, "evidence": text}
+    value = statement.value
+    if statement.kind in {"skin_type", "shoe_size"}:
+        category = AMAZON_CATEGORIES["美妆护肤" if statement.kind == "skin_type" else "服饰运动"]
+        label = _ATTR_LABELS[statement.kind]
+        update = PreferenceUpdate(
+            field="category_attr", value={"category": category, "key": statement.kind, "value": value},
+            message=f"Saved: {label} {value}", **common,
+        )
+        return update, f"your {label.lower()} is {value}"
+    field_name, message, note = {
+        "avoid_term": ("avoid_terms", f"Saved: avoid {value}", f"you avoid {value}"),
+        "brand_avoid": ("brand_exclude", f"Saved: never recommend {value}", f"you don't buy {value}"),
+        "brand_like": ("brand_include", f"Saved: prefer {value}", f"you prefer {value}"),
+    }[statement.kind]
+    return PreferenceUpdate(field=field_name, value=value, message=message, **common), note
+
+
 def process_utterance(store: UserMemoryStore, user_id: str, text: str, session_id: str | None) -> list[dict[str, Any]]:
     """规则抽取，同步执行，结果立即生效。"""
     if is_english():
-        if not re.match(r"\s*(?:remember\b|i usually\b|my (?:usual )?budget is usually\b)", text, re.I):
-            return []
-        return _english_memory_update(store, user_id, text, session_id, source="stated")
+        return _remember_english(store, user_id, text, session_id).events
     events: list[dict[str, Any]] = []
     for update in extract_preference_updates(text, user_id, session_id):
         event = store.apply_update(user_id, update)
@@ -333,15 +393,12 @@ def _english_memory_update(
     store: UserMemoryStore, user_id: str, text: str, session_id: str | None, source: str, keep_as_note: bool = False,
 ) -> list[dict[str, Any]]:
     clean = re.sub(r"^\s*remember(?: that)?\s+", "", text.strip(), flags=re.I).rstrip(".!?")
-    brand = re.fullmatch(r"i (?:usually |always )?(like|prefer|avoid|never buy) (.{1,55})", clean, re.I)
     budget = re.fullmatch(
         r"my (?:usual )?budget is (?:usually )?(?:between )?\$?(\d+(?:\.\d{1,2})?)(?:\s+(?:and|to)\s+\$?(\d+(?:\.\d{1,2})?))?",
         clean, re.I,
     )
-    if brand:
-        field = "brand_include" if brand[1].lower() in {"like", "prefer"} else "brand_exclude"
-        value: Any = brand[2].strip()
-    elif budget:
+    value: Any
+    if budget:
         field = "budget_range"
         value = {"budget_min": float(budget[1]) if budget[2] else None, "budget_max": float(budget[2] or budget[1])}
         if value["budget_min"] is not None and value["budget_min"] > value["budget_max"]:
@@ -361,7 +418,7 @@ def _english_memory_update(
 def _tell_english(store: UserMemoryStore, user_id: str, clean: str) -> dict[str, Any]:
     """Rules, then the model; anything still unstructured is kept as a note."""
     before = {row["item_id"] for row in store.list_items(user_id)}
-    events = _english_memory_update(store, user_id, clean, None, source="manual")
+    events = _remember_english(store, user_id, clean, None).events
     if not events and clean and PROFILE.capabilities.llm_memory and llm_extract_enabled():
         events = _apply_extracted(store, user_id, extract_with_llm(clean), clean, None)
     if not events and any(row["item_id"] not in before and row["status"] == SUGGESTED for row in store.list_items(user_id)):

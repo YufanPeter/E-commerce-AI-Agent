@@ -108,7 +108,7 @@ def _amazon_profile() -> CatalogProfile:
             image_similarity=False,
             vector_evidence=False,
             query_prefetch=False,
-            inferred_memory=False,
+            inferred_memory=True,
             llm_memory=llm,
             reference_prices=False,
         ),

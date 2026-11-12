@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from i18n import is_english
 from search.query_understanding import BRAND_ALIASES
 from store.user_memory_store import MemoryKey
 
@@ -28,6 +29,15 @@ _BUDGET_MIN_SEARCHES = 3
 _CATEGORY_MIN_SEARCHES = 4
 _VARIANT_TO_CANONICAL = {v: canonical for canonical, variants in BRAND_ALIASES.items() for v in variants}
 _EVENT_LABELS = {"checkout": "下单", "add_cart": "加购", "view_detail": "看详情", "compare": "对比"}
+_ENGLISH_EVENT_LABELS = {"checkout": "ordered", "add_cart": "added to cart", "view_detail": "viewed", "compare": "compared"}
+
+
+def _english_brand(brand: str, seen: dict[str, float]) -> str | None:
+    """One name per brand however sellers spell it; None for a generic or unknown brand."""
+    from agent.memory_rules_en import catalog_brand
+    from search.catalog_search import same_brand
+
+    return next((name for name in seen if same_brand(name, brand)), None) or catalog_brand(brand)
 
 
 @dataclass(frozen=True)
@@ -49,6 +59,10 @@ def _decay(created_at: str | None, now: datetime) -> float:
 def infer_suggestions(events: list[dict[str, Any]], now: datetime | None = None) -> list[Suggestion]:
     now = now or datetime.now(timezone.utc)
     suggestions = _infer_brands(events, now)
+    if is_english():
+        # Searches there name leaf types while budgets are kept per top-level category, so
+        # only brand habits carry over cleanly.
+        return suggestions
     suggestions += _infer_budgets(events)
     suggestions += _infer_categories(events)
     return suggestions
@@ -62,17 +76,22 @@ def _infer_brands(events: list[dict[str, Any]], now: datetime) -> list[Suggestio
         brand = event.get("brand")
         if not weight or not brand:
             continue
-        canonical = _VARIANT_TO_CANONICAL.get(brand, brand)
+        canonical = _english_brand(brand, scores) if is_english() else _VARIANT_TO_CANONICAL.get(brand, brand)
+        if not canonical:
+            continue
         scores[canonical] += weight * _decay(event.get("created_at"), now)
         counts[canonical][event["type"]] += 1
     out = []
     for brand, score in scores.items():
         if score < _BRAND_MIN_SCORE or sum(counts[brand].values()) < _BRAND_MIN_EVENTS:
             continue
-        parts = [f"{_EVENT_LABELS[kind]} {n} 次" for kind, n in counts[brand].items()]
+        if is_english():
+            evidence = "Recently " + ", ".join(f"{_ENGLISH_EVENT_LABELS[kind]} {n} time{'s' if n > 1 else ''}" for kind, n in counts[brand].items())
+        else:
+            evidence = "最近" + "、".join(f"{_EVENT_LABELS[kind]} {n} 次" for kind, n in counts[brand].items())
         out.append(Suggestion(
             key=MemoryKey("brand_like", value=brand),
-            evidence="最近" + "、".join(parts),
+            evidence=evidence,
             confidence=min(0.9, 0.4 + score / 20),
         ))
     return out

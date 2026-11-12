@@ -110,7 +110,7 @@ class _Recommend:
     def _get_products(self):
         return SimpleNamespace(get_product_detail=lambda pid: SimpleNamespace(sub_category="Smartwatches"))
 
-    def _run_single(self, query, session, top_k, base, parsed=None, exclude_ids=None):
+    def _run_single(self, query, session, top_k, base, parsed=None, exclude_ids=None, diversify=None):
         self.searched.append((parsed.sub_category, parsed.max_price, exclude_ids))
         return ToolResult(tool_name="recommend", payload={}, composer_hint="Found 5 products.")
 

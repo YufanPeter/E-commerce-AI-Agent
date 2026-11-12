@@ -307,17 +307,29 @@ def _attach_user_memory(session: Any, user_id: str | None) -> None:
     session.product_trail = memory_service.product_trail(_user_memory, clean_user_id)
 
 
-def _apply_realtime_preference_updates(query: str, session: Any) -> list[dict[str, Any]]:
+def _remember_before_turn(query: str, session: Any) -> list[dict[str, Any]]:
+    """Read lasting facts from the message before the turn runs.
+
+    "I avoid fragrance, show me moisturizers" then searches without fragrance already, and
+    the reply can say what was remembered instead of ignoring it. The model's slower reading
+    still runs in the background and shows up on the memory page.
+    """
+    session.turn_memory = []
     user_id = getattr(session, "user_id", None)
-    if not user_id:
+    if not user_id or not (query or "").strip():
         return []
     session_id = getattr(session, "session_id", None)
-    events = memory_service.process_utterance(_user_memory, user_id, query, session_id)
+    try:
+        memory = memory_service.remember_from_turn(_user_memory, user_id, query, session_id)
+    except Exception:  # noqa: BLE001 - memory must never stop the conversation
+        logger.exception("Reading memory from the message failed")
+        return []
     if PROFILE.capabilities.llm_memory:
-        memory_service.extract_in_background(_user_memory, user_id, query, session_id, events)
-    if events:
-        session.user_profile = _user_memory.get_preference(user_id).to_dict()
-    return events
+        memory_service.extract_in_background(_user_memory, user_id, query, session_id, memory.events or memory.notes)
+    if memory.events:
+        _attach_user_memory(session, user_id)
+    session.turn_memory = memory.notes
+    return memory.events
 
 
 @app.on_event("startup")
@@ -516,9 +528,9 @@ def chat(req: ChatRequest) -> ChatResponse:
         raise HTTPException(status_code=400, detail="query 不能为空")
     session = _sessions.get_or_create(req.session_id)
     _attach_user_memory(session, req.user_id)
+    memory_updates = _remember_before_turn(req.query, session)
     resp = _get_agent().handle_turn(req.query, session)
     memory_service.record_turn(_user_memory, session.user_id, session.session_id, resp.tool_result.to_dict(), req.query)
-    memory_updates = _apply_realtime_preference_updates(req.query, session)
     if memory_updates:
         resp.trace["memory_updates"] = memory_updates
     _sessions.save(session)  # Persist the turn so context survives a restart.
@@ -579,6 +591,7 @@ def chat_stream(req: ChatRequest, request: Request) -> StreamingResponse:
             for abandoned_query in turn.replay:
                 record_abandoned_turn(session, abandoned_query)
         _attach_user_memory(session, req.user_id)
+        memory_updates = _remember_before_turn(req.query, session)
         agent = _get_agent()
         image = _resolve_image(req)
         image_base = products_router.image_base_url(request)
@@ -607,7 +620,7 @@ def chat_stream(req: ChatRequest, request: Request) -> StreamingResponse:
                     break
                 # done 之前抽取本轮偏好更新并推送 memory_update（前端横幅依赖）
                 if ev["type"] == "done":
-                    for memory_event in _apply_realtime_preference_updates(req.query, session):
+                    for memory_event in memory_updates:
                         yield _format_sse("memory_update", memory_event)
                 if ev["type"] == "tool_result":
                     memory_service.record_turn(
