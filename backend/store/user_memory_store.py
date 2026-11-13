@@ -149,6 +149,23 @@ CREATE TABLE IF NOT EXISTS user_events (
 )
 """
 
+# One row per conversation: what it was about, so a later chat can recall or pick it up.
+# ``facts_json`` is rebuilt from the conversation after every turn; ``title`` and ``summary``
+# start as plain facts and are rewritten in the background by the model.
+_CREATE_DIGESTS_SQL = """
+CREATE TABLE IF NOT EXISTS conversation_digests (
+    user_id     TEXT NOT NULL,
+    session_id  TEXT NOT NULL,
+    title       TEXT NOT NULL,
+    summary     TEXT NOT NULL,
+    facts_json  TEXT NOT NULL,
+    turns       INTEGER NOT NULL DEFAULT 0,
+    started_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (user_id, session_id)
+)
+"""
+
 _CREATE_EVENTS_INDEX_SQL = (
     "CREATE INDEX IF NOT EXISTS idx_user_events_user_time ON user_events (user_id, created_at)"
 )
@@ -234,6 +251,7 @@ class UserMemoryStore:
                 conn.execute(_CREATE_ITEMS_SQL)
                 conn.execute(_CREATE_EVENTS_SQL)
                 conn.execute(_CREATE_EVENTS_INDEX_SQL)
+                conn.execute(_CREATE_DIGESTS_SQL)
         except Exception:  # noqa: BLE001
             logger.exception("user memory tables init failed")
 
@@ -635,7 +653,7 @@ class UserMemoryStore:
     def clear_user(self, user_id: str) -> None:
         """彻底忘掉一个用户：偏好、台账、事件、撤销记录全部删除。"""
         with self._connect() as conn:
-            for table in ("user_preferences", "memory_items", "user_events", "preference_undo_tokens"):
+            for table in ("user_preferences", "memory_items", "user_events", "preference_undo_tokens", "conversation_digests"):
                 conn.execute(f"DELETE FROM {table} WHERE user_id = ?", (user_id,))
 
     # ------------------------------------------------------------------
@@ -685,6 +703,79 @@ class UserMemoryStore:
                 item["payload"] = {}
             out.append(item)
         return out
+
+
+    def session_events(self, user_id: str, session_id: str) -> list[dict[str, Any]]:
+        """Events of one conversation, oldest first."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT type, product_id, title, sub_category, payload_json FROM user_events "
+                "WHERE user_id = ? AND session_id = ? ORDER BY id",
+                (user_id, session_id),
+            ).fetchall()
+        out = []
+        for row in rows:
+            item = dict(row)
+            try:
+                item["payload"] = json.loads(item.pop("payload_json") or "{}")
+            except json.JSONDecodeError:
+                item["payload"] = {}
+            out.append(item)
+        return out
+
+    # ------------------------------------------------------------------
+    # Conversation digests
+    # ------------------------------------------------------------------
+
+    def save_digest_facts(self, user_id: str, session_id: str, title: str, summary: str, facts: dict[str, Any], turns: int) -> None:
+        """Insert a conversation or refresh its facts; a title and summary already written stay."""
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO conversation_digests (user_id, session_id, title, summary, facts_json, turns)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id, session_id) DO UPDATE SET
+                    facts_json = excluded.facts_json,
+                    turns      = excluded.turns,
+                    updated_at = datetime('now')
+                """,
+                (user_id, session_id, title, summary, json.dumps(facts, ensure_ascii=False), turns),
+            )
+
+    def save_digest_text(self, user_id: str, session_id: str, title: str, summary: str, turns: int) -> None:
+        """The model's title and summary, kept only while no later turn has arrived."""
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE conversation_digests SET title = ?, summary = ? WHERE user_id = ? AND session_id = ? AND turns = ?",
+                (title, summary, user_id, session_id, turns),
+            )
+
+    def list_digests(self, user_id: str, limit: int = 20, exclude_session: str | None = None) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM conversation_digests
+                WHERE user_id = ? AND session_id <> ?
+                ORDER BY updated_at DESC LIMIT ?
+                """,
+                (user_id, exclude_session or "", limit),
+            ).fetchall()
+        out = []
+        for row in rows:
+            item = dict(row)
+            try:
+                item["facts"] = json.loads(item.pop("facts_json") or "{}")
+            except json.JSONDecodeError:
+                item["facts"] = {}
+            out.append(item)
+        return out
+
+    def delete_digest(self, user_id: str, session_id: str) -> bool:
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "DELETE FROM conversation_digests WHERE user_id = ? AND session_id = ?", (user_id, session_id),
+            )
+        return cursor.rowcount > 0
 
 
 def _remove_key_from_preference(preference: UserPreference, key: MemoryKey) -> None:

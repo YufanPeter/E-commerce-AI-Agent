@@ -47,7 +47,7 @@ KNOWN_TOOLS: tuple[str, ...] = (
 
 # The English catalog routes graph questions directly and reads tool arguments from the
 # same call, so no rule has to re-read the message afterwards.
-ENGLISH_TOOLS: tuple[str, ...] = (*KNOWN_TOOLS, "similar", "accessories", "buying_guide")
+ENGLISH_TOOLS: tuple[str, ...] = (*KNOWN_TOOLS, "similar", "accessories", "buying_guide", "resume")
 CART_ACTIONS: tuple[str, ...] = (
     "add", "remove", "set_quantity", "change_spec", "view", "checkout", "reorder", "order_history", "answer", "cancel",
 )
@@ -174,6 +174,7 @@ def _tool_schema() -> dict[str, Any]:
         "reorder_item": {"type": "string", "description": fields["reorder_item"]},
         "history_item": {**nullable_int, "description": fields["history_item"]},
         "history_search": {**nullable_int, "description": fields["history_search"]},
+        "history_conversation": {**nullable_int, "description": fields["history_conversation"]},
     }
     return {
         "type": "function",
@@ -210,6 +211,7 @@ def english_args(raw: dict[str, Any]) -> dict[str, Any]:
         "reorder_item": " ".join(str(raw.get("reorder_item") or "").split()),
         "history_item": positive(raw.get("history_item")),
         "history_search": positive(raw.get("history_search")),
+        "history_conversation": positive(raw.get("history_conversation")),
     }
 
 
@@ -334,6 +336,12 @@ def _english_state(session: AgentSession) -> list[str]:
             for i, item in enumerate(session.search_trail, start=1)
         )
         sections.append(f"Searches the shopper made before, newest first (history_search counts these):\n{lines}")
+    if session.conversation_trail:
+        lines = "\n".join(
+            f"{i}. {item['at']}: {item['title']}. {str(item['summary'])[:200]}"
+            for i, item in enumerate(session.conversation_trail, start=1)
+        )
+        sections.append(f"Earlier conversations with the shopper, newest first (history_conversation counts these):\n{lines}")
     return sections
 
 

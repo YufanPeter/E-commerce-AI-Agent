@@ -139,6 +139,7 @@ protocol PreferenceServicing {
     func undoMemory(userID: String, undoToken: String) async throws -> MemoryActionResult
     func setPersonalization(userID: String, enabled: Bool) async throws -> MemoryViewPayload
     func clearMemory(userID: String) async throws -> MemoryViewPayload
+    func forgetConversation(userID: String, sessionID: String) async throws -> MemoryViewPayload
 }
 
 protocol MediaUploadServicing {
@@ -697,6 +698,10 @@ final class RESTPreferenceService: PreferenceServicing {
 
     func clearMemory(userID: String) async throws -> MemoryViewPayload {
         try await memoryRequest("memory/\(userID)", method: "DELETE")
+    }
+
+    func forgetConversation(userID: String, sessionID: String) async throws -> MemoryViewPayload {
+        try await memoryRequest("memory/\(userID)/conversations/\(sessionID)", method: "DELETE")
     }
 
     private func memoryRequest<T: Decodable>(_ path: String, method: String, body: [String: String]? = nil) async throws -> T {

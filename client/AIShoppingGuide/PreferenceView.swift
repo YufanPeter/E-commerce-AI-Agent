@@ -93,6 +93,20 @@ final class PreferenceStore: ObservableObject {
         }
     }
 
+    /// Forget what one earlier conversation was about. Quiet when the chat list deletes it.
+    func forgetConversation(sessionID: String, announce: Bool = true) async {
+        do {
+            memory = try await service.forgetConversation(userID: userID, sessionID: sessionID)
+            if announce {
+                toast = Toast(message: "Forgot that conversation", undoToken: nil)
+            }
+        } catch {
+            if announce {
+                toast = Toast(message: "Could not forget the conversation. Try again.", undoToken: nil)
+            }
+        }
+    }
+
     func clearAll() async {
         do {
             memory = try await service.clearMemory(userID: userID)
@@ -148,6 +162,7 @@ struct PreferenceView: View {
                         if !memory.suggestions.isEmpty { suggestionsSection(memory.suggestions) }
                         ForEach(memory.groups) { groupSection($0) }
                         if !memory.activity.isEmpty { activitySection(memory.activity) }
+                        if let talks = memory.conversations, !talks.isEmpty { conversationsSection(talks) }
                         settingsSection(memory)
                     } else {
                         ProgressView()
@@ -474,6 +489,68 @@ struct PreferenceView: View {
                     .fixedSize()
             }
         }
+    }
+
+    // MARK: 记得的对话
+
+    private func conversationsSection(_ talks: [MemoryConversationPayload]) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 12) {
+                Image(systemName: "bubble.left.and.text.bubble.right")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(AppTheme.textPrimary)
+                    .frame(width: 32, height: 32)
+                    .background(AppTheme.secondary, in: Circle())
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Conversations I remember")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(AppTheme.textPrimary)
+                    Text("Ask \"what did we talk about?\" or pick one up again.")
+                        .font(.caption)
+                        .foregroundStyle(AppTheme.textSecondary)
+                }
+            }
+            .padding(14)
+            ForEach(talks) { talk in
+                rowDivider
+                conversationRow(talk)
+            }
+        }
+        .surfacePanel(cornerRadius: 12)
+    }
+
+    private func conversationRow(_ talk: MemoryConversationPayload) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(talk.title)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(AppTheme.textPrimary)
+                    .lineLimit(1)
+                Text(talk.summary)
+                    .font(.caption)
+                    .foregroundStyle(AppTheme.textSecondary)
+                    .lineLimit(3)
+                if let when = MemoryActivityTime.relative(from: talk.at) {
+                    Text(when)
+                        .font(.caption2)
+                        .foregroundStyle(AppTheme.textSecondary)
+                }
+            }
+            Spacer(minLength: 8)
+            Button {
+                Task { await preferenceStore.forgetConversation(sessionID: talk.sessionID) }
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(AppTheme.textSecondary)
+                    .frame(width: 28, height: 28)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Forget this conversation")
+        }
+        .padding(.leading, 58)
+        .padding(.trailing, 10)
+        .padding(.vertical, 12)
     }
 
     // MARK: 设置

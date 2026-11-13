@@ -414,6 +414,8 @@ final class MockPreferenceService: PreferenceServicing {
     func setPersonalization(userID: String, enabled: Bool) async throws -> MemoryViewPayload { memory }
 
     func clearMemory(userID: String) async throws -> MemoryViewPayload { .empty(userID: userID) }
+
+    func forgetConversation(userID: String, sessionID: String) async throws -> MemoryViewPayload { memory }
 }
 
 final class MockMediaUploadService: MediaUploadServicing {

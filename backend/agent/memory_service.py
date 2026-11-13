@@ -241,6 +241,11 @@ def build_view(store: UserMemoryStore, user_id: str) -> dict[str, Any]:
         "groups": groups,
         "suggestions": [item_view(row) for row in suggested],
         "activity": _activity(store, user_id),
+        # Earlier conversations the assistant can recall; each can be forgotten on its own.
+        "conversations": [
+            {"session_id": row["session_id"], "title": row["title"], "summary": row["summary"], "at": row["updated_at"]}
+            for row in store.list_digests(user_id, limit=20)
+        ],
         "count": len(active),
     }
 
@@ -506,6 +511,9 @@ def events_from_tool_result(tool_result: dict[str, Any], query: str) -> list[dic
     if name == "recommend":
         parsed = (payload.get("debug") or {}).get("parsed") or {}
         if not payload.get("products"):
+            return []
+        # Similar items, accessories and a resumed conversation are not searches the shopper typed.
+        if payload.get("source") in {"similar", "accessories", "resume"}:
             return []
         # "看更多"是同一次搜索的延续，算进去会重复计数，也会把分区小标题显示成用户的搜索词
         if parse_more_request(query) is not None:

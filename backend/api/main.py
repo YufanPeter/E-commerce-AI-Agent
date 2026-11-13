@@ -32,7 +32,7 @@ from fastapi.concurrency import iterate_in_threadpool
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from agent import memory_service
+from agent import conversation_digest, memory_service
 from api import products as products_router
 from catalog_config import PROFILE
 from i18n import en as english
@@ -306,6 +306,7 @@ def _attach_user_memory(session: Any, user_id: str | None) -> None:
         session.user_profile["_inferred"] = inferred
     session.product_trail = memory_service.product_trail(_user_memory, clean_user_id)
     session.search_trail = memory_service.search_trail(_user_memory, clean_user_id)
+    session.conversation_trail = conversation_digest.conversation_trail(_user_memory, clean_user_id, session.session_id)
 
 
 def _remember_before_turn(query: str, session: Any) -> list[dict[str, Any]]:
@@ -515,6 +516,14 @@ def undo_memory(user_id: str, req: PreferenceUndoRequest) -> dict[str, Any]:
     return {"message": t("memory.restored"), "view": memory_service.build_view(_user_memory, clean_user_id)}
 
 
+@app.delete("/memory/{user_id}/conversations/{session_id}")
+def forget_conversation(user_id: str, session_id: str) -> dict[str, Any]:
+    """Forget what one conversation was about, e.g. when the shopper deletes it in the app."""
+    clean_user_id = _memory_user(user_id)
+    _user_memory.delete_digest(clean_user_id, session_id)
+    return memory_service.build_view(_user_memory, clean_user_id)
+
+
 @app.delete("/memory/{user_id}")
 def clear_memory(user_id: str) -> dict[str, Any]:
     """彻底忘掉这个用户：偏好、记忆、行为记录全部删除，不可恢复。"""
@@ -535,6 +544,7 @@ def chat(req: ChatRequest) -> ChatResponse:
     if memory_updates:
         resp.trace["memory_updates"] = memory_updates
     _sessions.save(session)  # Persist the turn so context survives a restart.
+    conversation_digest.update_digest(_user_memory, session)
     return ChatResponse(
         session_id=session.session_id,
         decision=resp.decision.to_dict(),
@@ -644,6 +654,7 @@ def chat_stream(req: ChatRequest, request: Request) -> StreamingResponse:
                     stream.close()
                 if _turn_gate.claim_save(turn):
                     _sessions.save(session)
+                    conversation_digest.update_digest(_user_memory, session)
             finally:
                 _turn_gate.finish(req.session_id, turn)
 

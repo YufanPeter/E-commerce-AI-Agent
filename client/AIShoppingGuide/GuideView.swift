@@ -174,7 +174,11 @@ struct GuideView: View {
                 HistorySheet(
                     conversations: store.conversations,
                     onSelect: { openConversation($0) },
-                    onDelete: { store.delete($0) },
+                    onDelete: { conversation in
+                        store.delete(conversation)
+                        // A deleted chat is also forgotten by the assistant.
+                        Task { await preferenceStore.forgetConversation(sessionID: conversation.sessionID, announce: false) }
+                    },
                     onRename: { conversation, newTitle in
                         store.rename(conversation, to: newTitle)
                         // Keep the active conversation title in sync so the next persistence pass does not overwrite it.
@@ -182,7 +186,15 @@ struct GuideView: View {
                             currentTitle = newTitle
                         }
                     },
-                    onClearAll: { store.clearAll() }
+                    onClearAll: {
+                        let sessions = store.conversations.map(\.sessionID)
+                        store.clearAll()
+                        Task {
+                            for sessionID in sessions {
+                                await preferenceStore.forgetConversation(sessionID: sessionID, announce: false)
+                            }
+                        }
+                    }
                 )
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)

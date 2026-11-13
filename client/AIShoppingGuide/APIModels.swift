@@ -696,6 +696,20 @@ struct MemoryActivityPayload: Identifiable, Codable, Hashable {
     let at: String
 }
 
+/// An earlier conversation the assistant can recall ("what did we talk about yesterday?").
+struct MemoryConversationPayload: Identifiable, Codable, Hashable {
+    let sessionID: String
+    let title: String
+    let summary: String
+    let at: String
+    var id: String { sessionID }
+
+    enum CodingKeys: String, CodingKey {
+        case title, summary, at
+        case sessionID = "session_id"
+    }
+}
+
 struct MemoryViewPayload: Codable, Hashable {
     let userID: String
     let personalizationEnabled: Bool
@@ -704,9 +718,10 @@ struct MemoryViewPayload: Codable, Hashable {
     let suggestions: [MemoryItemPayload]
     let activity: [MemoryActivityPayload]
     let count: Int
+    var conversations: [MemoryConversationPayload]? = nil
 
     enum CodingKeys: String, CodingKey {
-        case summary, groups, suggestions, activity, count
+        case summary, groups, suggestions, activity, count, conversations
         case userID = "user_id"
         case personalizationEnabled = "personalization_enabled"
     }

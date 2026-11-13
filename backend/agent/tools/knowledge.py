@@ -39,6 +39,8 @@ class KnowledgeTool:
         service = self._recommend._get_service()
         if self.name == "buying_guide":
             return self._guide(query, session, service)
+        if self.name == "resume":
+            return self._resume(query, session, service, slots)
         focus = self._focus(query, session, slots)
         if focus is None:
             if not getattr(session, "product_trail", None):
@@ -74,6 +76,8 @@ class KnowledgeTool:
         payload = {
             "query": query, "products": products, "opening": opening, "item_notes": notes or {},
             "summary": {"hit_count": len(hits), "needs_clarification": False, "unavailable_terms": []},
+            # Not a search the shopper typed, so the search history leaves it out.
+            "source": self.name,
         }
         return ToolResult(tool_name="recommend", payload=payload, composer_hint=opening)
 
@@ -136,6 +140,31 @@ class KnowledgeTool:
         }
         return self._cards(hits, title, session, f"These listings state compatibility with {title}.", notes, constraints=shown)
 
+    def _resume(self, query: str, session: AgentSession, service: Any, slots: dict[str, Any]) -> ToolResult:
+        """An earlier conversation, recapped, with what was on screen then back on screen.
+
+        Its search conditions come back too, so "cheaper ones" or "the second one" carry on
+        from where that conversation stopped.
+        """
+        convo = slots.get("history_conversation")
+        if not convo:
+            if not getattr(session, "conversation_trail", None):
+                return _text_result(self.name, "I don't have an earlier conversation with you yet. What are you shopping for?")
+            return _text_result(self.name, "Which conversation do you mean? Tell me what we were looking for or roughly when.")
+        facts = convo.get("facts") or {}
+        recap = f"On {convo['at']} we talked about {convo['title']}: {convo['summary']}"
+        ids = [p["product_id"] for p in facts.get("products") or [] if p.get("product_id")]
+        hits = service.hits_for(ids)[:_SHOWN] if ids else []
+        if not hits:
+            return _text_result(self.name, f"{recap} Want to pick it up again?")
+        note = (
+            f"The shopper returned to an earlier conversation from {convo['at']}: {convo['title']}. {convo['summary']} "
+            "Open by recapping it in one or two sentences in the second person (what they looked for and what they "
+            "decided), with the date as a month and day, then say these are the products from then."
+        )
+        result = self._cards(hits, convo["title"], session, note, constraints=facts.get("constraints") or {})
+        return replace(result, composer_hint=note)
+
     def _guide(self, query: str, session: AgentSession, service: Any) -> ToolResult:
         parsed = understand(query, service.vocabulary)
         label = parsed.sub_category or (session.recall_parsed() or {}).get("sub_category")
@@ -160,4 +189,4 @@ def _guide_text(guide: dict[str, Any]) -> str:
 
 
 def knowledge_tools(recommend: RecommendTool) -> dict[str, KnowledgeTool]:
-    return {name: KnowledgeTool(name, recommend) for name in ("similar", "accessories", "buying_guide")}
+    return {name: KnowledgeTool(name, recommend) for name in ("similar", "accessories", "buying_guide", "resume")}
