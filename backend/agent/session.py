@@ -151,6 +151,8 @@ class AgentSession:
     # Products the shopper bought, added or opened lately, across conversations. Loaded per
     # request from the event log like ``user_profile`` and never saved with the session.
     product_trail: list[dict[str, Any]] = field(default_factory=list)
+    # Searches the shopper made lately, loaded and dropped the same way.
+    search_trail: list[dict[str, Any]] = field(default_factory=list)
     # What this message just taught the long-term memory, in words the reply can repeat
     # ("you don't buy MAYBELLINE"). Set per request, never saved.
     turn_memory: list[str] = field(default_factory=list)

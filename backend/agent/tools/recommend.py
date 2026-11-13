@@ -300,6 +300,11 @@ class RecommendTool:
         slots: dict[str, Any],
     ) -> ToolResult:
         top_k = int(slots.get("top_k", DEFAULT_TOP_K))
+        remembered = slots.get("history_search")
+        if remembered:
+            # "Do you remember I searched for airpods": run that search again, as it was worded.
+            result = self._run_single(remembered["query"], session, top_k=top_k, base=None)
+            return _recalled(result, remembered)
         # RefineTool injects ``base_parsed`` so current constraints merge with prior intent.
         base = slots.get("base_parsed")
 
@@ -919,6 +924,20 @@ class RecommendTool:
 # "看更多"的召回量：基础量 + 每个已展示商品再多召回这么多 chunk（一个商品有多个 chunk）。
 _MORE_BASE_CHUNKS = 50
 _MORE_CHUNKS_PER_SEEN = 10
+
+
+def _recalled(result: ToolResult, remembered: dict[str, Any]) -> ToolResult:
+    """An earlier search run again: the reply first confirms it is remembered."""
+    query, at = remembered["query"], remembered.get("at") or ""
+    if is_english():
+        note = (f"The shopper asked about an earlier search: they searched for “{query}” on {at}. Answer that first, "
+                f"plainly (\"Yes, you searched for … on …\" or \"Last time you searched for … on …\", with the date as a "
+                f"month and day), naming what they looked for in a few natural words rather than quoting their message, "
+                f"then say these are the results again.")
+    else:
+        note = f"用户在问之前的搜索：他在 {at} 搜过「{query}」。开场先直接回答这一点（如“记得，你在…搜过…”），再说明下面是这次搜索的结果。"
+    payload = {**result.payload, "remembered_query": query}
+    return replace(result, payload=payload, composer_hint=f"{note} {result.composer_hint or ''}".strip())
 
 
 def _personalization_hint(signals: list[dict[str, Any]], session: AgentSession) -> str:

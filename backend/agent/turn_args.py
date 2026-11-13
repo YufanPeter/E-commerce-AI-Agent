@@ -131,4 +131,7 @@ def routed_slots(decision: IntentDecision, session: AgentSession, raw_query: str
             slots["constraint_ops"] = {"clear": clear}
     if args.get("cheaper"):
         slots["cheaper"] = True
+    searched = args.get("history_search")
+    if tool == "recommend" and searched and searched <= len(session.search_trail):
+        slots["history_search"] = session.search_trail[searched - 1]
     return slots

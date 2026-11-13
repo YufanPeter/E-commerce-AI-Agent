@@ -305,6 +305,7 @@ def _attach_user_memory(session: Any, user_id: str | None) -> None:
     if inferred:
         session.user_profile["_inferred"] = inferred
     session.product_trail = memory_service.product_trail(_user_memory, clean_user_id)
+    session.search_trail = memory_service.search_trail(_user_memory, clean_user_id)
 
 
 def _remember_before_turn(query: str, session: Any) -> list[dict[str, Any]]:

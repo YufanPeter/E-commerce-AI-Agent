@@ -14,6 +14,7 @@ import os
 import re
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
 
 from agent.memory_extractor import _STYLE_ALIASES, extract_preference_updates, extract_sensitive_terms
@@ -509,6 +510,8 @@ def events_from_tool_result(tool_result: dict[str, Any], query: str) -> list[dic
         # "看更多"是同一次搜索的延续，算进去会重复计数，也会把分区小标题显示成用户的搜索词
         if parse_more_request(query) is not None:
             return []
+        # "Do you remember I searched for airpods" reruns that search; the log keeps its words.
+        query = payload.get("remembered_query") or query
         return [{
             "type": "search",
             "category": parsed.get("category"),
@@ -580,6 +583,17 @@ def _fill_product_facts(events: list[dict[str, Any]]) -> None:
 _TRAIL_ACTIONS = {"checkout": "bought", "add_cart": "added to cart", "choose": "picked to add", "compare": "compared", "view_detail": "viewed"}
 
 
+def _local_day(created_at: Any) -> str:
+    """The shopper's calendar day for a logged time. SQLite stores UTC, so late evening
+    would otherwise read as tomorrow ("you searched for this on November 13")."""
+    text = str(created_at or "")
+    try:
+        moment = datetime.strptime(text[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return text[:10]
+    return moment.astimezone().date().isoformat()
+
+
 def product_trail(store: UserMemoryStore, user_id: str | None, limit: int = 8) -> list[dict[str, Any]]:
     """Products the shopper bought, added, compared or opened lately, newest first, one row each.
 
@@ -603,13 +617,41 @@ def product_trail(store: UserMemoryStore, user_id: str | None, limit: int = 8) -
         if row is None:
             trail[product_id] = {
                 "product_id": product_id, "title": event["title"], "sub_category": event.get("sub_category"),
-                "action": kind, "at": str(event.get("created_at") or "")[:10],
+                "action": kind, "at": _local_day(event.get("created_at")),
             }
         elif rank.index(kind) < rank.index(row["action"]):
             row["action"] = kind  # keep the newest date, show the strongest action
     rows = list(trail.values())[:limit]
     for row in rows:
         row["action"] = _TRAIL_ACTIONS[row["action"]]
+    return rows
+
+
+def search_trail(store: UserMemoryStore, user_id: str | None, limit: int = 6) -> list[dict[str, Any]]:
+    """Searches the shopper made lately, newest first, one row per wording.
+
+    Lets "do you remember I searched for airpods" or "what did I search for last time"
+    reach that search instead of starting an unrelated one.
+    """
+    if not user_id:
+        return []
+    try:
+        events = store.recent_events(user_id, days=90, limit=400)
+    except Exception:  # noqa: BLE001 - without the trail the question is just searched
+        logger.warning("Reading the search trail failed", exc_info=True)
+        return []
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for event in events:  # newest first
+        payload = event.get("payload") or {}
+        query = " ".join(str(payload.get("query") or "").split())
+        key = query.casefold()
+        if event.get("type") != "search" or not query or key in seen or parse_more_request(query) is not None:
+            continue
+        seen.add(key)
+        rows.append({"query": query, "sub_category": payload.get("sub_category"), "at": _local_day(event.get("created_at"))})
+        if len(rows) == limit:
+            break
     return rows
 
 

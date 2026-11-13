@@ -145,14 +145,14 @@ MULTI_INTENT_RE = re.compile(r"\b(?:and|plus|also|along with|as well as)\b|[,&+]
 
 ROUTER_TOOL_FIELD = (
     "Pick one tool:\n"
-    "- recommend: find or browse products, including a new product type while results are on screen\n"
+    "- recommend: find or browse products, including a new product type while results are on screen, or an earlier search again\n"
     "- refine: change the current search: budget, brand, a feature, or cheaper\n"
     "- compare: compare two or more shown products\n"
     "- product_detail: a question about one shown product, its reviews, or its suitability\n"
     "- similar: products like a shown one, or like one the shopper bought, added or opened before\n"
     "- accessories: what goes with or fits a shown product, or one the shopper bought before\n"
     "- buying_guide: general advice on choosing a kind of product\n"
-    "- cart: the cart, checkout, past orders, or answering a waiting question about adding\n"
+    "- cart: the cart, checkout, past orders (not past searches), or answering a waiting question about adding\n"
     "- clarify: no product clue at all\n"
     "- fallback: unrelated to shopping"
 )
@@ -183,6 +183,9 @@ ROUTER_ARG_FIELDS = {
     "history_item": "1-based number in the list of products the shopper bought, added or opened before, when the message "
                     "points at one of those rather than at a product on screen: 'the speaker I bought last time', 'the stand "
                     "I looked at yesterday', 'the headphones I added'. Match the kind of product and the action. Null otherwise.",
+    "history_search": "1-based number in the list of searches the shopper made before, when the message asks about or returns "
+                      "to one of them: 'do you remember I searched for airpods', 'what did I search for last time' (the newest), "
+                      "'show me what I looked for yesterday again'. Null otherwise, and null when no listed search matches.",
 }
 ROUTER_SYSTEM = """You route messages for a shopping assistant and read what the chosen tool acts on. Call route_to_tool and never answer directly.
 
@@ -191,6 +194,7 @@ Rules:
 2. When results are on screen and the message only changes the search (a brand, color, feature, price, or "cheaper"), use refine and restore the earlier product type in rewritten_query.
 3. Compare words such as compare, versus, or which is better go to compare, even when products are named.
 4. A question about one shown product ("tell me about the second one", "will this fit a small wrist") goes to product_detail. Products like a shown one go to similar, and what fits or goes with a shown product goes to accessories.
+   A message about an earlier search (\"do you remember I searched for airpods\", \"what did I search for last time?\") is recommend with history_search, which runs that search again; it is not past orders. When no listed search matches, search normally.
    A product the shopper bought, added or opened earlier counts the same way: "something like the speaker I bought last time" is similar with history_item, and "is the stand I looked at yesterday adjustable?" is product_detail with history_item. Never answer such a message with recommend, which cannot know what they bought. Only words that point back make it so: naming a product type alone (\"bluetooth speaker\") is a new search with recommend, even when a product of that type is in that list.
 5. Buying, adding, removing, quantities, sizes or colors of cart items, the cart, checkout, buying again, and past orders go to cart with a cart_action. "Buy a coffee machine" with nothing shown is recommend.
 6. When a question is waiting, a message that answers or adjusts the choice ("medium", "black", "one size up", "the second one") is cart with cart_action answer, and "never mind" is cart with cancel. Any other message is routed as usual, which drops the question.
@@ -262,7 +266,7 @@ _GROUNDING = """Grounding rules:
 COMPOSER_SYSTEM = f"""You are CartPilot, a knowledgeable shopping assistant who explains why a product fits, rather than reading out specifications.
 
 {_PROTOCOL}
-- Line 1: 开场｜<one sentence saying what you found>.
+- Line 1: 开场｜<one sentence saying what you found>. Plain text: the app shows the opening as written, so no asterisks or other markdown.
 - With 2 or more products, sort them into 1-3 groups by real differences, and write 分组｜<a 2-5 word heading> before each group's products. No brand or price in headings. With one product, skip groups.
 - One line per product: 商品｜<productId>｜<1-2 sentences, 15-35 words, on why this product suits the request>. Copy productId exactly from hits. Never include the product name, brand, model or price.
 - With 2 or more products: 总结｜<which product suits which need, naming brands is fine, then one question about what matters most>. 2-3 sentences. Wrap each product or brand name you mention in double asterisks, such as **Acme**, so the app can highlight it.

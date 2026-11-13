@@ -173,6 +173,7 @@ def _tool_schema() -> dict[str, Any]:
         "whole_order": {"type": "boolean", "description": fields["whole_order"]},
         "reorder_item": {"type": "string", "description": fields["reorder_item"]},
         "history_item": {**nullable_int, "description": fields["history_item"]},
+        "history_search": {**nullable_int, "description": fields["history_search"]},
     }
     return {
         "type": "function",
@@ -208,6 +209,7 @@ def english_args(raw: dict[str, Any]) -> dict[str, Any]:
         "whole_order": raw.get("whole_order") is True,
         "reorder_item": " ".join(str(raw.get("reorder_item") or "").split()),
         "history_item": positive(raw.get("history_item")),
+        "history_search": positive(raw.get("history_search")),
     }
 
 
@@ -326,6 +328,12 @@ def _english_state(session: AgentSession) -> list[str]:
             for i, item in enumerate(session.product_trail, start=1)
         )
         sections.append(f"Products the shopper bought, added or opened before, newest first (history_item counts these; positions never do):\n{lines}")
+    if session.search_trail:
+        lines = "\n".join(
+            f"{i}. “{item['query'][:80]}”" + (f" ({item['sub_category']})" if item.get("sub_category") else "") + f" on {item['at']}"
+            for i, item in enumerate(session.search_trail, start=1)
+        )
+        sections.append(f"Searches the shopper made before, newest first (history_search counts these):\n{lines}")
     return sections
 
 

@@ -132,3 +132,41 @@ def test_a_first_turn_is_cached_on_everything_the_router_reads(monkeypatch):
     first_turn([{**SPEAKER, "action": "viewed", "at": "2026-11-11"}])
     assert len(calls) == 2  # Different history is a different question for the router.
     intent_router.clear_route_cache()
+
+
+def test_earlier_searches_are_listed_once_each_newest_first(tmp_path):
+    store = UserMemoryStore(db_path=tmp_path / "memory.sqlite3")
+    for query in ("airpods", "coffee mugs", "AirPods", "show me more"):
+        store.record_events("u1", "s1", [{"type": "search", "payload": {"query": query, "sub_category": "Earbud Headphones"}}])
+    assert [row["query"] for row in memory_service.search_trail(store, "u1")] == ["AirPods", "coffee mugs"]
+
+
+def test_a_remembered_search_reaches_the_router_and_runs_again(monkeypatch):
+    from agent.tools import recommend
+    from agent.tools.base import ToolResult
+
+    monkeypatch.setattr(recommend, "is_english", lambda: True)
+
+    session = AgentSession()
+    session.search_trail = [{"query": "airpods", "sub_category": "Earbud Headphones", "at": "2026-11-12"}]
+    assert "1. “airpods” (Earbud Headphones) on 2026-11-12" in "\n".join(_english_state(session))
+    decision = IntentDecision("recommend", "airpods", "high", "", english_args({"history_search": 1}))
+    remembered = routed_slots(decision, session)["history_search"]
+    assert remembered["query"] == "airpods"
+    result = recommend._recalled(ToolResult(tool_name="recommend", payload={"products": [{"product_id": "p"}]}, composer_hint="Found 5."), remembered)
+    assert "they searched for “airpods” on 2026-11-12" in result.composer_hint and result.composer_hint.endswith("Found 5.")
+    # The log keeps the search's own words, not "do you remember…".
+    events = memory_service.events_from_tool_result(result.to_dict(), "Do you remember that I searched for airpods")
+    assert events[0]["payload"]["query"] == "airpods"
+
+
+def test_dates_are_the_shoppers_day_not_utc(monkeypatch):
+    import time
+
+    monkeypatch.setenv("TZ", "America/Los_Angeles")
+    time.tzset()
+    try:
+        assert memory_service._local_day("2026-11-13 00:30:00") == "2026-11-12"  # 4:30 pm the day before
+    finally:
+        monkeypatch.undo()
+        time.tzset()
